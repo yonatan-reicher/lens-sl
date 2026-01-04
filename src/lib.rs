@@ -1,5 +1,6 @@
 mod isa;
 mod enumerate;
+mod graph;
 mod algorithm;
 
 pub use isa::{
