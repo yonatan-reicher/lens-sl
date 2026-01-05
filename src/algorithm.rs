@@ -108,7 +108,7 @@ pub fn optimize(program: &[Inst<Word64>], inputs: &[&[(Register, u64)]]) -> Vec<
         .collect();
 
     let mut registers: Vec<Register> = vec![];
-    let mut immediates: Vec<u64> = vec![0, 1, 2, 3, 4, 5, 6];
+    let immediates: Vec<u64> = vec![0, 1, 2, 3, 4, 5, 6];
     for (input, output) in &test_cases {
         for (reg, _) in &input.registers {
             if !registers.contains(reg) {
