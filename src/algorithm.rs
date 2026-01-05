@@ -68,9 +68,9 @@ fn synthesize(
                 return program;
             }
 
-            i = (i + 1) % 1_000_000;
-            if i == 0 {
-                println!(".");
+            i += 1;
+            if i % 1_000_000 == 0 {
+                println!("  Tested {i} programs so far...");
             }
 
             // Advance to the next program.
