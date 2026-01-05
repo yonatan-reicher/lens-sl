@@ -1,5 +1,5 @@
 use crate::{
-    Inst, OpCode, Register, Word64,
+    Inst, Register, Word64,
     enumerate::{EnumerationInfo, Enumerator},
 };
 
