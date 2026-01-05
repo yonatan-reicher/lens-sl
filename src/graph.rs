@@ -1,4 +1,3 @@
-use num_traits::PrimInt;
 use rustc_hash::FxHashMap;
 
 use crate::isa::{Inst, Register, Word};

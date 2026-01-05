@@ -6,6 +6,7 @@ mod algorithm;
 pub use isa::{
     Inst,
     OpCode,
+    CondCode,
     Register,
     Word,
     /* Word4, */ Word8, Word64,

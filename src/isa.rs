@@ -1,6 +1,6 @@
 use std::fmt::{Debug, Display};
-use arbitrary_int::{i4, u4};
-use num_traits::{PrimInt, Signed, Unsigned, AsPrimitive, Bounded};
+// use arbitrary_int::{i4, u4};
+use num_traits::{AsPrimitive, PrimInt, Signed, Unsigned, WrappingAdd, WrappingMul};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ArgType {
@@ -8,6 +8,51 @@ pub enum ArgType {
     Reg,
     /// Immediate value (number)
     Imm,
+    /// This argument is unused.
+    Unused,
+}
+
+/// In Arm, every instruction can be conditionally executed based on the state
+/// of the flags.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub enum CondCode {
+    /// Always (unconditional)
+    /// In real Arm, this is actually the 15th condition code, but for we put it
+    /// first because we want to enumerate it first.
+    #[default]
+    Al,
+    /// Equal - Z set
+    Eq,
+    /// Not equal - Z clear
+    Ne,
+    /// Carry set
+    Cs,
+    /// Carry clear
+    Cc,
+    /// Negative - N set
+    Mi,
+    /// Positive or zero - N clear
+    Pl,
+    /// V set (overflow)
+    Vs,
+    /// V clear (no overflow)
+    Vc,
+    /// Unsigned higher - C set and Z clear
+    Hi,
+    /// Unsigned lower or same - C clear or Z set
+    Ls,
+    /// Signed greater than or equal - N equals V
+    Ge,
+    /// Signed less than - N not equal to V
+    Lt,
+    /// Signed greater than - Z clear AND N equals V
+    Gt,
+    /// Signed less than or equal - Z set OR N not equal to V
+    Le,
+}
+
+impl CondCode {
+    pub const COUNT: u8 = 6;
 }
 
 /// This macro will let us define our ISA as a table.
@@ -44,10 +89,17 @@ macro_rules! define_instructions {
 }
 
 define_instructions! {
-    | OpCode  | Arg 1 | Arg 2 | Arg 3 |
-    -----------------------------------
-    | Add     | Reg   | Reg   | Reg   |
-    | AddI    | Reg   | Reg   | Imm   |
+    | OpCode  | Arg 1  | Arg 2  | Arg 3  |
+    --------------------------------------
+    | Nop     | Unused | Unused | Unused |
+    | Add     | Reg    | Reg    | Reg    |
+    | AddI    | Reg    | Reg    | Imm    |
+    | And     | Reg    | Reg    | Reg    |
+    | Eor     | Reg    | Reg    | Reg    |
+    | Mov     | Reg    | Reg    | Unused |
+    | MovI    | Reg    | Imm    | Unused |
+    | Mul     | Reg    | Reg    | Reg    |
+    | Orr     | Reg    | Reg    | Reg    |
 }
 
 /// A number representing a register.
@@ -60,21 +112,21 @@ impl Register {
 }
 
 pub trait Word {
-    type Signed:
-        AsPrimitive<i8>
+    type Signed: AsPrimitive<i8>
         + AsPrimitive<Self::Unsigned>
-        + Bounded
         + Debug
         + Display
         + Signed
+        + WrappingAdd
+        + WrappingMul
         + PrimInt;
-    type Unsigned:
-        AsPrimitive<u8>
+    type Unsigned: AsPrimitive<u8>
         + AsPrimitive<Self::Signed>
-        + Bounded
         + Debug
         + Display
         + Unsigned
+        + WrappingAdd
+        + WrappingMul
         + PrimInt;
 }
 
@@ -98,12 +150,17 @@ impl Word for Word4 {
 }
 */
 
-
 /// A single instruction.
 #[derive(Copy, Clone, derive_more::Debug, PartialEq, Eq, Hash)]
-#[debug("{op_code:?}{args:?}")]
+#[debug("{op_code:?}{}{args:?}",
+    match cond_code {
+        CondCode::Al => "".to_string(),
+        _ => format!("{cond_code:?}"),
+    }
+)]
 pub struct Inst<W: Word> {
     pub op_code: OpCode,
+    pub cond_code: CondCode,
     pub args: [W::Unsigned; 3],
 }
 
@@ -149,8 +206,15 @@ fn run_instruction<W: Word, S: State<W>>(inst: &Inst<W>, state: &mut S) {
 
     use OpCode::*;
     match inst.op_code {
-        Add => set!(r![0 i] <- r![1 i] + r![2 i]),
-        AddI => set!(r![0 i] <- r![1 i] + imm![2 i]),
+        Nop => (),
+        Add => set!(r![0 i] <- r![1 i].wrapping_add(&r![2 i])),
+        AddI => set!(r![0 i] <- r![1 i].wrapping_add(&imm![2 i])),
+        And => set!(r![0 u] <- r![1 u] & r![2 u]),
+        Eor => set!(r![0 u] <- r![1 u] ^ r![2 u]),
+        Mov => set!(r![0 u] <- r![1 u]),
+        MovI => set!(r![0 u] <- imm![1 u]),
+        Mul => set!(r![0 i] <- r![1 i].wrapping_mul(&r![2 i])),
+        Orr => set!(r![0 u] <- r![1 u] | r![2 u]),
     }
 }
 
@@ -163,11 +227,12 @@ impl<W: Word> Inst<W> {
 /// A macro to create an instruction more easily.
 #[macro_export]
 macro_rules! inst {
-    ( $op_code:ident, $( $arg:expr ),* $(,)? ) => {
+    ( $op_code:ident $cond_code:ident, $( $arg:expr ),* $(,)? ) => {
         {
             let mut args_iter = [$( $arg as _ ),*].iter();
             $crate::Inst {
                 op_code: $crate::OpCode::$op_code,
+                cond_code: $crate::CondCode::$cond_code,
                 args: [
                     *args_iter.next().unwrap_or(&0),
                     *args_iter.next().unwrap_or(&0),
@@ -175,5 +240,8 @@ macro_rules! inst {
                 ],
             }
         }
+    };
+    ( $op_code:ident, $( $arg:expr ),* $(,)? ) => {
+        inst!($op_code Al, $( $arg ),* )
     };
 }

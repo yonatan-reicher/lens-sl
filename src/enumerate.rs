@@ -1,6 +1,6 @@
 //! Implements enumerating over instructions.
 
-use crate::isa::ArgType;
+use crate::isa::{ArgType, CondCode};
 use crate::{Inst, OpCode, Register, Word64};
 
 /// Enumerates over the instruction space. Needs an `EnumerationInfo` borrow in
@@ -10,6 +10,8 @@ use crate::{Inst, OpCode, Register, Word64};
 pub struct Enumerator {
     /// The op-code of the current instruction of this enumerator.
     op_code: OpCode,
+    /// The current condition code of the instruction.
+    cond_code: CondCode,
     /// The indices into the slices of available registers and instructions.
     arg_indices: [usize; 3],
 }
@@ -25,7 +27,10 @@ pub struct EnumerationInfo<'a> {
 }
 
 fn debug_assert_arg_in_range(arg: usize) {
-    debug_assert!(arg < 3, "the argument selector must be in 0-2, but was {arg}.");
+    debug_assert!(
+        arg < 3,
+        "the argument selector must be in 0-2, but was {arg}."
+    );
 }
 
 fn debug_assert_valid_enumeration_info(ei: &EnumerationInfo) {
@@ -42,7 +47,8 @@ fn debug_assert_valid_enumeration_info(ei: &EnumerationInfo) {
 impl Enumerator {
     pub fn new() -> Self {
         Self {
-            op_code: unsafe { std::mem::transmute(0u8) },
+            op_code: unsafe { std::mem::transmute::<u8, OpCode>(0) },
+            cond_code: unsafe { std::mem::transmute::<u8, CondCode>(0) },
             arg_indices: [0; 3],
         }
     }
@@ -53,12 +59,13 @@ impl Enumerator {
 
     fn current_arg(&self, arg: usize, ei: &EnumerationInfo) -> u64 {
         debug_assert_arg_in_range(arg);
-        debug_assert_valid_enumeration_info(&ei);
+        debug_assert_valid_enumeration_info(ei);
         // Take the index, and index into the correct array.
         let i = self.arg_indices[arg];
         match self.arg_types()[arg] {
             ArgType::Reg => ei.registers[i].0 as u64,
             ArgType::Imm => ei.immediates[i],
+            ArgType::Unused => 0,
         }
     }
 
@@ -70,6 +77,7 @@ impl Enumerator {
         match self.arg_types()[arg] {
             ArgType::Reg => ei.registers.len(),
             ArgType::Imm => ei.immediates.len(),
+            ArgType::Unused => 1,
         }
     }
 
@@ -77,6 +85,7 @@ impl Enumerator {
         debug_assert_valid_enumeration_info(ei);
         Inst {
             op_code: self.op_code,
+            cond_code: self.cond_code,
             args: [
                 self.current_arg(0, ei),
                 self.current_arg(1, ei),
@@ -92,7 +101,19 @@ impl Enumerator {
             if next == OpCode::COUNT {
                 return None;
             }
-            self.op_code = std::mem::transmute(next);
+            self.op_code = std::mem::transmute::<u8, OpCode>(next);
+            Some(())
+        }
+    }
+
+    fn advance_cond_code(&mut self) -> Option<()> {
+        unsafe {
+            let i: u8 = std::mem::transmute(self.cond_code);
+            let next = i + 1;
+            if next == CondCode::COUNT {
+                return None;
+            }
+            self.cond_code = std::mem::transmute::<u8, CondCode>(next);
             Some(())
         }
     }
@@ -118,12 +139,19 @@ impl Enumerator {
                 if self.advance_arg(2, ei).is_none() {
                     self.arg_indices[2] = 0;
                     if self.advance_op_code().is_none() {
-                        return None;
+                        self.op_code = unsafe { std::mem::transmute::<u8, OpCode>(0) };
+                        self.advance_cond_code()?;
                     }
                 }
             }
         }
         Some(())
+    }
+}
+
+impl Default for Enumerator {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -137,7 +165,9 @@ mod tests {
         loop {
             ret.push(e.current(ei));
             let r = e.advance(ei);
-            if r.is_none() { break; }
+            if r.is_none() {
+                break;
+            }
         }
         ret
     }
@@ -148,6 +178,6 @@ mod tests {
             registers: &[Register(2)],
             immediates: &[42],
         });
-        assert_eq!(v.len(), OpCode::COUNT as usize);
+        assert_eq!(v.len(), OpCode::COUNT as usize * CondCode::COUNT as usize);
     }
 }
