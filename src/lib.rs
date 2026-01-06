@@ -8,6 +8,7 @@ pub use isa::{
     OpCode,
     CondCode,
     Register,
+    Flags,
     Word,
     /* Word4, */ Word8, Word64,
 };

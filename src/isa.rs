@@ -1,6 +1,9 @@
 use std::fmt::{Debug, Display};
 // use arbitrary_int::{i4, u4};
-use num_traits::{AsPrimitive, PrimInt, Signed, Unsigned, WrappingAdd, WrappingMul};
+use num_traits::{
+    AsPrimitive, PrimInt, Signed, Unsigned, Zero,
+    ops::overflowing::{OverflowingAdd, OverflowingMul, OverflowingSub},
+};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ArgType {
@@ -117,16 +120,18 @@ pub trait Word {
         + Debug
         + Display
         + Signed
-        + WrappingAdd
-        + WrappingMul
+        + OverflowingAdd
+        + OverflowingSub
+        + OverflowingMul
         + PrimInt;
     type Unsigned: AsPrimitive<u8>
         + AsPrimitive<Self::Signed>
         + Debug
         + Display
         + Unsigned
-        + WrappingAdd
-        + WrappingMul
+        + OverflowingAdd
+        + OverflowingSub
+        + OverflowingMul
         + PrimInt;
 }
 
@@ -164,12 +169,83 @@ pub struct Inst<W: Word> {
     pub args: [W::Unsigned; 3],
 }
 
-pub trait State<W: Word> {
-    fn get_register(&self, reg: Register) -> W::Unsigned;
-    fn set_register(&mut self, reg: Register, value: W::Unsigned);
+bitflags::bitflags! {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    pub struct Flags: u8 {
+        /// Zero - is the result zero? Disregard overflow and carry.
+        const Z = 0b0001;
+        /// Negative - is the Msb set? Disregard overflow and carry.
+        const N = 0b0100;
+        /// Carry - on when unsigned addition overflows or unsigned subtraction doesn't underflow.
+        const C = 0b0010;
+        /// Overflow - on signed addition/subtraction, on when result is out of signed range.
+        const V = 0b1000;
+    }
 }
 
-fn run_instruction<W: Word, S: State<W>>(inst: &Inst<W>, state: &mut S) {
+pub trait State {
+    type W: Word;
+
+    fn get_register(&self, reg: Register) -> <Self::W as Word>::Unsigned;
+    fn set_register(&mut self, reg: Register, value: <Self::W as Word>::Unsigned);
+    fn get_flags(&self) -> Flags;
+    fn set_flags(&mut self, flags: Flags);
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum AddOrSub {
+    Add,
+    Sub,
+}
+
+fn run_addition_or_subtraction<W: Word, S: State<W = W>>(
+    state: &mut S,
+    left: W::Unsigned,
+    right: W::Unsigned,
+    result_register: Register,
+    kind: AddOrSub,
+) {
+    let (res, signed_overflow, unsigned_overflow) = match kind {
+        AddOrSub::Add => {
+            let signed_left: W::Signed = left.as_();
+            let signed_right: W::Signed = right.as_();
+            let (res, unsigend_overflow) = left.overflowing_add(&right);
+            let (res2, signed_overflow) = signed_left.overflowing_add(&signed_right);
+            debug_assert_eq!(AsPrimitive::<W::Signed>::as_(res), res2);
+            (res, signed_overflow, unsigend_overflow)
+        }
+        AddOrSub::Sub => {
+            let signed_left: W::Signed = left.as_();
+            let signed_right: W::Signed = right.as_();
+            let (res, unsigend_overflow) = left.overflowing_sub(&right);
+            let (res2, signed_overflow) = signed_left.overflowing_sub(&signed_right);
+            debug_assert_eq!(AsPrimitive::<W::Signed>::as_(res), res2);
+            (res, signed_overflow, unsigend_overflow)
+        }
+    };
+    let res_signed: W::Signed = res.as_();
+    state.set_register(result_register, res);
+    // Set flags.
+    let mut flags = Flags::empty();
+    if res.is_zero() {
+        flags |= Flags::Z;
+    }
+    if res_signed.is_negative() {
+        flags |= Flags::N;
+    }
+    if unsigned_overflow && kind == AddOrSub::Add {
+        flags |= Flags::C;
+    }
+    if !unsigned_overflow && kind == AddOrSub::Sub {
+        flags |= Flags::C;
+    }
+    if signed_overflow {
+        flags |= Flags::V;
+    }
+    state.set_flags(flags);
+}
+
+fn run_instruction<W: Word, S: State<W = W>>(inst: &Inst<S::W>, state: &mut S) {
     /// Get a register value.
     macro_rules! r {
         ($i:literal u) => {{
@@ -207,19 +283,31 @@ fn run_instruction<W: Word, S: State<W>>(inst: &Inst<W>, state: &mut S) {
     use OpCode::*;
     match inst.op_code {
         Nop => (),
-        Add => set!(r![0 i] <- r![1 i].wrapping_add(&r![2 i])),
-        AddI => set!(r![0 i] <- r![1 i].wrapping_add(&imm![2 i])),
+        Add => run_addition_or_subtraction(
+            state,
+            r![1 u],
+            r![2 u],
+            Register(inst.args[0].as_()),
+            AddOrSub::Add,
+        ),
+        AddI => run_addition_or_subtraction(
+            state,
+            r![1 u],
+            imm![2 u],
+            Register(inst.args[0].as_()),
+            AddOrSub::Add,
+        ),
         And => set!(r![0 u] <- r![1 u] & r![2 u]),
         Eor => set!(r![0 u] <- r![1 u] ^ r![2 u]),
         Mov => set!(r![0 u] <- r![1 u]),
         MovI => set!(r![0 u] <- imm![1 u]),
-        Mul => set!(r![0 i] <- r![1 i].wrapping_mul(&r![2 i])),
+        Mul => set!(r![0 i] <- r![1 i].overflowing_mul(&r![2 i]).0),
         Orr => set!(r![0 u] <- r![1 u] | r![2 u]),
     }
 }
 
 impl<W: Word> Inst<W> {
-    pub fn run<S: State<W>>(&self, state: &mut S) {
+    pub fn run<S: State<W=W>>(&self, state: &mut S) {
         run_instruction(self, state)
     }
 }

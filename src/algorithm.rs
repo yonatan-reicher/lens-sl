@@ -1,5 +1,5 @@
 use crate::{
-    Inst, Register, Word64,
+    Flags, Inst, Register, Word64,
     enumerate::{EnumerationInfo, Enumerator},
 };
 
@@ -7,9 +7,12 @@ use crate::{
 struct State {
     /// This vector is always sorted by register.
     registers: Vec<(Register, u64)>,
+    flags: Option<Flags>,
 }
 
-impl crate::isa::State<Word64> for State {
+impl crate::isa::State for State {
+    type W = Word64;
+
     fn get_register(&self, reg: Register) -> u64 {
         for (r, v) in &self.registers {
             if *r == reg {
@@ -28,6 +31,14 @@ impl crate::isa::State<Word64> for State {
         }
         self.registers.push((reg, value));
         self.registers.sort_by_key(|(r, _)| *r);
+    }
+
+    fn get_flags(&self) -> Flags {
+        self.flags.expect("Flags not set in state.")
+    }
+
+    fn set_flags(&mut self, flags: Flags) {
+        self.flags = Some(flags);
     }
 }
 
@@ -98,6 +109,7 @@ pub fn optimize(program: &[Inst<Word64>], inputs: &[&[(Register, u64)]]) -> Vec<
         .map(|input| {
             let input = State {
                 registers: input.to_vec(),
+                flags: None,
             };
             let mut output = input.clone();
             for inst in program {
