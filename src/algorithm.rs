@@ -1,6 +1,8 @@
 use crate::{
     Flags, Inst, Register, Word64,
     enumerate::{EnumerationInfo, Enumerator},
+    graph::Graph,
+    shortest_path::shortest_path,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -48,55 +50,60 @@ fn synthesize(
     immediates: &[u64],
 ) -> Vec<Inst<Word64>> {
     let mut i: usize = 0;
-    for length in 0..=10 {
-        println!("Looking for programs of length {length}.");
-        let mut program: Vec<Inst<Word64>> = Vec::with_capacity(length);
-        let mut iterators = vec![Enumerator::new(); length];
-        let enumeration_info = &EnumerationInfo {
-            registers,
-            immediates,
-        };
-        loop {
-            // Build the current program.
-            program.clear();
-            for it in &iterators {
-                program.push(it.current(enumeration_info));
+    let mut graph = Graph::<Inst<Word64>, Vec<State>>::new();
+    let enumeration_info = &EnumerationInfo {
+        registers,
+        immediates,
+    };
+    let test_cases_inputs = test_cases
+        .iter()
+        .map(|(input, _)| input.clone())
+        .collect::<Vec<_>>();
+    let test_cases_outputs = test_cases
+        .iter()
+        .map(|(_, output)| output.clone())
+        .collect::<Vec<_>>();
+    // Build up to N deep just so we stop eventually.
+    const N: usize = 10;
+    for iter in 0..N {
+        println!("Iteration {iter} - i={i}.");
+        let enumerator = Enumerator::new();
+        for inst in enumerator.into_iter(enumeration_info) {
+            // Insert the current instruction.
+            let mut all_states = graph.all_states().cloned().collect::<Vec<_>>();
+            if all_states.is_empty() {
+                all_states.push(test_cases_inputs.clone());
             }
-
-            // Test the current program.
-            let mut all_match = true;
-            for (input, expected_output) in test_cases {
-                let mut state = input.clone();
-                for inst in &program {
-                    inst.run(&mut state);
+            for s1 in all_states {
+                let s2 = s1
+                    .iter()
+                    .map(|s1| {
+                        let mut s2 = s1.clone();
+                        inst.run(&mut s2);
+                        s2
+                    })
+                    .collect::<Vec<_>>();
+                graph.insert_forward(inst, s1, s2.clone());
+                if s2 == test_cases_outputs {
+                    // We are done!
+                    let v = shortest_path(
+                        &test_cases_inputs,
+                        |states| {
+                            graph
+                                .get_forward(states)
+                                .unwrap_or_default()
+                                .map(|(k, v)| (v.clone(), k.clone()))
+                        },
+                        |states| states == &test_cases_outputs,
+                    )
+                    .unwrap();
+                    return v.into_iter().map(|insts| insts[0]).collect();
                 }
-                if &state != expected_output {
-                    all_match = false;
-                    break;
-                }
-            }
-            if all_match {
-                return program;
-            }
 
-            i += 1;
-            if i % 1_000_000 == 0 {
-                println!("  Tested {i} programs so far...");
-            }
-
-            // Advance to the next program.
-            let mut index = 0;
-            while index < length {
-                let o = iterators[index].advance(enumeration_info);
-                let done = o.is_none();
-                if !done {
-                    break;
+                i += 1;
+                if i % 1_000_000 == 0 {
+                    println!("  Tested {i} programs so far...");
                 }
-                iterators[index] = Enumerator::new();
-                index += 1;
-            }
-            if index == length {
-                break;
             }
         }
     }
