@@ -147,11 +147,39 @@ impl Enumerator {
         }
         Some(())
     }
+
+    pub fn into_iter(self, ei: &EnumerationInfo) -> impl Iterator<Item=Inst<Word64>> {
+        Iter {
+            done: false,
+            ei,
+            enumerator: self,
+        }
+    }
 }
 
 impl Default for Enumerator {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+
+struct Iter<'a> {
+    done: bool,
+    ei: &'a EnumerationInfo<'a>,
+    enumerator: Enumerator,
+}
+
+impl<'a> Iterator for Iter<'a> {
+    type Item = Inst<Word64>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
+        }
+        let ret = self.enumerator.current(self.ei);
+        self.done = self.enumerator.advance(self.ei).is_none();
+        Some(ret)
     }
 }
 
