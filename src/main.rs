@@ -5,8 +5,8 @@ fn main() {
     let p = optimize(
         &[
             inst!(AddI, 0, 1, 5),
-            inst!(AddI Cc, 1, 0, 1),
-            inst!(Mul Eq, 0, 0, 1),
+            inst!(AddI, 0, 0, 5),
+            inst!(AddI Eq, 1, 0, 1),
         ],
         &[
             &[(Register(0), 0), (Register(1), 10)],

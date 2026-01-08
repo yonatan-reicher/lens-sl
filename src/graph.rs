@@ -1,68 +1,54 @@
-use rustc_hash::{FxHashMap, FxHashSet};
-use std::hash::Hash;
+use rustc_hash::FxHashMap;
 
-/// I - A machine instruction.
-/// S - A state of the machine.
+/// A search graph for programs and their outputs on some test cases.
+/// For n test cases (input_n, output_n), the graph has n levels, including 0.
+/// On the 0 < k ≤ n level, each edge with output_k connects to a sub-graph
+/// where all programs produce output_k on input_k.
 #[derive(Clone, Debug)]
-pub struct Graph<I, S>
-where
-    S: Eq + Hash,
-{
-    // All the states that we encountered.
-    all_states: FxHashSet<S>,
-    /// Maps a list of starting states ending states to instructions that
-    /// transform those starting states into those ending state.
-    forward: FxHashMap<S, FxHashMap<S, Vec<I>>>,
+pub enum Graph<State, Program> {
+    /// A 0-tests graph. Just a series of programs.
+    Leaf(Vec<Program>),
+    /// For the corresponding test case (input, output), each program in the
+    /// inner hash map outputs the output from the input.
+    Nest(FxHashMap<State, Self>),
 }
 
-impl<I, S> Graph<I, S>
-where
-    S: Eq + Hash,
-{
-    pub fn new() -> Self {
-        Self {
-            all_states: Default::default(),
-            forward: Default::default(),
-        }
-    }
-
-    /// Returns an iterator of all states that appear together.
-    pub fn all_states(&self) -> impl Iterator<Item = &S> {
-        self.all_states.iter()
-    }
-
-    /// Does the graph contain all these states in the same point in the graph.
-    pub fn contains_states(&self, state: &S) -> bool {
-        self.all_states.contains(state)
+impl<S, P> Graph<S, P> {
+    pub const fn new() -> Self {
+        Self::Leaf(vec![])
     }
 }
 
-impl<I, S> Graph<I, S>
-where
-    S: Eq + Hash + Clone,
-{
-    pub fn insert_forward(&mut self, i: I, s1: S, s2: S) {
-        self.all_states.insert(s1.clone());
-        self.all_states.insert(s2.clone());
-        self.forward
-            .entry(s1.clone())
-            .or_default()
-            .entry(s2.clone())
-            .or_default()
-            .push(i);
-    }
-
-    pub fn get_forward(&self, s1: &S) -> Option<std::collections::hash_map::Iter<S, Vec<I>>> {
-        let next = self.forward.get(s1)?;
-        Some(next.iter())
-    }
-}
-
-impl<I, S> Default for Graph<I, S>
-where
-    S: Eq + Hash,
-{
+impl<S, P> Default for Graph<S, P> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl<S, P> Graph<S, P>
+where
+    S: Eq + std::hash::Hash + Clone,
+{
+    /// Insert the given programs under the given set of states. The length of
+    /// the slice of output states must be of the same depth as the graph.
+    pub fn insert_all(&mut self, outputs: &[S], progs: impl IntoIterator<Item=P>) {
+        match self {
+            Self::Leaf(programs) => {
+                debug_assert!(outputs.is_empty());
+                programs.extend(progs);
+            }
+            Self::Nest(hash_map) => {
+                let [output, rest @ ..] = outputs else {
+                    panic!();
+                };
+                hash_map
+                    .entry(output.clone())
+                    .or_insert_with(|| match rest {
+                        [] => Self::Leaf(vec![]),
+                        _ => Self::Nest(Default::default()),
+                    })
+                    .insert_all(rest, progs);
+            }
+        }
     }
 }
