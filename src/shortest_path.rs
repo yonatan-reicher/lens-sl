@@ -10,6 +10,7 @@ struct Entry<N, E> {
     edge: E,
 }
 
+#[allow(dead_code)]
 pub fn shortest_path<N, E, I>(
     start: &N,
     neighbors: impl Fn(&N) -> I,
