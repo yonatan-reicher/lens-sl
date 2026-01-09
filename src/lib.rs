@@ -1,7 +1,7 @@
 mod isa;
 mod enumerate;
 mod graph;
-mod algorithm;
+mod main_loop;
 mod shortest_path;
 
 pub use isa::{
@@ -14,5 +14,5 @@ pub use isa::{
     /* Word4, */ Word8, Word64,
 };
 
-pub use algorithm::optimize;
+pub use main_loop::optimize;
 
