@@ -1,4 +1,5 @@
 use rustc_hash::FxHashMap;
+use std::hash::Hash;
 
 /// A search graph for programs and their outputs on some test cases.
 /// For n test cases (input_n, output_n), the graph has n levels, including 0.
@@ -27,11 +28,25 @@ impl<S, P> Default for Graph<S, P> {
 
 impl<S, P> Graph<S, P>
 where
-    S: Eq + std::hash::Hash + Clone,
+    S: Eq + Hash + Clone,
 {
+    /// Returns the maximum depth of the graph.
+    pub fn depth(&self) -> usize {
+        match self {
+            Self::Leaf(_) => 0,
+            Self::Nest(hash_map) => {
+                hash_map.values()
+                    .map(|sub_graph| sub_graph.depth())
+                    .max()
+                    .unwrap_or(0)
+                    + 1
+            }
+        }
+    }
+
     /// Insert the given programs under the given set of states. The length of
     /// the slice of output states must be of the same depth as the graph.
-    pub fn insert_all(&mut self, outputs: &[S], progs: impl IntoIterator<Item=P>) {
+    pub fn insert_all(&mut self, outputs: &[S], progs: impl IntoIterator<Item = P>) {
         match self {
             Self::Leaf(programs) => {
                 debug_assert!(outputs.is_empty());
@@ -39,7 +54,8 @@ where
             }
             Self::Nest(hash_map) => {
                 let [output, rest @ ..] = outputs else {
-                    panic!();
+                    println!("Graph depth: {}, outputs length: {}", self.depth(), outputs.len());
+                    panic!("Mismatched graph depth and outputs length: graph depth > outputs length");
                 };
                 hash_map
                     .entry(output.clone())
