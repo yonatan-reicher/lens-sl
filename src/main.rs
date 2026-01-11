@@ -15,6 +15,6 @@ fn main() {
     );
     println!("Optimized program:");
     for inst in p {
-        println!("{inst:?}");
+        println!("{inst}");
     }
 }
