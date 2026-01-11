@@ -17,7 +17,8 @@ pub enum ArgType {
 
 /// In Arm, every instruction can be conditionally executed based on the state
 /// of the flags.
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, derive_more::Display, Default, PartialEq, Eq, Hash)]
+#[display("{}", self.to_string())]
 pub enum CondCode {
     /// Always (unconditional)
     /// In real Arm, this is actually the 15th condition code, but for we put it
@@ -56,17 +57,38 @@ pub enum CondCode {
 
 impl CondCode {
     pub const COUNT: u8 = 6;
+
+    pub const fn to_string(&self) -> &'static str {
+        match self {
+            CondCode::Al => "al",
+            CondCode::Eq => "eq",
+            CondCode::Ne => "ne",
+            CondCode::Cs => "cs",
+            CondCode::Cc => "cc",
+            CondCode::Mi => "mi",
+            CondCode::Pl => "pl",
+            CondCode::Vs => "vs",
+            CondCode::Vc => "vc",
+            CondCode::Hi => "hi",
+            CondCode::Ls => "ls",
+            CondCode::Ge => "ge",
+            CondCode::Lt => "lt",
+            CondCode::Gt => "gt",
+            CondCode::Le => "le",
+        }
+    }
 }
 
 /// This macro will let us define our ISA as a table.
 macro_rules! define_instructions {
     (
-        | OpCode | Arg 1 | Arg 2 | Arg 3 |
+        | OpCode | Arg 1 | Arg 2 | Arg 3 | String |
         $(-)+
-        $( | $op_code:ident | $arg1:ident | $arg2:ident | $arg3:ident | )+
+        $( | $op_code:ident | $arg1:ident | $arg2:ident | $arg3:ident | $str:literal |)+
     ) => {
         /// The operation codes supported by our ISA.
-        #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+        #[derive(Copy, Clone, Debug, derive_more::Display, PartialEq, Eq, Hash)]
+        #[display("{}", self.to_string())]
         pub enum OpCode {
             $( $op_code, )+
         }
@@ -77,6 +99,12 @@ macro_rules! define_instructions {
                 match self {
                     $( OpCode::$op_code =>
                         [ArgType::$arg1, ArgType::$arg2, ArgType::$arg3], )+
+                }
+            }
+
+            pub fn to_string(&self) -> String {
+                match self {
+                    $( OpCode::$op_code => $str.to_string(), )+
                 }
             }
 
@@ -92,21 +120,34 @@ macro_rules! define_instructions {
 }
 
 define_instructions! {
-    | OpCode  | Arg 1  | Arg 2  | Arg 3  |
-    --------------------------------------
-    | Nop     | Unused | Unused | Unused |
-    | Add     | Reg    | Reg    | Reg    |
-    | AddI    | Reg    | Reg    | Imm    |
-    | And     | Reg    | Reg    | Reg    |
-    | Eor     | Reg    | Reg    | Reg    |
-    | Mov     | Reg    | Reg    | Unused |
-    | MovI    | Reg    | Imm    | Unused |
-    | Mul     | Reg    | Reg    | Reg    |
-    | Orr     | Reg    | Reg    | Reg    |
+    | OpCode  | Arg 1  | Arg 2  | Arg 3  | String |
+    -----------------------------------------------
+    | Nop     | Unused | Unused | Unused | "nop"  |
+    | Add     | Reg    | Reg    | Reg    | "add"  |
+    | AddI    | Reg    | Reg    | Imm    | "add"  |
+    | And     | Reg    | Reg    | Reg    | "and"  |
+    | Eor     | Reg    | Reg    | Reg    | "eor"  |
+    | Mov     | Reg    | Reg    | Unused | "mov"  |
+    | MovI    | Reg    | Imm    | Unused | "mov"  |
+    | Mul     | Reg    | Reg    | Reg    | "mul"  |
+    | Orr     | Reg    | Reg    | Reg    | "orr"  |
 }
 
 /// A number representing a register.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Clone,
+    Copy,
+    derive_more::Debug,
+    derive_more::Display,
+    Default,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+)]
+#[debug("r{_0}")]
+#[display("r{_0}")]
 pub struct Register(pub u8);
 
 impl Register {
@@ -156,13 +197,14 @@ impl Word for Word4 {
 */
 
 /// A single instruction.
-#[derive(Copy, Clone, derive_more::Debug, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, derive_more::Debug, derive_more::Display, PartialEq, Eq, Hash)]
 #[debug("{op_code:?}{}{args:?}",
     match cond_code {
         CondCode::Al => "".to_string(),
         _ => format!("{cond_code:?}"),
     }
 )]
+#[display("{}", self.to_string_impl())]
 pub struct Inst<W: Word> {
     pub op_code: OpCode,
     pub cond_code: CondCode,
@@ -307,8 +349,30 @@ fn run_instruction<W: Word, S: State<W = W>>(inst: &Inst<S::W>, state: &mut S) {
 }
 
 impl<W: Word> Inst<W> {
-    pub fn run<S: State<W=W>>(&self, state: &mut S) {
+    pub fn run<S: State<W = W>>(&self, state: &mut S) {
         run_instruction(self, state)
+    }
+
+    fn to_string_impl(&self) -> String {
+        let Inst {
+            op_code,
+            cond_code,
+            args,
+        } = self;
+        let args = args
+            .iter()
+            .zip(op_code.arg_types())
+            .map(|(arg, arg_type)| match arg_type {
+                ArgType::Reg => format!("r{arg}"),
+                ArgType::Imm => format!("#{arg}"),
+                ArgType::Unused => "-".to_string(),
+            })
+            .collect::<Vec<_>>();
+        if cond_code == &CondCode::Al {
+            format!("{op_code} {}, {}, {}", args[0], args[1], args[2])
+        } else {
+            format!("{op_code}{cond_code} {}, {}, {}", args[0], args[1], args[2])
+        }
     }
 }
 
