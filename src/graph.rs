@@ -1,4 +1,5 @@
 use rustc_hash::FxHashMap;
+use std::fmt::Display;
 use std::hash::Hash;
 
 /// A search graph for programs and their outputs on some test cases.
@@ -66,5 +67,99 @@ where
                     .insert_all(rest, progs);
             }
         }
+    }
+
+    pub fn into_iter(self) -> impl Iterator<Item = (Vec<S>, P)> {
+        GraphIterator::new(self)
+    }
+}
+
+impl<S, I> Graph<S, Vec<I>>
+where
+    S: Eq + Hash + Display,
+    I: Display,
+{
+    pub fn pretty_print_lines(&self) -> Vec<String> {
+        match self {
+            Graph::Leaf(items) => items
+                .iter()
+                .flat_map(|item| {
+                    if item.is_empty() {
+                        return vec!["· <empty program>".to_string()];
+                    }
+                    item.iter()
+                        .enumerate()
+                        .map(|(i, inst)| {
+                            let prefix = if i == 0 { '·' } else { ' ' };
+                            format!("{prefix} {inst}")
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect(),
+            Graph::Nest(hash_map) => {
+                let mut lines = vec![];
+                for (state, sub_graph) in hash_map {
+                    let sub_lines = sub_graph.pretty_print_lines();
+                    lines.push(format!("State: {state}"));
+                    for sub_line in sub_lines {
+                        lines.push(format!("  {sub_line}"));
+                    }
+                }
+                lines
+            }
+        }
+    }
+
+    pub fn pretty_print(&self) -> String {
+        self.pretty_print_lines().join("\n")
+    }
+}
+
+struct GraphIterator<S, P> {
+    graph_stack: Vec<Graph<S, P>>,
+    state_stack: Vec<S>,
+}
+
+impl<S, P> GraphIterator<S, P> {
+    fn new(graph: Graph<S, P>) -> Self {
+        Self {
+            graph_stack: vec![graph],
+            state_stack: vec![],
+        }
+    }
+}
+
+impl<S: Clone + Eq + Hash, P> Iterator for GraphIterator<S, P> {
+    type Item = (Vec<S>, P);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some(top) = self.graph_stack.pop() {
+            match top {
+                Graph::Leaf(mut programs) => {
+                    if let Some(prog) = programs.pop() {
+                        let ret = Some((self.state_stack.clone(), prog));
+                        if !programs.is_empty() {
+                            self.graph_stack.push(Graph::Leaf(programs));
+                        }
+                        return ret;
+                    } else {
+                        self.state_stack.pop();
+                    }
+                }
+                Graph::Nest(mut hash_map) => {
+                    if let Some((state, sub_graph)) = hash_map.iter_mut().next() {
+                        let state = state.clone();
+                        let sub_graph = std::mem::take(sub_graph);
+                        hash_map.remove(&state);
+                        self.graph_stack.push(Graph::Nest(hash_map));
+                        self.state_stack.push(state);
+                        self.graph_stack.push(sub_graph);
+                    } else {
+                        self.state_stack.pop();
+                    }
+                }
+            }
+        }
+        None
     }
 }
