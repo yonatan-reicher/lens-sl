@@ -1,18 +1,36 @@
+//! The main loop for synthesis and optimization.
+//! Here we have basically the code that you would see in the actual paper that describes Lens.
+
+use crate::enumerate::{EnumerationInfo, Enumerator};
+use crate::graph;
+use crate::isa::{self, ArgType, Flags, Inst, Register, Word64};
 use functionality::prelude::*;
 
-use crate::{
-    Flags, Inst, Register, Word64,
-    enumerate::{EnumerationInfo, Enumerator},
-};
+// =========================================== State ==============================================
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+/// The state of the machine at a given point in time.
+#[derive(Clone, Debug, derive_more::Display, PartialEq, Eq, Hash)]
+#[display(
+    "Registers: {{{}}}, Flags: {}",
+    registers
+        .iter()
+        .map(|(r, v)| format!("{r:?}: {v}"))
+        .collect::<Vec<_>>()
+        .join(", "),
+    match &flags {
+        Some(f) => format!("{f:?}"),
+        None => "None".to_string(),
+    }
+)]
 struct State {
     /// This vector is always sorted by register.
-    registers: Vec<(Register, u64)>,
-    flags: Option<Flags>,
+    /// Registers that are not present are not "live".
+    pub registers: Vec<(Register, u64)>,
+    /// The value of the flags register. If None, flags is not "live".
+    pub flags: Option<Flags>,
 }
 
-impl crate::isa::State for State {
+impl isa::State for State {
     type W = Word64;
 
     fn get_register(&self, reg: Register) -> u64 {
@@ -46,13 +64,109 @@ impl crate::isa::State for State {
 
 type Program = Vec<Inst<Word64>>;
 
-type Graph = crate::graph::Graph<State, Program>;
+// =========================================== Graph ==============================================
 
-fn synthesize(
-    test_cases: &[(State, State)],
-    registers: &[Register],
-    immediates: &[u64],
-) -> Vec<Inst<Word64>> {
+type Graph = graph::Graph<State, Program>;
+
+// ========================================== Oracle ==============================================
+
+type CounterExample = (State, State);
+
+/// In the future, we will have a solver implement this trait.
+trait Oracle {
+    fn check_program(&mut self, program: &[Inst<Word64>]) -> Result<(), CounterExample>;
+}
+
+struct TestCasesOracle {
+    test_cases: Vec<CounterExample>,
+}
+
+impl Oracle for TestCasesOracle {
+    fn check_program(&mut self, program: &[Inst<Word64>]) -> Result<(), CounterExample> {
+        // Maybe we could not check test cases again, but it's probably not really slowing us down.
+        for (input, expected_output) in &self.test_cases {
+            let mut output = input.clone();
+            for inst in program {
+                inst.run(&mut output);
+            }
+            if &output != expected_output {
+                println!("Oracle found counter example.");
+                println!("  Input: {input:?}");
+                println!("  Expected output: {expected_output:?}");
+                println!("  Actual output: {output:?}");
+                return Err((input.clone(), expected_output.clone()));
+            }
+        }
+        Ok(())
+    }
+}
+
+// ====================================== Implementation ==========================================
+
+// This is the main function that gets exposed.
+pub fn optimize(program: &[Inst<Word64>], inputs: &[&[(Register, u64)]]) -> Program {
+    let test_cases: Vec<(State, State)> = inputs
+        .iter()
+        .map(|input| {
+            let input = State {
+                registers: input.to_vec(),
+                flags: None,
+            };
+            let mut output = input.clone();
+            for inst in program {
+                inst.run(&mut output);
+            }
+            (input, output)
+        })
+        .collect();
+
+    let mut registers: Vec<Register> = vec![];
+    // let immediates: Vec<u64> = vec![0, 1, 2];
+    let mut immediates: Vec<u64> = vec![];
+    for (input, output) in &test_cases {
+        for (reg, val) in &input.registers {
+            if !registers.contains(reg) {
+                registers.push(*reg);
+            }
+            if !immediates.contains(val) {
+                immediates.push(*val);
+            }
+        }
+        for (reg, val) in &output.registers {
+            if !registers.contains(reg) {
+                registers.push(*reg);
+            }
+            if !immediates.contains(val) {
+                immediates.push(*val);
+            }
+        }
+    }
+    for inst in program {
+        for (arg, arg_type) in inst.args.iter().zip(inst.op_code.arg_types()) {
+            match arg_type {
+                ArgType::Reg => {
+                    let reg: Register = Register(*arg as _);
+                    if !registers.contains(&reg) {
+                        registers.push(reg);
+                    }
+                }
+                ArgType::Imm => {
+                    let imm: u64 = *arg;
+                    if !immediates.contains(&imm) {
+                        immediates.push(imm);
+                    }
+                }
+                ArgType::Unused => {}
+            }
+        }
+    }
+
+    let oracle = TestCasesOracle { test_cases };
+
+    synthesize(&registers, &immediates, oracle)
+}
+
+fn synthesize(registers: &[Register], immediates: &[u64], mut oracle: impl Oracle) -> Program {
     // The length of the prefixes of the program being built.
     let mut forward_length = 0;
     let mut backward_length = 0;
@@ -63,21 +177,26 @@ fn synthesize(
         registers,
         immediates,
     };
-    let test_cases_inputs = test_cases
-        .iter()
-        .map(|(input, _)| input.clone())
-        .collect::<Vec<_>>();
-    let test_cases_outputs = test_cases
-        .iter()
-        .map(|(_, output)| output.clone())
-        .collect::<Vec<_>>();
+    let mut inputs = vec![];
+    let mut outputs = vec![];
+    // Generate a first input
+    match oracle.check_program(&[]) {
+        Ok(_) => return vec![], // Turns out it's actually the empty program 🤷
+        Err(counter_example) => {
+            inputs.push(counter_example.0);
+            outputs.push(counter_example.1);
+        }
+    }
     loop {
         // Searching phase
         println!("Searching lF={forward_length} lB={backward_length}");
+        // println!("Forward Graph: \n{}", forward_graph.pretty_print());
+        // println!("Backward Graph: \n{}", backward_graph.pretty_print());
         for inst in Enumerator::new().into_iter(enumeration_info) {
             let res = connect_and_refine(
-                &test_cases_inputs,
-                &test_cases_outputs,
+                &mut oracle,
+                &mut inputs,
+                &mut outputs,
                 forward_length,
                 backward_length,
                 &mut forward_graph,
@@ -93,7 +212,13 @@ fn synthesize(
                 ConnectAndRefineResult::Continue => {}
             }
         }
+        // println!("Forward Graph: \n{}", forward_graph.pretty_print());
+        // println!("Backward Graph: \n{}", backward_graph.pretty_print());
+        // Expanding phase
         println!("Expanding");
+        // Make sure that the graphs are built up to the maximal depth.
+        build_forward(&mut forward_graph, &inputs);
+        build_backward(&mut backward_graph, &outputs);
         let should_exapnd_forward = true;
         if should_exapnd_forward {
             expand_forward(&mut forward_graph, enumeration_info);
@@ -111,20 +236,22 @@ enum ConnectAndRefineResult {
 }
 
 fn connect_and_refine(
-    test_cases_inputs: &[State],
-    test_cases_outputs: &[State],
+    oracle: &mut impl Oracle,
+    inputs: &mut Vec<State>,
+    outputs: &mut Vec<State>,
     forward_length: usize,
     backward_length: usize,
     forward_graph: &mut Graph,
     backward_graph: &mut Graph,
     inst: Inst<Word64>,
+    // This is the index of the input/output pair we are currently trying to connect.
     k: usize,
 ) -> ConnectAndRefineResult {
-    if k > test_cases_inputs.len() {
+    if k > inputs.len() {
         match (&forward_graph, &backward_graph) {
             (Graph::Leaf(prefixes), Graph::Leaf(postfixes)) => {
                 let mut program = Vec::with_capacity(forward_length + 1 + backward_length);
-                for prefix in prefixes {
+                'my_break: for prefix in prefixes {
                     debug_assert_eq!(prefix.len(), forward_length);
                     for postfix in postfixes {
                         debug_assert_eq!(postfix.len(), backward_length);
@@ -132,30 +259,43 @@ fn connect_and_refine(
                         program.extend(prefix.iter());
                         program.push(inst);
                         program.extend(postfix.iter());
+                        println!("Found candidate program:");
+                        for inst in &program {
+                            println!("  {inst}");
+                        }
                         // TODO: try this program
-                        if true {
-                            return ConnectAndRefineResult::Found(program);
+                        match oracle.check_program(&program) {
+                            Ok(()) => {
+                                return ConnectAndRefineResult::Found(program);
+                            }
+                            Err(counter_example) => {
+                                inputs.push(counter_example.0);
+                                outputs.push(counter_example.1);
+                                if true {
+                                    break 'my_break;
+                                }
+                            }
                         }
                     }
                 }
             }
             _ => {
                 println!("Graphs are not leaves at the end.");
-                dbg!(forward_graph);
-                dbg!(backward_graph);
+                println!("Forward Graph: \n{}", forward_graph.pretty_print());
+                println!("Backward Graph: \n{}", backward_graph.pretty_print());
                 panic!();
             }
         }
     }
 
     if matches!(forward_graph, Graph::Leaf(..)) {
-        println!("  Building forward");
-        build_forward(forward_graph, test_cases_inputs, k);
+        println!("Building forward");
+        build_forward(forward_graph, &inputs[k - 1..]);
     }
 
     if matches!(backward_graph, Graph::Leaf(..)) {
-        println!("  Building backward");
-        build_backward(backward_graph, test_cases_outputs, k);
+        println!("Building backward");
+        build_backward(backward_graph, &outputs[k - 1..]);
     }
 
     let Graph::Nest(forward_outputs) = forward_graph else {
@@ -164,14 +304,16 @@ fn connect_and_refine(
     let Graph::Nest(backward_outputs) = backward_graph else {
         panic!();
     };
-    println!("  Trying to connect forward and backward at k={k}");
     for (forward_output, forward_subgraph) in forward_outputs {
         let mut next = forward_output.clone();
         inst.run(&mut next);
         if let Some(backward_subgraph) = backward_outputs.get_mut(&next) {
+            // println!("  Found matching state: {next}");
+            // println!("  k = {k}  inputs.len()={}", inputs.len());
             return connect_and_refine(
-                test_cases_inputs,
-                test_cases_outputs,
+                oracle,
+                inputs,
+                outputs,
                 forward_length,
                 backward_length,
                 forward_subgraph,
@@ -231,93 +373,47 @@ fn expand_forward(graph: &mut Graph, ei: &EnumerationInfo) {
     *graph = out;
 }
 
-fn expand_backward(graph: &mut Graph) {
+fn expand_backward(graph: &mut Graph) {}
+
+fn build_forward(graph: &mut Graph, test_cases_inputs: &[State]) {
+    build_forwards_or_backwards(graph, test_cases_inputs, |program, state| {
+        for inst in program {
+            inst.run(state);
+        }
+    });
 }
 
-fn build_forward(graph: &mut Graph, test_cases_inputs: &[State], k: usize) {
+fn build_backward(graph: &mut Graph, test_cases_outputs: &[State]) {
+    build_forwards_or_backwards(graph, test_cases_outputs, |program, _state| {
+        for _inst in program.iter().rev() {
+            todo!("Backward execution not implemented yet.");
+        }
+    });
+}
+
+fn build_forwards_or_backwards(
+    graph: &mut Graph,
+    initial_states: &[State],
+    step: impl Fn(&Program, &mut State),
+) {
     let programs = match graph {
         Graph::Leaf(items) => std::mem::take(items),
-        Graph::Nest(hash_map) => todo!(),
+        // TODO: This is a hack, just for now. This case should be removed.
+        Graph::Nest(_hash_map) => {
+            println!("Warning: build_forwards_or_backwards called on a non-leaf graph. This is a hacky workaround.");
+            std::mem::take(graph).into_iter().map(|(_, p)| p).collect()
+        }
     };
     // Rebuild the graph.
     *graph = Graph::Nest(Default::default());
-    let mut my_outputs = Vec::with_capacity(k);
+    let mut my_outputs = Vec::with_capacity(initial_states.len());
     for program in programs {
         my_outputs.clear();
-        for i in &test_cases_inputs[..k] {
+        for i in initial_states {
             let mut my_output = i.clone();
-            for inst in &program {
-                inst.run(&mut my_output);
-            }
+            step(&program, &mut my_output);
             my_outputs.push(my_output);
         }
         graph.insert_all(&my_outputs, [program.clone()]);
     }
-}
-
-fn build_backward(graph: &mut Graph, test_cases_outputs: &[State], k: usize) {
-    let programs = match graph {
-        Graph::Leaf(items) => std::mem::take(items),
-        Graph::Nest(hash_map) => todo!(),
-    };
-    // Rebuild the graph.
-    *graph = Graph::Nest(Default::default());
-    let mut my_inputs = Vec::with_capacity(k);
-    for program in programs {
-        my_inputs.clear();
-        for o in &test_cases_outputs[..k] {
-            let mut my_input = o.clone();
-            for inst in program.iter().rev() {
-                // inst.run_backward(&mut my_input);
-                todo!();
-            }
-            my_inputs.push(my_input);
-        }
-        graph.insert_all(&my_inputs, [program.clone()]);
-    }
-}
-
-pub fn optimize(program: &[Inst<Word64>], inputs: &[&[(Register, u64)]]) -> Vec<Inst<Word64>> {
-    let test_cases: Vec<(State, State)> = inputs
-        .iter()
-        .map(|input| {
-            let input = State {
-                registers: input.to_vec(),
-                flags: None,
-            };
-            let mut output = input.clone();
-            for inst in program {
-                inst.run(&mut output);
-            }
-            (input, output)
-        })
-        .collect();
-
-    let mut registers: Vec<Register> = vec![];
-    let immediates: Vec<u64> = vec![0, 1, 2, 3, 4, 5, 6];
-    for (input, output) in &test_cases {
-        for (reg, _) in &input.registers {
-            if !registers.contains(reg) {
-                registers.push(*reg);
-            }
-        }
-        for (reg, _) in &output.registers {
-            if !registers.contains(reg) {
-                registers.push(*reg);
-            }
-        }
-    }
-    for inst in program {
-        for (arg, arg_type) in inst.args.iter().zip(inst.op_code.arg_types()) {
-            if arg_type != crate::isa::ArgType::Reg {
-                continue;
-            }
-            let reg: Register = Register(*arg as _);
-            if !registers.contains(&reg) {
-                registers.push(reg);
-            }
-        }
-    }
-
-    synthesize(&test_cases, &registers, &immediates)
 }
