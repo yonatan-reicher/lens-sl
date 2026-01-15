@@ -72,6 +72,22 @@ where
     pub fn into_iter(self) -> impl Iterator<Item = (Vec<S>, P)> {
         GraphIterator::new(self)
     }
+
+    pub fn for_each<F>(self, f: &mut F)
+    where F: FnMut(P) {
+        match self {
+            Self::Leaf(programs) => {
+                for prog in programs {
+                    f(prog);
+                }
+            }
+            Self::Nest(hash_map) => {
+                for sub_graph in hash_map.into_values() {
+                    sub_graph.for_each(f);
+                }
+            }
+        }
+    }
 }
 
 impl<S, I> Graph<S, Vec<I>>
