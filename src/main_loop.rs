@@ -216,12 +216,9 @@ fn synthesize(registers: &[Register], immediates: &[u64], mut oracle: impl Oracl
         // println!("Backward Graph: \n{}", backward_graph.pretty_print());
         // Expanding phase
         println!("Expanding");
-        // Make sure that the graphs are built up to the maximal depth.
-        build_forward(&mut forward_graph, &inputs);
-        build_backward(&mut backward_graph, &outputs);
         let should_exapnd_forward = true;
         if should_exapnd_forward {
-            expand_forward(&mut forward_graph, enumeration_info);
+            expand_forward(&mut forward_graph, &inputs, enumeration_info);
             forward_length += 1;
         } else {
             expand_backward(&mut backward_graph);
@@ -329,47 +326,51 @@ fn connect_and_refine(
 /// Go through each program prefix in the graph, and expand it by one
 /// instruction forward. This is done for each program, and for each
 /// instruction.
-fn expand_forward(graph: &mut Graph, ei: &EnumerationInfo) {
-    fn inner(graph: &Graph, outputs: &mut Vec<State>, out: &mut Graph, ei: &EnumerationInfo) {
+fn expand_forward(graph: &mut Graph, inputs: &Vec<State>, ei: &EnumerationInfo) {
+    fn inner(graph: &Graph, inputs: &Vec<State>, out: &mut Graph, ei: &EnumerationInfo) {
         match graph {
+            Graph::Leaf(programs) if programs.is_empty() => {}
             Graph::Leaf(programs) => {
+                // Calculate the outputs of the current programs.
+                // (All the programs in the same leaf have the same outputs)
+                let program = &programs[0];
+                let outputs: Vec<State> = inputs.iter()
+                    .map(|input| {
+                        let mut state = input.clone();
+                        for inst in program {
+                            inst.run(&mut state);
+                        }
+                        state
+                    })
+                    .collect();
+                let mut outputs_after_inst = vec![];
                 for inst in Enumerator::new().into_iter(ei) {
-                    let outputs: Vec<_> = outputs
-                        .iter()
-                        .cloned()
-                        .map(|mut o| {
-                            inst.run(&mut o);
-                            o
-                        })
-                        .collect();
-                    let mut expanded_program = vec![];
-                    for program in programs {
-                        expanded_program.clear();
-                        expanded_program.extend(program.iter());
-                        expanded_program.push(inst);
+                    outputs_after_inst.clear();
+                    for output in &outputs {
+                        let mut next_state = output.clone();
+                        inst.run(&mut next_state);
+                        outputs_after_inst.push(next_state);
                     }
                     out.insert_all(
-                        &outputs,
+                        &outputs_after_inst,
                         programs.iter().map(|p| {
                             Vec::with_capacity(p.len() + 1)
                                 .mutate(|v| v.extend(p))
                                 .mutate(|v| v.push(inst))
-                        }),
+                        }).collect::<Vec<_>>(),
                     );
                 }
             }
             Graph::Nest(hash_map) => {
-                for (state, sub_graph) in hash_map {
-                    outputs.push(state.clone());
-                    inner(sub_graph, outputs, out, ei);
-                    outputs.pop();
+                for sub_graph in hash_map.values() {
+                    inner(sub_graph, inputs, out, ei);
                 }
             }
         }
     }
 
     let mut out = Graph::Nest(Default::default());
-    inner(graph, &mut vec![], &mut out, ei);
+    inner(graph, inputs, &mut out, ei);
     *graph = out;
 }
 
@@ -396,18 +397,11 @@ fn build_forwards_or_backwards(
     initial_states: &[State],
     step: impl Fn(&Program, &mut State),
 ) {
-    let programs = match graph {
-        Graph::Leaf(items) => std::mem::take(items),
-        // TODO: This is a hack, just for now. This case should be removed.
-        Graph::Nest(_hash_map) => {
-            println!("Warning: build_forwards_or_backwards called on a non-leaf graph. This is a hacky workaround.");
-            std::mem::take(graph).into_iter().map(|(_, p)| p).collect()
-        }
-    };
     // Rebuild the graph.
+    let old_graph = std::mem::take(graph);
     *graph = Graph::Nest(Default::default());
     let mut my_outputs = Vec::with_capacity(initial_states.len());
-    for program in programs {
+    old_graph.for_each(&mut |program| {
         my_outputs.clear();
         for i in initial_states {
             let mut my_output = i.clone();
@@ -415,5 +409,5 @@ fn build_forwards_or_backwards(
             my_outputs.push(my_output);
         }
         graph.insert_all(&my_outputs, [program.clone()]);
-    }
+    });
 }
