@@ -4,7 +4,10 @@
 use crate::enumerate::{EnumerationInfo, Enumerator};
 use crate::graph;
 use crate::isa::{self, ArgType, Flags, Inst, Register, Word64};
-use functionality::prelude::*;
+use crate::programs;
+use rustc_hash::FxHashSet;
+use std::ops::ControlFlow::{Break, Continue};
+use std::rc::Rc;
 
 // =========================================== State ==============================================
 
@@ -62,11 +65,13 @@ impl isa::State for State {
     }
 }
 
-type Program = Vec<Inst<Word64>>;
-
 // =========================================== Graph ==============================================
 
-type Graph = graph::Graph<State, Program>;
+type Program = programs::Program<Inst<Word64>>;
+
+type Programs = programs::Programs<Inst<Word64>>;
+
+type Graph = graph::Graph<State, Programs>;
 
 // ========================================== Oracle ==============================================
 
@@ -84,13 +89,17 @@ struct TestCasesOracle {
 impl Oracle for TestCasesOracle {
     fn check_program(&mut self, program: &[Inst<Word64>]) -> Result<(), CounterExample> {
         // Maybe we could not check test cases again, but it's probably not really slowing us down.
-        for (input, expected_output) in &self.test_cases {
+        for (i, (input, expected_output)) in self.test_cases.iter().enumerate() {
             let mut output = input.clone();
             for inst in program {
                 inst.run(&mut output);
             }
             if &output != expected_output {
-                println!("Oracle found counter example.");
+                println!(
+                    "Oracle found counter example {}/{}.",
+                    i + 1,
+                    self.test_cases.len()
+                );
                 println!("  Input: {input:?}");
                 println!("  Expected output: {expected_output:?}");
                 println!("  Actual output: {output:?}");
@@ -171,8 +180,8 @@ fn synthesize(registers: &[Register], immediates: &[u64], mut oracle: impl Oracl
     let mut forward_length = 0;
     let mut backward_length = 0;
     // The forward and backward graphs start while having the empty program.
-    let mut forward_graph = Graph::Leaf(vec![vec![]]);
-    let mut backward_graph = Graph::Leaf(vec![vec![]]);
+    let mut forward_graph = Graph::Leaf(Programs::program(vec![]));
+    let mut backward_graph = Graph::Leaf(Programs::program(vec![]));
     let enumeration_info = &EnumerationInfo {
         registers,
         immediates,
@@ -180,6 +189,7 @@ fn synthesize(registers: &[Register], immediates: &[u64], mut oracle: impl Oracl
     let mut inputs = vec![];
     let mut outputs = vec![];
     // Generate a first input
+    println!("Checking empty program");
     match oracle.check_program(&[]) {
         Ok(_) => return vec![], // Turns out it's actually the empty program 🤷
         Err(counter_example) => {
@@ -189,7 +199,7 @@ fn synthesize(registers: &[Register], immediates: &[u64], mut oracle: impl Oracl
     }
     loop {
         // Searching phase
-        println!("Searching lF={forward_length} lB={backward_length}");
+        println!("Searching forward_length={forward_length} backward_length={backward_length}");
         // println!("Forward Graph: \n{}", forward_graph.pretty_print());
         // println!("Backward Graph: \n{}", backward_graph.pretty_print());
         for inst in Enumerator::new().into_iter(enumeration_info) {
@@ -216,6 +226,7 @@ fn synthesize(registers: &[Register], immediates: &[u64], mut oracle: impl Oracl
         // println!("Backward Graph: \n{}", backward_graph.pretty_print());
         // Expanding phase
         println!("Expanding");
+        print_stats(&forward_graph, &backward_graph);
         let should_exapnd_forward = true;
         if should_exapnd_forward {
             expand_forward(&mut forward_graph, &inputs, enumeration_info);
@@ -224,6 +235,7 @@ fn synthesize(registers: &[Register], immediates: &[u64], mut oracle: impl Oracl
             expand_backward(&mut backward_graph);
             backward_length += 1;
         }
+        print_stats(&forward_graph, &backward_graph);
     }
 }
 
@@ -247,11 +259,17 @@ fn connect_and_refine(
     if k > inputs.len() {
         match (&forward_graph, &backward_graph) {
             (Graph::Leaf(prefixes), Graph::Leaf(postfixes)) => {
+                // We found a class of candidate programs.
+                // Try each one. If one works, return it. If none work, adds all counter-examples.
+                // First, make a buffer to hold the program.
                 let mut program = Vec::with_capacity(forward_length + 1 + backward_length);
-                'my_break: for prefix in prefixes {
+                let mut found = false;
+                let mut counter_examples = FxHashSet::default();
+                let _ = prefixes.try_for_each_ref(&mut |prefix| {
                     debug_assert_eq!(prefix.len(), forward_length);
-                    for postfix in postfixes {
+                    postfixes.try_for_each_ref(&mut |postfix| {
                         debug_assert_eq!(postfix.len(), backward_length);
+                        // Build the current candidate program.
                         program.clear();
                         program.extend(prefix.iter());
                         program.push(inst);
@@ -260,20 +278,25 @@ fn connect_and_refine(
                         for inst in &program {
                             println!("  {inst}");
                         }
-                        // TODO: try this program
                         match oracle.check_program(&program) {
+                            // Found!
                             Ok(()) => {
-                                return ConnectAndRefineResult::Found(program);
+                                found = true;
+                                Break(())
                             }
                             Err(counter_example) => {
-                                inputs.push(counter_example.0);
-                                outputs.push(counter_example.1);
-                                if true {
-                                    break 'my_break;
+                                if !counter_examples.contains(&counter_example) {
+                                    counter_examples.insert(counter_example.clone());
+                                    inputs.push(counter_example.0);
+                                    outputs.push(counter_example.1);
                                 }
+                                Continue(())
                             }
                         }
-                    }
+                    })
+                });
+                if found {
+                    return ConnectAndRefineResult::Found(program);
                 }
             }
             _ => {
@@ -307,7 +330,7 @@ fn connect_and_refine(
         if let Some(backward_subgraph) = backward_outputs.get_mut(&next) {
             // println!("  Found matching state: {next}");
             // println!("  k = {k}  inputs.len()={}", inputs.len());
-            return connect_and_refine(
+            let res = connect_and_refine(
                 oracle,
                 inputs,
                 outputs,
@@ -318,6 +341,10 @@ fn connect_and_refine(
                 inst,
                 k + 1,
             );
+            match res {
+                ConnectAndRefineResult::Found(prog) => return ConnectAndRefineResult::Found(prog),
+                ConnectAndRefineResult::Continue => {}
+            }
         }
     }
     ConnectAndRefineResult::Continue
@@ -327,23 +354,27 @@ fn connect_and_refine(
 /// instruction forward. This is done for each program, and for each
 /// instruction.
 fn expand_forward(graph: &mut Graph, inputs: &Vec<State>, ei: &EnumerationInfo) {
-    fn inner(graph: &Graph, inputs: &Vec<State>, out: &mut Graph, ei: &EnumerationInfo) {
+    fn inner(graph: Graph, inputs: &Vec<State>, out: &mut Graph, ei: &EnumerationInfo) {
         match graph {
             Graph::Leaf(programs) if programs.is_empty() => {}
             Graph::Leaf(programs) => {
                 // Calculate the outputs of the current programs.
                 // (All the programs in the same leaf have the same outputs)
-                let program = &programs[0];
-                let outputs: Vec<State> = inputs.iter()
+                let program = programs
+                    .sample()
+                    .expect("programs should not be empty here.");
+                let outputs: Vec<State> = inputs
+                    .iter()
                     .map(|input| {
                         let mut state = input.clone();
-                        for inst in program {
+                        for inst in &program {
                             inst.run(&mut state);
                         }
                         state
                     })
                     .collect();
                 let mut outputs_after_inst = vec![];
+                let programs = Rc::new(programs);
                 for inst in Enumerator::new().into_iter(ei) {
                     outputs_after_inst.clear();
                     for output in &outputs {
@@ -351,27 +382,19 @@ fn expand_forward(graph: &mut Graph, inputs: &Vec<State>, ei: &EnumerationInfo) 
                         inst.run(&mut next_state);
                         outputs_after_inst.push(next_state);
                     }
-                    out.insert_all(
-                        &outputs_after_inst,
-                        programs.iter().map(|p| {
-                            Vec::with_capacity(p.len() + 1)
-                                .mutate(|v| v.extend(p))
-                                .mutate(|v| v.push(inst))
-                        }).collect::<Vec<_>>(),
-                    );
+                    out.insert_all(&outputs_after_inst, programs.clone().concat(inst));
                 }
             }
             Graph::Nest(hash_map) => {
-                for sub_graph in hash_map.values() {
+                for sub_graph in hash_map.into_values() {
                     inner(sub_graph, inputs, out, ei);
                 }
             }
         }
     }
 
-    let mut out = Graph::Nest(Default::default());
-    inner(graph, inputs, &mut out, ei);
-    *graph = out;
+    let old_graph = std::mem::replace(graph, Graph::Nest(Default::default()));
+    inner(old_graph, inputs, graph, ei);
 }
 
 fn expand_backward(graph: &mut Graph) {}
@@ -398,16 +421,53 @@ fn build_forwards_or_backwards(
     step: impl Fn(&Program, &mut State),
 ) {
     // Rebuild the graph.
-    let old_graph = std::mem::take(graph);
-    *graph = Graph::Nest(Default::default());
+    let old_graph = std::mem::replace(graph, Graph::Nest(Default::default()));
     let mut my_outputs = Vec::with_capacity(initial_states.len());
-    old_graph.for_each(&mut |program| {
+    old_graph.for_each(&mut |programs| {
+        let program = programs
+            .sample()
+            .expect("programs should not be empty here.");
         my_outputs.clear();
         for i in initial_states {
             let mut my_output = i.clone();
             step(&program, &mut my_output);
             my_outputs.push(my_output);
         }
-        graph.insert_all(&my_outputs, [program.clone()]);
+        graph.insert_all(&my_outputs, programs);
     });
+}
+
+/// Print information that shows us growth and memory usage of the graphs.
+fn print_stats(forward_graph: &Graph, backward_graph: &Graph) {
+    macro_rules! ignore {
+        ( $a:tt, $b:tt ) => {
+            $b
+        };
+    }
+    macro_rules! print_row {
+        ( $($e:expr),+ ) => {
+            println!(
+                concat!( $( ignore!($e, "{:<15}") ),+ ),
+                $( $e ),+
+            );
+        };
+    }
+
+    print_row!["Name", "Depth", "Nodes", "Leaves", "Programs"];
+    print_row![
+        "Forward",
+        forward_graph.depth(),
+        forward_graph.n_nodes(),
+        forward_graph.n_leaves(),
+        forward_graph.n_programs(),
+        forward_graph.depth()
+    ];
+    print_row![
+        "Backward",
+        backward_graph.depth(),
+        backward_graph.n_nodes(),
+        backward_graph.n_leaves(),
+        backward_graph.n_programs(),
+        backward_graph.depth()
+    ];
 }
