@@ -11,3 +11,6 @@ functionality = "1.0.0"
 # This is the same version as used by arbitrary-int above
 num-traits = "0.2.19"
 rustc-hash = "2.1.1"
+
+[profile.release]
+debug = true
