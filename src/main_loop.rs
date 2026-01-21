@@ -162,10 +162,10 @@ pub fn optimize(program: &[Inst<Word64>], inputs: &[&[(Register, u64)]]) -> Prog
     synthesize(&registers, &immediates, oracle)
 }
 
-fn synthesize(registers: &[Register], immediates: &[u64], mut oracle: impl Oracle) -> Program {
+fn synthesize(registers: &[Register], immediates: &[u64], oracle: impl Oracle) -> Program {
     // The length of the prefixes of the program being built.
-    let mut forward_length = 0;
-    let mut backward_length = 0;
+    let forward_length = 0;
+    let backward_length = 0;
     // The forward and backward graphs start while having the empty program.
     let mut forward_graph = Graph::Leaf(Programs::program(vec![]));
     let mut backward_graph = Graph::Leaf(Programs::program(vec![]));
@@ -173,15 +173,20 @@ fn synthesize(registers: &[Register], immediates: &[u64], mut oracle: impl Oracl
         registers,
         immediates,
     };
-    let mut inputs = vec![];
-    let mut outputs = vec![];
+    let mut globals = Globals {
+        oracle,
+        inputs: vec![],
+        outputs: vec![],
+        forward_length,
+        backward_length,
+    };
     // Generate a first input
     println!("Checking empty program");
-    match oracle.check_program(&[]) {
+    match globals.oracle.check_program(&[]) {
         Ok(_) => return vec![], // Turns out it's actually the empty program 🤷
         Err(counter_example) => {
-            inputs.push(counter_example.0);
-            outputs.push(counter_example.1);
+            globals.inputs.push(counter_example.0);
+            globals.outputs.push(counter_example.1);
         }
     }
     loop {
@@ -191,11 +196,7 @@ fn synthesize(registers: &[Register], immediates: &[u64], mut oracle: impl Oracl
         // println!("Backward Graph: \n{}", backward_graph.pretty_print());
         for inst in Enumerator::new().into_iter(enumeration_info) {
             let res = connect_and_refine(
-                &mut oracle,
-                &mut inputs,
-                &mut outputs,
-                forward_length,
-                backward_length,
+                &mut globals,
                 &mut forward_graph,
                 &mut backward_graph,
                 inst,
@@ -216,11 +217,11 @@ fn synthesize(registers: &[Register], immediates: &[u64], mut oracle: impl Oracl
         print_stats(&forward_graph, &backward_graph);
         let should_exapnd_forward = true;
         if should_exapnd_forward {
-            expand_forward(&mut forward_graph, &inputs, enumeration_info);
-            forward_length += 1;
+            expand_forward(&mut forward_graph, &globals.inputs, enumeration_info);
+            globals.forward_length += 1;
         } else {
             expand_backward(&mut backward_graph);
-            backward_length += 1;
+            globals.backward_length += 1;
         }
         print_stats(&forward_graph, &backward_graph);
     }
@@ -231,31 +232,36 @@ enum ConnectAndRefineResult {
     Continue,
 }
 
-fn connect_and_refine(
-    oracle: &mut impl Oracle,
-    inputs: &mut Vec<State>,
-    outputs: &mut Vec<State>,
+struct Globals<O: Oracle> {
+    oracle: O,
+    inputs: Vec<State>,
+    outputs: Vec<State>,
     forward_length: usize,
     backward_length: usize,
+}
+
+fn connect_and_refine(
+    globals: &mut Globals<impl Oracle>,
     forward_graph: &mut Graph,
     backward_graph: &mut Graph,
     inst: Inst<Word64>,
     // This is the index of the input/output pair we are currently trying to connect.
     k: usize,
 ) -> ConnectAndRefineResult {
-    if k > inputs.len() {
+    if k > globals.inputs.len() {
         match (&forward_graph, &backward_graph) {
             (Graph::Leaf(prefixes), Graph::Leaf(postfixes)) => {
                 // We found a class of candidate programs.
                 // Try each one. If one works, return it. If none work, adds all counter-examples.
                 // First, make a buffer to hold the program.
-                let mut program = Vec::with_capacity(forward_length + 1 + backward_length);
+                let mut program =
+                    Vec::with_capacity(globals.forward_length + 1 + globals.backward_length);
                 let mut found = false;
                 let mut counter_examples = FxHashSet::default();
                 let _ = prefixes.try_for_each_ref(&mut |prefix| {
-                    debug_assert_eq!(prefix.len(), forward_length);
+                    debug_assert_eq!(prefix.len(), globals.forward_length);
                     postfixes.try_for_each_ref(&mut |postfix| {
-                        debug_assert_eq!(postfix.len(), backward_length);
+                        debug_assert_eq!(postfix.len(), globals.backward_length);
                         // Build the current candidate program.
                         program.clear();
                         program.extend(prefix.iter());
@@ -265,7 +271,7 @@ fn connect_and_refine(
                         for inst in &program {
                             println!("  {inst}");
                         }
-                        match oracle.check_program(&program) {
+                        match globals.oracle.check_program(&program) {
                             // Found!
                             Ok(()) => {
                                 found = true;
@@ -274,8 +280,8 @@ fn connect_and_refine(
                             Err(counter_example) => {
                                 if !counter_examples.contains(&counter_example) {
                                     counter_examples.insert(counter_example.clone());
-                                    inputs.push(counter_example.0);
-                                    outputs.push(counter_example.1);
+                                    globals.inputs.push(counter_example.0);
+                                    globals.outputs.push(counter_example.1);
                                 }
                                 Continue(())
                             }
@@ -297,12 +303,12 @@ fn connect_and_refine(
 
     if matches!(forward_graph, Graph::Leaf(..)) {
         println!("Building forward");
-        build_forward(forward_graph, &inputs[k - 1..]);
+        build_forward(forward_graph, &globals.inputs[k - 1..]);
     }
 
     if matches!(backward_graph, Graph::Leaf(..)) {
         println!("Building backward");
-        build_backward(backward_graph, &outputs[k - 1..]);
+        build_backward(backward_graph, &globals.outputs[k - 1..]);
     }
 
     let Graph::Nest(forward_outputs) = forward_graph else {
@@ -318,17 +324,7 @@ fn connect_and_refine(
         if let Some(backward_subgraph) = backward_outputs.get_mut(&next) {
             // println!("  Found matching state: {next}");
             // println!("  k = {k}  inputs.len()={}", inputs.len());
-            let res = connect_and_refine(
-                oracle,
-                inputs,
-                outputs,
-                forward_length,
-                backward_length,
-                forward_subgraph,
-                backward_subgraph,
-                inst,
-                k + 1,
-            );
+            let res = connect_and_refine(globals, forward_subgraph, backward_subgraph, inst, k + 1);
             match res {
                 ConnectAndRefineResult::Found(prog) => return ConnectAndRefineResult::Found(prog),
                 ConnectAndRefineResult::Continue => {}
