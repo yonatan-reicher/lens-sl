@@ -213,13 +213,12 @@ pub struct Inst<W: Word> {
 
 // Implementing `Clone` and `Copy` manually instead of by `derive` because `derive` adds
 // unnecessary trait bounds on the generic parameter.
+impl<W: Word> Copy for Inst<W> {}
 impl<W: Word> Clone for Inst<W> {
     fn clone(&self) -> Self {
-        Self { op_code: self.op_code.clone(), cond_code: self.cond_code.clone(), args: self.args.clone() }
+        *self
     }
 }
-
-impl<W: Word> Copy for Inst<W> {}
 
 bitflags::bitflags! {
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -363,7 +362,7 @@ impl<W: Word> Inst<W> {
         run_instruction(self, state)
     }
 
-    fn to_string_impl(&self) -> String {
+    fn to_string_impl(self) -> String {
         let Inst {
             op_code,
             cond_code,
@@ -378,7 +377,7 @@ impl<W: Word> Inst<W> {
                 ArgType::Unused => "-".to_string(),
             })
             .collect::<Vec<_>>();
-        if cond_code == &CondCode::Al {
+        if cond_code == CondCode::Al {
             format!("{op_code} {}, {}, {}", args[0], args[1], args[2])
         } else {
             format!("{op_code}{cond_code} {}, {}, {}", args[0], args[1], args[2])

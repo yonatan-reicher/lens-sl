@@ -5,6 +5,7 @@ use std::hash::Hash;
 pub trait Programs: Default + Into<Vec<Self::Program>> {
     type Program;
     fn len(&self) -> usize;
+    #[allow(dead_code)]
     fn is_empty(&self) -> bool {
         self.len() == 0
     }

@@ -4,7 +4,7 @@
 use crate::collect::{self, Collector};
 use crate::enumerate::{EnumerationInfo, Enumerator};
 use crate::graph;
-use crate::isa::{self, ArgType, Flags, Inst, Register, Word64};
+use crate::isa::{self, Flags, Inst, Register, Word64};
 use crate::programs;
 use rustc_hash::FxHashSet;
 use std::ops::ControlFlow::{Break, Continue};
@@ -385,7 +385,7 @@ fn expand_forward(graph: &mut Graph, inputs: &Vec<State>, ei: &EnumerationInfo) 
     inner(old_graph, inputs, graph, ei);
 }
 
-fn expand_backward(graph: &mut Graph) {}
+fn expand_backward(_graph: &mut Graph) {}
 
 fn build_forward(graph: &mut Graph, test_cases_inputs: &[State]) {
     build_forwards_or_backwards(graph, test_cases_inputs, |program, state| {
