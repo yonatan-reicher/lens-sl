@@ -33,6 +33,16 @@ struct State {
     pub flags: Option<Flags>,
 }
 
+impl State {
+    /// Copies this state to another state object. Used to avoid clones, that in a loop, can
+    /// allocate more.
+    #[inline]
+    fn clone_to(&self, other: &mut Self) {
+        other.registers.clear();
+        other.registers.extend(&self.registers);
+        other.flags = self.flags;
+    }
+}
 impl isa::State for State {
     type W = Word64;
 
