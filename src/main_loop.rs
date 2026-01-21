@@ -12,7 +12,7 @@ use std::rc::Rc;
 // =========================================== State ==============================================
 
 /// The state of the machine at a given point in time.
-#[derive(Clone, Debug, derive_more::Display, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Default, derive_more::Display, PartialEq, Eq, Hash)]
 #[display(
     "Registers: {{{}}}, Flags: {}",
     registers
