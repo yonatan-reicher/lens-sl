@@ -1,3 +1,5 @@
+/// Definitions of different word sizes, for example 4-bit, 8-bit, 64-bit.
+mod word;
 mod isa;
 mod enumerate;
 mod programs;
@@ -7,15 +9,7 @@ mod collect;
 mod main_loop;
 mod shortest_path;
 
-pub use isa::{
-    Inst,
-    OpCode,
-    CondCode,
-    Register,
-    Flags,
-    Word,
-    /* Word4, */ Word8, Word64,
-};
+pub use isa::{CondCode, Flags, Inst, OpCode, Register};
+pub use word::{Word, Word4, Word8, Word64};
 
 pub use main_loop::optimize;
-

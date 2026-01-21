@@ -1,5 +1,5 @@
-use crate::isa::{ArgType, Inst, Register, Word};
-use num_traits::AsPrimitive;
+use crate::isa::{ArgType, Inst, Register};
+use crate::word::prelude::*;
 
 pub trait State<W: Word> {
     fn registers(&self) -> impl Iterator<Item = (Register, W::Unsigned)>;

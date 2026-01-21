@@ -4,8 +4,9 @@
 use crate::collect::{self, Collector};
 use crate::enumerate::{EnumerationInfo, Enumerator};
 use crate::graph;
-use crate::isa::{self, Flags, Inst, Register, Word64};
+use crate::isa::{self, Flags, Inst, Register};
 use crate::programs;
+use crate::word::{Word, Word64};
 use rustc_hash::FxHashSet;
 use std::ops::ControlFlow::{Break, Continue};
 use std::rc::Rc;
@@ -78,7 +79,7 @@ impl isa::State for State {
 }
 
 impl collect::State<Word64> for State {
-    fn registers(&self) -> impl Iterator<Item = (Register, <Word64 as isa::Word>::Unsigned)> {
+    fn registers(&self) -> impl Iterator<Item = (Register, <Word64 as Word>::Unsigned)> {
         self.registers.iter().cloned()
     }
 }

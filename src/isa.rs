@@ -1,9 +1,7 @@
-use std::fmt::{Debug, Display};
-// use arbitrary_int::{i4, u4};
-use num_traits::{
-    AsPrimitive, PrimInt, Signed, Unsigned, Zero,
-    ops::overflowing::{OverflowingAdd, OverflowingMul, OverflowingSub},
-};
+use std::fmt::Debug;
+use arbitrary_int::traits::Integer;
+
+use crate::word::{Word, WordOps};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ArgType {
@@ -155,47 +153,6 @@ impl Register {
     pub const COUNT: u8 = 16;
 }
 
-pub trait Word {
-    type Signed: AsPrimitive<i8>
-        + AsPrimitive<Self::Unsigned>
-        + Debug
-        + Display
-        + Signed
-        + OverflowingAdd
-        + OverflowingSub
-        + OverflowingMul
-        + PrimInt;
-    type Unsigned: AsPrimitive<u8>
-        + AsPrimitive<Self::Signed>
-        + Debug
-        + Display
-        + Unsigned
-        + OverflowingAdd
-        + OverflowingSub
-        + OverflowingMul
-        + PrimInt;
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Word64;
-impl Word for Word64 {
-    type Unsigned = u64;
-    type Signed = i64;
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Word8;
-impl Word for Word8 {
-    type Unsigned = u8;
-    type Signed = i8;
-}
-/*
-pub struct Word4;
-impl Word for Word4 {
-    type Unsigned = u4;
-    type Signed = i4;
-}
-*/
-
 /// A single instruction.
 #[derive(derive_more::Debug, derive_more::Display, PartialEq, Eq, Hash)]
 #[debug("{op_code:?}{}{args:?}",
@@ -260,17 +217,17 @@ fn run_addition_or_subtraction<W: Word, S: State<W = W>>(
         AddOrSub::Add => {
             let signed_left: W::Signed = left.as_();
             let signed_right: W::Signed = right.as_();
-            let (res, unsigend_overflow) = left.overflowing_add(&right);
-            let (res2, signed_overflow) = signed_left.overflowing_add(&signed_right);
-            debug_assert_eq!(AsPrimitive::<W::Signed>::as_(res), res2);
+            let (res, unsigend_overflow) = left.overflowing_add(right);
+            let (res2, signed_overflow) = signed_left.overflowing_add(signed_right);
+            debug_assert_eq!(Integer::as_::<W::Signed>(res), res2);
             (res, signed_overflow, unsigend_overflow)
         }
         AddOrSub::Sub => {
             let signed_left: W::Signed = left.as_();
             let signed_right: W::Signed = right.as_();
-            let (res, unsigend_overflow) = left.overflowing_sub(&right);
-            let (res2, signed_overflow) = signed_left.overflowing_sub(&signed_right);
-            debug_assert_eq!(AsPrimitive::<W::Signed>::as_(res), res2);
+            let (res, unsigend_overflow) = left.overflowing_sub(right);
+            let (res2, signed_overflow) = signed_left.overflowing_sub(signed_right);
+            debug_assert_eq!(Integer::as_::<W::Signed>(res), res2);
             (res, signed_overflow, unsigend_overflow)
         }
     };
@@ -281,7 +238,7 @@ fn run_addition_or_subtraction<W: Word, S: State<W = W>>(
     if res.is_zero() {
         flags |= Flags::Z;
     }
-    if res_signed.is_negative() {
+    if res_signed > 0.as_() {
         flags |= Flags::N;
     }
     if unsigned_overflow && kind == AddOrSub::Add {
@@ -352,7 +309,7 @@ fn run_instruction<W: Word, S: State<W = W>>(inst: &Inst<S::W>, state: &mut S) {
         Eor => set!(r![0 u] <- r![1 u] ^ r![2 u]),
         Mov => set!(r![0 u] <- r![1 u]),
         MovI => set!(r![0 u] <- imm![1 u]),
-        Mul => set!(r![0 i] <- r![1 i].overflowing_mul(&r![2 i]).0),
+        Mul => set!(r![0 i] <- r![1 i].overflowing_mul(r![2 i]).0),
         Orr => set!(r![0 u] <- r![1 u] | r![2 u]),
     }
 }
