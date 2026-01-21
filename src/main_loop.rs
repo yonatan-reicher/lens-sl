@@ -43,6 +43,22 @@ impl State {
         other.flags = self.flags;
     }
 }
+
+/// An object to make short-lived clones of `State` without allocations.
+struct StateCloner(State);
+
+impl StateCloner {
+    fn new() -> Self {
+        Self(State::default())
+    }
+
+    #[inline]
+    fn clone_state(&mut self, state: &State) -> &mut State {
+        state.clone_to(&mut self.0);
+        &mut self.0
+    }
+}
+
 impl isa::State for State {
     type W = Word64;
 
@@ -198,6 +214,7 @@ fn synthesize(registers: &[Register], immediates: &[u64], mut oracle: impl Oracl
     };
     let mut inputs = vec![];
     let mut outputs = vec![];
+    let mut state_cloner = StateCloner::new();
     // Generate a first input
     println!("Checking empty program");
     match oracle.check_program(&[]) {
@@ -221,6 +238,7 @@ fn synthesize(registers: &[Register], immediates: &[u64], mut oracle: impl Oracl
                 backward_length,
                 &mut forward_graph,
                 &mut backward_graph,
+                &mut state_cloner,
                 inst,
                 1,
             );
@@ -262,6 +280,7 @@ fn connect_and_refine(
     backward_length: usize,
     forward_graph: &mut Graph,
     backward_graph: &mut Graph,
+    state_cloner: &mut StateCloner,
     inst: Inst<Word64>,
     // This is the index of the input/output pair we are currently trying to connect.
     k: usize,
@@ -334,11 +353,10 @@ fn connect_and_refine(
     let Graph::Nest(backward_outputs) = backward_graph else {
         panic!();
     };
-    let mut next = State::default();
     for (forward_output, forward_subgraph) in forward_outputs {
-        forward_output.clone_to(&mut next);
-        inst.run(&mut next);
-        if let Some(backward_subgraph) = backward_outputs.get_mut(&next) {
+        let next = state_cloner.clone_state(forward_output);
+        inst.run(next);
+        if let Some(backward_subgraph) = backward_outputs.get_mut(next) {
             // println!("  Found matching state: {next}");
             // println!("  k = {k}  inputs.len()={}", inputs.len());
             let res = connect_and_refine(
@@ -349,6 +367,7 @@ fn connect_and_refine(
                 backward_length,
                 forward_subgraph,
                 backward_subgraph,
+                state_cloner,
                 inst,
                 k + 1,
             );
