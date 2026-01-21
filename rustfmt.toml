@@ -1,0 +1,2 @@
+# I like to sort code linearly, so it can be read from start to finish.
+reorder_modules = false
