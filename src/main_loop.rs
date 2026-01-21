@@ -334,8 +334,9 @@ fn connect_and_refine(
     let Graph::Nest(backward_outputs) = backward_graph else {
         panic!();
     };
+    let mut next = State::default();
     for (forward_output, forward_subgraph) in forward_outputs {
-        let mut next = forward_output.clone();
+        forward_output.clone_to(&mut next);
         inst.run(&mut next);
         if let Some(backward_subgraph) = backward_outputs.get_mut(&next) {
             // println!("  Found matching state: {next}");
