@@ -197,7 +197,7 @@ impl Word for Word4 {
 */
 
 /// A single instruction.
-#[derive(Copy, Clone, derive_more::Debug, derive_more::Display, PartialEq, Eq, Hash)]
+#[derive(derive_more::Debug, derive_more::Display, PartialEq, Eq, Hash)]
 #[debug("{op_code:?}{}{args:?}",
     match cond_code {
         CondCode::Al => "".to_string(),
@@ -210,6 +210,16 @@ pub struct Inst<W: Word> {
     pub cond_code: CondCode,
     pub args: [W::Unsigned; 3],
 }
+
+// Implementing `Clone` and `Copy` manually instead of by `derive` because `derive` adds
+// unnecessary trait bounds on the generic parameter.
+impl<W: Word> Clone for Inst<W> {
+    fn clone(&self) -> Self {
+        Self { op_code: self.op_code.clone(), cond_code: self.cond_code.clone(), args: self.args.clone() }
+    }
+}
+
+impl<W: Word> Copy for Inst<W> {}
 
 bitflags::bitflags! {
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
