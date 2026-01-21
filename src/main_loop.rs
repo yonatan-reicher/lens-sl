@@ -1,6 +1,7 @@
 //! The main loop for synthesis and optimization.
 //! Here we have basically the code that you would see in the actual paper that describes Lens.
 
+use crate::collect::{self, Collector};
 use crate::enumerate::{EnumerationInfo, Enumerator};
 use crate::graph;
 use crate::isa::{self, ArgType, Flags, Inst, Register, Word64};
@@ -43,6 +44,7 @@ impl State {
         other.flags = self.flags;
     }
 }
+
 impl isa::State for State {
     type W = Word64;
 
@@ -72,6 +74,12 @@ impl isa::State for State {
 
     fn set_flags(&mut self, flags: Flags) {
         self.flags = Some(flags);
+    }
+}
+
+impl collect::State<Word64> for State {
+    fn registers(&self) -> impl Iterator<Item = (Register, <Word64 as isa::Word>::Unsigned)> {
+        self.registers.iter().cloned()
     }
 }
 
@@ -124,6 +132,7 @@ impl Oracle for TestCasesOracle {
 
 // This is the main function that gets exposed.
 pub fn optimize(program: &[Inst<Word64>], inputs: &[&[(Register, u64)]]) -> Program {
+    // Run the program on each input to get the outputs. We call these "test cases".
     let test_cases: Vec<(State, State)> = inputs
         .iter()
         .map(|input| {
@@ -139,46 +148,14 @@ pub fn optimize(program: &[Inst<Word64>], inputs: &[&[(Register, u64)]]) -> Prog
         })
         .collect();
 
-    let mut registers: Vec<Register> = vec![];
-    // let immediates: Vec<u64> = vec![0, 1, 2];
-    let mut immediates: Vec<u64> = vec![];
-    for (input, output) in &test_cases {
-        for (reg, val) in &input.registers {
-            if !registers.contains(reg) {
-                registers.push(*reg);
-            }
-            if !immediates.contains(val) {
-                immediates.push(*val);
-            }
-        }
-        for (reg, val) in &output.registers {
-            if !registers.contains(reg) {
-                registers.push(*reg);
-            }
-            if !immediates.contains(val) {
-                immediates.push(*val);
-            }
-        }
-    }
-    for inst in program {
-        for (arg, arg_type) in inst.args.iter().zip(inst.op_code.arg_types()) {
-            match arg_type {
-                ArgType::Reg => {
-                    let reg: Register = Register(*arg as _);
-                    if !registers.contains(&reg) {
-                        registers.push(reg);
-                    }
-                }
-                ArgType::Imm => {
-                    let imm: u64 = *arg;
-                    if !immediates.contains(&imm) {
-                        immediates.push(imm);
-                    }
-                }
-                ArgType::Unused => {}
-            }
-        }
-    }
+    // Collect all the registers and immediates that might be useful for synthesis.
+    let mut collector = Collector::new();
+    collector.program(program);
+    collector.test_cases(&test_cases);
+    let Collector {
+        registers,
+        immediates,
+    } = collector;
 
     let oracle = TestCasesOracle { test_cases };
 
