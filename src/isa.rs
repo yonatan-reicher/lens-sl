@@ -191,11 +191,9 @@ bitflags::bitflags! {
     }
 }
 
-pub trait State {
-    type W: Word;
-
-    fn get_register(&self, reg: Register) -> <Self::W as Word>::Unsigned;
-    fn set_register(&mut self, reg: Register, value: <Self::W as Word>::Unsigned);
+pub trait State<W: Word> {
+    fn get_register(&self, reg: Register) -> W::Unsigned;
+    fn set_register(&mut self, reg: Register, value: W::Unsigned);
     fn get_flags(&self) -> Flags;
     fn set_flags(&mut self, flags: Flags);
 }
@@ -206,7 +204,7 @@ enum AddOrSub {
     Sub,
 }
 
-fn run_addition_or_subtraction<W: Word, S: State<W = W>>(
+fn run_addition_or_subtraction<W: Word, S: State<W>>(
     state: &mut S,
     left: W::Unsigned,
     right: W::Unsigned,
@@ -253,7 +251,7 @@ fn run_addition_or_subtraction<W: Word, S: State<W = W>>(
     state.set_flags(flags);
 }
 
-fn run_instruction<W: Word, S: State<W = W>>(inst: &Inst<S::W>, state: &mut S) {
+fn run_instruction<W: Word, S: State<W>>(inst: &Inst<W>, state: &mut S) {
     /// Get a register value.
     macro_rules! r {
         ($i:literal u) => {{
@@ -315,7 +313,7 @@ fn run_instruction<W: Word, S: State<W = W>>(inst: &Inst<S::W>, state: &mut S) {
 }
 
 impl<W: Word> Inst<W> {
-    pub fn run<S: State<W = W>>(&self, state: &mut S) {
+    pub fn run<S: State<W>>(&self, state: &mut S) {
         run_instruction(self, state)
     }
 

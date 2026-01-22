@@ -1,8 +1,7 @@
-use lens_sl::{Register, inst, optimize};
-
+use lens_sl::{Register, Word64, inst, optimize};
 
 fn main() {
-    let p = optimize(
+    let p = optimize::<Word64, Word64>(
         &[
             inst!(AddI, 0, 1, 5),
             inst!(AddI, 0, 0, 5),

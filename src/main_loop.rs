@@ -6,7 +6,7 @@ use crate::enumerate::{EnumerationInfo, Enumerator};
 use crate::graph;
 use crate::isa::{self, Flags, Inst, Register};
 use crate::programs;
-use crate::word::{Word, Word64};
+use crate::word::prelude::*;
 use rustc_hash::FxHashSet;
 use std::ops::ControlFlow::{Break, Continue};
 use std::rc::Rc;
@@ -46,26 +46,24 @@ impl State {
     }
 }
 
-impl isa::State for State {
-    type W = Word64;
-
-    fn get_register(&self, reg: Register) -> u64 {
+impl<W: Word> isa::State<W> for State {
+    fn get_register(&self, reg: Register) -> W::Unsigned {
         for (r, v) in &self.registers {
             if *r == reg {
-                return *v;
+                return v.as_();
             }
         }
         panic!("Register {reg:?} not found in state.");
     }
 
-    fn set_register(&mut self, reg: Register, value: u64) {
+    fn set_register(&mut self, reg: Register, value: W::Unsigned) {
         for (r, v) in &mut self.registers {
             if *r == reg {
-                *v = value;
+                *v = value.as_u64();
                 return;
             }
         }
-        self.registers.push((reg, value));
+        self.registers.push((reg, value.as_u64()));
         self.registers.sort_by_key(|(r, _)| *r);
     }
 
@@ -78,19 +76,19 @@ impl isa::State for State {
     }
 }
 
-impl collect::State<Word64> for State {
-    fn registers(&self) -> impl Iterator<Item = (Register, <Word64 as Word>::Unsigned)> {
-        self.registers.iter().cloned()
+impl<W: Word> collect::State<W> for State {
+    fn registers(&self) -> impl Iterator<Item = (Register, W::Unsigned)> {
+        self.registers.iter().map(|(r, v)| (*r, v.as_()))
     }
 }
 
 // =========================================== Graph ==============================================
 
-type Program = programs::Program<Inst<Word64>>;
+type Program<W: Word> = programs::Program<Inst<W>>;
 
-type Programs = programs::Programs<Inst<Word64>>;
+type Programs<W: Word> = programs::Programs<Inst<W>>;
 
-type Graph = graph::Graph<State, Programs>;
+type Graph<W: Word> = graph::Graph<State, Programs<W>>;
 
 // ========================================== Oracle ==============================================
 
@@ -98,7 +96,7 @@ type CounterExample = (State, State);
 
 /// In the future, we will have a solver implement this trait.
 trait Oracle {
-    fn check_program(&mut self, program: &[Inst<Word64>]) -> Result<(), CounterExample>;
+    fn check_program<W: Word>(&mut self, program: &[Inst<W>]) -> Result<(), CounterExample>;
 }
 
 struct TestCasesOracle {
@@ -106,7 +104,7 @@ struct TestCasesOracle {
 }
 
 impl Oracle for TestCasesOracle {
-    fn check_program(&mut self, program: &[Inst<Word64>]) -> Result<(), CounterExample> {
+    fn check_program<W: Word>(&mut self, program: &[Inst<W>]) -> Result<(), CounterExample> {
         // Maybe we could not check test cases again, but it's probably not really slowing us down.
         for (i, (input, expected_output)) in self.test_cases.iter().enumerate() {
             let mut output = input.clone();
@@ -132,13 +130,18 @@ impl Oracle for TestCasesOracle {
 // ====================================== Implementation ==========================================
 
 // This is the main function that gets exposed.
-pub fn optimize(program: &[Inst<Word64>], inputs: &[&[(Register, u64)]]) -> Program {
+/// `WT` for word size of the target program.
+/// `WS` for word size of the synthesis process.
+pub fn optimize<WT: Word, WS: Word>(
+    program: &[Inst<WT>],
+    inputs: &[&[(Register, WT::Unsigned)]], // TODO: Return a program in Program<WT> instead...
+) -> Program<WS> {
     // Run the program on each input to get the outputs. We call these "test cases".
     let test_cases: Vec<(State, State)> = inputs
         .iter()
         .map(|input| {
             let input = State {
-                registers: input.to_vec(),
+                registers: input.iter().map(|(r, v)| (*r, v.as_u64())).collect(),
                 flags: None,
             };
             let mut output = input.clone();
@@ -157,20 +160,28 @@ pub fn optimize(program: &[Inst<Word64>], inputs: &[&[(Register, u64)]]) -> Prog
         registers,
         immediates,
     } = collector;
+    let immediates: Vec<WS::Unsigned> = immediates
+        .into_iter()
+        .map(|imm| WS::Unsigned::from_(imm))
+        .collect();
 
     let oracle = TestCasesOracle { test_cases };
 
     synthesize(&registers, &immediates, oracle)
 }
 
-fn synthesize(registers: &[Register], immediates: &[u64], oracle: impl Oracle) -> Program {
+fn synthesize<W: Word>(
+    registers: &[Register],
+    immediates: &[W::Unsigned],
+    oracle: impl Oracle,
+) -> Program<W> {
     // The length of the prefixes of the program being built.
     let forward_length = 0;
     let backward_length = 0;
     // The forward and backward graphs start while having the empty program.
     let mut forward_graph = Graph::Leaf(Programs::program(vec![]));
     let mut backward_graph = Graph::Leaf(Programs::program(vec![]));
-    let enumeration_info = &EnumerationInfo {
+    let enumeration_info = &EnumerationInfo::<W> {
         registers,
         immediates,
     };
@@ -183,7 +194,7 @@ fn synthesize(registers: &[Register], immediates: &[u64], oracle: impl Oracle) -
     };
     // Generate a first input
     println!("Checking empty program");
-    match globals.oracle.check_program(&[]) {
+    match globals.oracle.check_program::<W>(&[]) {
         Ok(_) => return vec![], // Turns out it's actually the empty program 🤷
         Err(counter_example) => {
             globals.inputs.push(counter_example.0);
@@ -228,8 +239,8 @@ fn synthesize(registers: &[Register], immediates: &[u64], oracle: impl Oracle) -
     }
 }
 
-enum ConnectAndRefineResult {
-    Found(Program),
+enum ConnectAndRefineResult<W:Word> {
+    Found(Program<W>),
     Continue,
 }
 
@@ -241,14 +252,14 @@ struct Globals<O: Oracle> {
     backward_length: usize,
 }
 
-fn connect_and_refine(
+fn connect_and_refine<W: Word>(
     globals: &mut Globals<impl Oracle>,
-    forward_graph: &mut Graph,
-    backward_graph: &mut Graph,
-    inst: Inst<Word64>,
+    forward_graph: &mut Graph<W>,
+    backward_graph: &mut Graph<W>,
+    inst: Inst<W>,
     // This is the index of the input/output pair we are currently trying to connect.
     k: usize,
-) -> ConnectAndRefineResult {
+) -> ConnectAndRefineResult<W> {
     if k > globals.inputs.len() {
         match (&forward_graph, &backward_graph) {
             (Graph::Leaf(prefixes), Graph::Leaf(postfixes)) => {
@@ -338,8 +349,8 @@ fn connect_and_refine(
 /// Go through each program prefix in the graph, and expand it by one
 /// instruction forward. This is done for each program, and for each
 /// instruction.
-fn expand_forward(graph: &mut Graph, inputs: &Vec<State>, ei: &EnumerationInfo) {
-    fn inner(graph: Graph, inputs: &Vec<State>, out: &mut Graph, ei: &EnumerationInfo) {
+fn expand_forward<W: Word>(graph: &mut Graph<W>, inputs: &Vec<State>, ei: &EnumerationInfo<W>) {
+    fn inner<W: Word>(graph: Graph<W>, inputs: &Vec<State>, out: &mut Graph<W>, ei: &EnumerationInfo<W>) {
         match graph {
             Graph::Leaf(programs) if programs.is_empty() => {}
             Graph::Leaf(programs) => {
@@ -382,9 +393,9 @@ fn expand_forward(graph: &mut Graph, inputs: &Vec<State>, ei: &EnumerationInfo) 
     inner(old_graph, inputs, graph, ei);
 }
 
-fn expand_backward(_graph: &mut Graph) {}
+fn expand_backward<W: Word>(_graph: &mut Graph<W>) {}
 
-fn build_forward(graph: &mut Graph, test_cases_inputs: &[State]) {
+fn build_forward<W: Word>(graph: &mut Graph<W>, test_cases_inputs: &[State]) {
     build_forwards_or_backwards(graph, test_cases_inputs, |program, state| {
         for inst in program {
             inst.run(state);
@@ -392,7 +403,7 @@ fn build_forward(graph: &mut Graph, test_cases_inputs: &[State]) {
     });
 }
 
-fn build_backward(graph: &mut Graph, test_cases_outputs: &[State]) {
+fn build_backward<W: Word>(graph: &mut Graph<W>, test_cases_outputs: &[State]) {
     build_forwards_or_backwards(graph, test_cases_outputs, |program, _state| {
         for _inst in program.iter().rev() {
             todo!("Backward execution not implemented yet.");
@@ -400,10 +411,10 @@ fn build_backward(graph: &mut Graph, test_cases_outputs: &[State]) {
     });
 }
 
-fn build_forwards_or_backwards(
-    graph: &mut Graph,
+fn build_forwards_or_backwards<W: Word>(
+    graph: &mut Graph<W>,
     initial_states: &[State],
-    step: impl Fn(&Program, &mut State),
+    step: impl Fn(&Program<W>, &mut State),
 ) {
     // Rebuild the graph.
     let old_graph = std::mem::replace(graph, Graph::Nest(Default::default()));
@@ -423,7 +434,7 @@ fn build_forwards_or_backwards(
 }
 
 /// Print information that shows us growth and memory usage of the graphs.
-fn print_stats(forward_graph: &Graph, backward_graph: &Graph) {
+fn print_stats<W: Word>(forward_graph: &Graph<W>, backward_graph: &Graph<W>) {
     macro_rules! ignore {
         ( $a:tt, $b:tt ) => {
             $b

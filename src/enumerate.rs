@@ -1,7 +1,7 @@
 //! Implements enumerating over instructions.
 
-use crate::isa::{ArgType, CondCode};
-use crate::{Inst, OpCode, Register, Word64};
+use crate::isa::{ArgType, CondCode, Inst, OpCode, Register};
+use crate::word::prelude::*;
 
 /// Enumerates over the instruction space. Needs an `EnumerationInfo` borrow in
 /// order to actually enumerate. Does not go over all actual instructions, as
@@ -18,12 +18,12 @@ pub struct Enumerator {
 
 /// Configuration for an Enumerator. This is stored separately as we have
 /// multiple enumerators using the same configuration.
-#[derive(Clone, Copy, Debug)]
-pub struct EnumerationInfo<'a> {
+#[derive(Clone, Copy, derive_more::Debug)]
+pub struct EnumerationInfo<'a, W: Word> {
     /// The registers to use. Must not be empty.
     pub registers: &'a [Register],
     /// The immediates to use. Must not be empty.
-    pub immediates: &'a [u64],
+    pub immediates: &'a [W::Unsigned],
 }
 
 fn debug_assert_arg_in_range(arg: usize) {
@@ -33,7 +33,7 @@ fn debug_assert_arg_in_range(arg: usize) {
     );
 }
 
-fn debug_assert_valid_enumeration_info(ei: &EnumerationInfo) {
+fn debug_assert_valid_enumeration_info<W: Word>(ei: &EnumerationInfo<W>) {
     debug_assert!(
         !ei.registers.is_empty(),
         "enumeration info registers mut not be empty! {ei:?}"
@@ -57,21 +57,21 @@ impl Enumerator {
         self.op_code.arg_types()
     }
 
-    fn current_arg(&self, arg: usize, ei: &EnumerationInfo) -> u64 {
+    fn current_arg<W: Word>(&self, arg: usize, ei: &EnumerationInfo<W>) -> W::Unsigned {
         debug_assert_arg_in_range(arg);
         debug_assert_valid_enumeration_info(ei);
         // Take the index, and index into the correct array.
         let i = self.arg_indices[arg];
         match self.arg_types()[arg] {
-            ArgType::Reg => ei.registers[i].0 as u64,
+            ArgType::Reg => ei.registers[i].0.as_(),
             ArgType::Imm => ei.immediates[i],
-            ArgType::Unused => 0,
+            ArgType::Unused => 0.as_(),
         }
     }
 
     /// Returns the length of the array that the given argument index indexes
     /// into.
-    fn arg_len(&self, arg: usize, ei: &EnumerationInfo) -> usize {
+    fn arg_len<W: Word>(&self, arg: usize, ei: &EnumerationInfo<W>) -> usize {
         debug_assert_arg_in_range(arg);
         debug_assert_valid_enumeration_info(ei);
         match self.arg_types()[arg] {
@@ -81,15 +81,15 @@ impl Enumerator {
         }
     }
 
-    pub fn current(&self, ei: &EnumerationInfo) -> Inst<Word64> {
+    pub fn current<W: Word>(&self, ei: &EnumerationInfo<W>) -> Inst<W> {
         debug_assert_valid_enumeration_info(ei);
         Inst {
             op_code: self.op_code,
             cond_code: self.cond_code,
             args: [
-                self.current_arg(0, ei),
-                self.current_arg(1, ei),
-                self.current_arg(2, ei),
+                self.current_arg(0, ei).as_(),
+                self.current_arg(1, ei).as_(),
+                self.current_arg(2, ei).as_(),
             ],
         }
     }
@@ -118,7 +118,7 @@ impl Enumerator {
         }
     }
 
-    fn advance_arg(&mut self, arg: usize, ei: &EnumerationInfo) -> Option<()> {
+    fn advance_arg<W: Word>(&mut self, arg: usize, ei: &EnumerationInfo<W>) -> Option<()> {
         debug_assert_arg_in_range(arg);
         debug_assert_valid_enumeration_info(ei);
         let len = self.arg_len(arg, ei);
@@ -130,7 +130,7 @@ impl Enumerator {
         Some(())
     }
 
-    pub fn advance(&mut self, ei: &EnumerationInfo) -> Option<()> {
+    pub fn advance<W: Word>(&mut self, ei: &EnumerationInfo<W>) -> Option<()> {
         debug_assert_valid_enumeration_info(ei);
         if self.advance_arg(0, ei).is_none() {
             self.arg_indices[0] = 0;
@@ -148,7 +148,7 @@ impl Enumerator {
         Some(())
     }
 
-    pub fn into_iter(self, ei: &EnumerationInfo) -> impl Iterator<Item=Inst<Word64>> {
+    pub fn into_iter<W: Word>(self, ei: &EnumerationInfo<W>) -> impl Iterator<Item = Inst<W>> {
         Iter {
             done: false,
             ei,
@@ -163,15 +163,14 @@ impl Default for Enumerator {
     }
 }
 
-
-struct Iter<'a> {
+struct Iter<'a, W: Word> {
     done: bool,
-    ei: &'a EnumerationInfo<'a>,
+    ei: &'a EnumerationInfo<'a, W>,
     enumerator: Enumerator,
 }
 
-impl<'a> Iterator for Iter<'a> {
-    type Item = Inst<Word64>;
+impl<'a, W: Word> Iterator for Iter<'a, W> {
+    type Item = Inst<W>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.done {
@@ -187,7 +186,7 @@ impl<'a> Iterator for Iter<'a> {
 mod tests {
     use super::*;
 
-    fn to_vec(ei: &EnumerationInfo) -> Vec<Inst<Word64>> {
+    fn to_vec<W: Word>(ei: &EnumerationInfo<W>) -> Vec<Inst<W>> {
         let mut e = Enumerator::new();
         let mut ret = vec![];
         loop {
@@ -202,7 +201,7 @@ mod tests {
 
     #[test]
     pub fn test_basic() {
-        let v = to_vec(&EnumerationInfo {
+        let v = to_vec(&EnumerationInfo::<Word8> {
             registers: &[Register(2)],
             immediates: &[42],
         });
