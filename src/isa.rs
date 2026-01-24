@@ -338,6 +338,18 @@ impl<W: Word> Inst<W> {
             format!("{op_code}{cond_code} {}, {}, {}", args[0], args[1], args[2])
         }
     }
+
+    pub fn convert_to<W2: Word>(&self) -> Inst<W2> {
+        Inst {
+            op_code: self.op_code,
+            cond_code: self.cond_code,
+            args: [
+                self.args[0].as_(),
+                self.args[1].as_(),
+                self.args[2].as_(),
+            ],
+        }
+    }
 }
 
 /// A macro to create an instruction more easily.
