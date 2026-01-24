@@ -1,6 +1,5 @@
 use crate::all_permutations::Iter as PermutationIter;
 use crate::isa::{ArgType, Inst};
-use crate::iter_or;
 use crate::word::prelude::*;
 use rustc_hash::FxHashMap;
 
