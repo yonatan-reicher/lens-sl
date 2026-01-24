@@ -15,6 +15,8 @@ mod collect;
 mod main_loop;
 
 // --- Utilities ---
+/// Return all permutations of a slice of iterators.
+mod all_permutations;
 /// TODO: Remove this probably.
 mod shortest_path;
 
