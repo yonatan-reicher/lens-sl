@@ -1,28 +1,31 @@
 use std::fmt::{Debug, Display};
+use std::hash::Hash;
 
 use arbitrary_int::traits::{Integer, SignedInteger, UnsignedInteger};
 use arbitrary_int::{i4, u4};
 
-pub trait Word {
-    type Signed: Sized + Debug + Display + SignedInteger + WordOps;
-    type Unsigned: Sized + Debug + Display + UnsignedInteger + WordOps;
+pub trait Word:
+    Sized + Clone + Copy + Debug + Default + PartialEq + Eq + PartialOrd + Ord + Hash
+{
+    type Signed: Sized + Debug + Default + Display + Hash + SignedInteger + WordOps;
+    type Unsigned: Sized + Debug + Default + Display + Hash + UnsignedInteger + WordOps;
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Word64;
 impl Word for Word64 {
     type Unsigned = u64;
     type Signed = i64;
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Word8;
 impl Word for Word8 {
     type Unsigned = u8;
     type Signed = i8;
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Word4;
 impl Word for Word4 {
     type Unsigned = u4;
