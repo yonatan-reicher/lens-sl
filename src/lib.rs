@@ -11,6 +11,8 @@ mod programs;
 mod graph;
 /// This module collects registers and immediates that appear in a program.
 mod collect;
+/// Used for returning reduced-bitwidth values from to their original bitwidth.
+mod extend_bitwidth;
 /// Main loop where the big picture stuff happens.
 mod main_loop;
 
