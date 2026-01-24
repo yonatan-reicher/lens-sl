@@ -4,9 +4,8 @@ version = 4
 
 [[package]]
 name = "arbitrary-int"
-version = "2.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c858caffa49edfc4ecc45a4bec37abd3e88041a2903816f10f990b7b41abc281"
+version = "2.1.0"
+source = "git+https://github.com/yonatan-reicher/arbitrary-int.git#198d5878e97bcae29b628703d5f163471897299a"
 
 [[package]]
 name = "bitflags"
