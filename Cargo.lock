@@ -5,7 +5,7 @@ version = 4
 [[package]]
 name = "arbitrary-int"
 version = "2.1.0"
-source = "git+https://github.com/yonatan-reicher/arbitrary-int.git#198d5878e97bcae29b628703d5f163471897299a"
+source = "git+https://github.com/danlehmann/arbitrary-int?rev=0b888b8#0b888b8ef9678ebbc972aa808f3204710562157d"
 
 [[package]]
 name = "bitflags"
