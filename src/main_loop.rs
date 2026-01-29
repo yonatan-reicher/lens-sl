@@ -1,10 +1,10 @@
 //! The main loop for synthesis and optimization.
 //! Here we have basically the code that you would see in the actual paper that describes Lens.
 
-use crate::collect::{self, Collector};
+use crate::collect_registers::{self, Collector};
 use crate::enumerate::{EnumerationInfo, Enumerator};
 use crate::graph;
-use crate::isa::{self, Flags, Inst, Register};
+use crate::isa::{self, Flags, Inst, Register, extend_program_for_each};
 use crate::programs;
 use crate::reduce_bit_width::Reducer;
 use crate::word::prelude::*;
@@ -46,9 +46,13 @@ impl<W: Word> State<W> {
         other.flags = self.flags;
     }
 
-    fn reduce_bit_width<T: Word>(&self) -> State<T> {
+    fn reduce<WSmall: Word>(&self, reducer: &mut Reducer<W, WSmall>) -> State<WSmall> {
         State {
-            registers: self.registers.iter().map(|(r, v)| (*r, v.as_())).collect(),
+            registers: self
+                .registers
+                .iter()
+                .map(|(r, v)| (*r, reducer.reduce(*v, &Default::default())))
+                .collect(),
             flags: self.flags,
         }
     }
@@ -84,7 +88,7 @@ impl<W: Word> isa::State<W> for State<W> {
     }
 }
 
-impl<W: Word> collect::State<W> for State<W> {
+impl<W: Word> collect_registers::State<W> for State<W> {
     fn registers(&self) -> impl Iterator<Item = (Register, W::Unsigned)> {
         self.registers.iter().cloned()
     }
@@ -104,7 +108,7 @@ type CounterExample<W> = (State<W>, State<W>);
 
 /// In the future, we will have a solver implement this trait.
 trait Oracle<W: Word> {
-    fn check_program(&mut self, program: &[Inst<W>]) -> Result<(), CounterExample<W>>;
+    fn check_program(&mut self, program: &[Inst<W>]) -> Result<(), &CounterExample<W>>;
 }
 
 struct TestCasesOracle<W: Word> {
@@ -112,23 +116,16 @@ struct TestCasesOracle<W: Word> {
 }
 
 impl<W: Word> Oracle<W> for TestCasesOracle<W> {
-    fn check_program(&mut self, program: &[Inst<W>]) -> Result<(), CounterExample<W>> {
+    fn check_program(&mut self, program: &[Inst<W>]) -> Result<(), &CounterExample<W>> {
         // Maybe we could not check test cases again, but it's probably not really slowing us down.
-        for (i, (input, expected_output)) in self.test_cases.iter().enumerate() {
-            let mut output = input.clone();
+        let mut output = State::default();
+        for test @ (input, expected_output) in self.test_cases.iter() {
+            input.clone_to(&mut output);
             for inst in program {
                 inst.run(&mut output);
             }
             if &output != expected_output {
-                println!(
-                    "Oracle found counter example {}/{}.",
-                    i + 1,
-                    self.test_cases.len()
-                );
-                println!("  Input: {input:?}");
-                println!("  Expected output: {expected_output:?}");
-                println!("  Actual output: {output:?}");
-                return Err((input.clone(), expected_output.clone()));
+                return Err(test);
             }
         }
         Ok(())
@@ -145,7 +142,11 @@ pub fn optimize<WT: Word, WS: Word>(
     inputs: &[&[(Register, WT::Unsigned)]], // TODO: Return a program in Program<WT> instead...
 ) -> Program<WT> {
     let mut reducer = Reducer::<WT, WS>::default();
-    reducer.reduce_program(program);
+    let mut reduced_program = Vec::with_capacity(program.len());
+    for inst in program {
+        // This puts the original unreduced constants into the reducer.
+        reduced_program.push(inst.reduce(&mut reducer));
+    }
 
     // Run the program on each input to get the outputs. We call these "test cases".
     let test_cases: Vec<(State<WT>, State<WT>)> = inputs
@@ -157,31 +158,33 @@ pub fn optimize<WT: Word, WS: Word>(
             };
             let mut output = input.clone();
             for inst in program {
-                inst.convert_to().run(&mut output);
+                inst.run(&mut output);
             }
             (input, output)
         })
         .collect();
     let test_cases_reduced: Vec<(State<WS>, State<WS>)> = test_cases
         .iter()
-        .map(|(input, output)| {
-            todo!("I can't reduce the test cases")
+        .map(|(input, _output)| {
+            let input = input.reduce(&mut reducer.clone());
+            let mut output = input.clone();
+            for inst in &reduced_program {
+                inst.run(&mut output);
+            }
+            (input, output)
         })
         .collect();
 
     // Collect all the registers and immediates that might be useful for synthesis.
-    let mut collector = Collector::<WT>::new();
+    let mut collector = Collector::new();
     collector.program(program);
     collector.test_cases(&test_cases);
-    let Collector {
-        registers,
-        immediates,
-    } = collector;
-    let immediates: Vec<WS::Unsigned> = immediates.into_iter().map(|imm| imm.as_()).collect();
+    let Collector { registers } = collector;
+    let immediates: Vec<WS::Unsigned> = reducer.immediates().collect();
 
     let oracle = TestCasesOracle { test_cases };
     let oracle_reduced = TestCasesOracle {
-        test_cases: vec![],
+        test_cases: test_cases_reduced,
     };
 
     synthesize::<WT, WS>(&registers, &immediates, oracle, oracle_reduced, reducer)
@@ -201,6 +204,16 @@ fn synthesize<WT: Word, W: Word>(
         registers,
         immediates,
     };
+    // // Show the reducer
+    // println!("Reducer contents:");
+    // for reduced in reducer.immediates() {
+    //     let originals: Vec<WT::Unsigned> = reducer
+    //         .extend(reduced)
+    //         .map(|v| v.as_())
+    //         .collect();
+    //     println!("  {reduced} => {:?}", originals);
+    // }
+    // panic!("Stop before synthesis loop.");
     let mut globals = Globals {
         oracle,
         oracle_reduced,
@@ -213,10 +226,10 @@ fn synthesize<WT: Word, W: Word>(
     // Generate a first input
     println!("Checking empty program");
     match globals.oracle_reduced.check_program(&[]) {
-        Ok(_) => return vec![], // Turns out it's actually the empty program 🤷
+        Ok(()) => return vec![], // Turns out it's actually the empty program 🤷
         Err(counter_example) => {
-            globals.inputs.push(counter_example.0);
-            globals.outputs.push(counter_example.1);
+            globals.inputs.push(counter_example.0.clone());
+            globals.outputs.push(counter_example.1.clone());
         }
     }
     loop {
@@ -304,27 +317,46 @@ fn connect_and_refine<WT: Word, WS: Word>(
                         program.extend(prefix.iter());
                         program.push(inst);
                         program.extend(postfix.iter());
-                        println!("Found candidate program:");
-                        for inst in &program {
-                            println!("  {inst}");
-                        }
+                        // println!("Found candidate program:");
+                        // for inst in &program {
+                        //     println!("  {inst}");
+                        // }
                         match globals.oracle_reduced.check_program(&program) {
                             // Found!
-                            Ok(()) => globals.extender.extend_program_for_each(
-                                &program,
-                                |extended_program| match globals
-                                    .oracle
-                                    .check_program(extended_program)
-                                {
-                                    Ok(()) => Break(extended_program.to_vec()),
-                                    Err(_) => Continue(()),
-                                },
-                            ),
+                            Ok(()) => {
+                                let ret = extend_program_for_each(
+                                    &program,
+                                    &globals.extender,
+                                    |extended_program| match globals
+                                        .oracle
+                                        .check_program(extended_program)
+                                    {
+                                        Ok(()) => Break(extended_program.to_vec()),
+                                        Err(_) => Continue(()),
+                                    },
+                                );
+                                match ret {
+                                    Break(extended_program) => Break(extended_program),
+                                    Continue(()) => {
+                                        for inst in &program {
+                                            println!("  {inst}");
+                                        }
+                                        panic!("Should have found the reduced program.");
+                                    }
+                                }
+                            }
                             Err(counter_example) => {
-                                if !counter_examples.contains(&counter_example) {
+                                if !counter_examples.contains(counter_example) {
+                                    println!("Oracle found counter example.");
+                                    println!("  Input: {:?}", &counter_example.0);
+                                    println!("  Expected output: {:?}", &counter_example.1);
+                                    println!("  For program:");
+                                    for inst in &program {
+                                        println!("    {inst}");
+                                    }
                                     counter_examples.insert(counter_example.clone());
-                                    globals.inputs.push(counter_example.0);
-                                    globals.outputs.push(counter_example.1);
+                                    globals.inputs.push(counter_example.0.clone());
+                                    globals.outputs.push(counter_example.1.clone());
                                 }
                                 Continue(())
                             }

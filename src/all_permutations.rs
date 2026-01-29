@@ -17,6 +17,7 @@ impl<'i, I> Iter<'i, I>
 where
     I: IntoIterator + Clone,
 {
+    #[allow(dead_code)]
     pub const fn empty() -> Self {
         Self {
             collections: &[],
@@ -62,9 +63,9 @@ where
     }
 
     /// A version of `next` that does not allocate another buffer every call.
-    pub fn next_slice<'a>(&'a mut self) -> Option<&'a [I::Item]> {
+    pub fn next_slice(&mut self) -> Option<&[I::Item]> {
         let success = if self.is_initialized() {
-            advance(&mut self.collections, &mut self.buf, &mut self.iterators)
+            advance(self.collections, &mut self.buf, &mut self.iterators)
         } else {
             self.init()
         };
@@ -72,9 +73,9 @@ where
     }
 }
 
-fn advance<'a, 'i, I>(
-    collections: &'i [I],
-    buf: &'a mut [I::Item],
+fn advance<I>(
+    collections: &[I],
+    buf: &mut [I::Item],
     iterators: &mut [I::IntoIter],
 ) -> bool
 where

@@ -1,7 +1,13 @@
-use std::fmt::Debug;
+use crate::all_permutations::Iter as PermutationIter;
+use crate::iter_slice_or_single::Iter as SliceOrSingle;
 use arbitrary_int::traits::Integer;
+use std::fmt::Debug;
+use std::ops::ControlFlow;
 
-use crate::word::{Word, WordOps};
+use crate::{
+    reduce_bit_width::{ImmediateInfo, Reducer},
+    word::{Word, WordOps},
+};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ArgType {
@@ -123,6 +129,8 @@ define_instructions! {
     | Nop     | Unused | Unused | Unused | "nop"  |
     | Add     | Reg    | Reg    | Reg    | "add"  |
     | AddI    | Reg    | Reg    | Imm    | "add"  |
+    | Sub     | Reg    | Reg    | Reg    | "sub"  |
+    | SubI    | Reg    | Reg    | Imm    | "sub"  |
     | And     | Reg    | Reg    | Reg    | "and"  |
     | Eor     | Reg    | Reg    | Reg    | "eor"  |
     | Mov     | Reg    | Reg    | Unused | "mov"  |
@@ -303,6 +311,20 @@ fn run_instruction<W: Word, S: State<W>>(inst: &Inst<W>, state: &mut S) {
             Register(inst.args[0].as_()),
             AddOrSub::Add,
         ),
+        Sub => run_addition_or_subtraction(
+            state,
+            r![1 u],
+            r![2 u],
+            Register(inst.args[0].as_()),
+            AddOrSub::Sub,
+        ),
+        SubI => run_addition_or_subtraction(
+            state,
+            r![1 u],
+            imm![2 u],
+            Register(inst.args[0].as_()),
+            AddOrSub::Sub,
+        ),
         And => set!(r![0 u] <- r![1 u] & r![2 u]),
         Eor => set!(r![0 u] <- r![1 u] ^ r![2 u]),
         Mov => set!(r![0 u] <- r![1 u]),
@@ -339,16 +361,61 @@ impl<W: Word> Inst<W> {
         }
     }
 
-    pub fn convert_to<W2: Word>(&self) -> Inst<W2> {
+    pub fn reduce<WSmall: Word>(&self, reducer: &mut Reducer<W, WSmall>) -> Inst<WSmall> {
+        fn reduce_arg<W: Word, WSmall: Word>(
+            reducer: &mut Reducer<W, WSmall>,
+            arg: W::Unsigned,
+            arg_type: ArgType,
+            info: &ImmediateInfo,
+        ) -> WSmall::Unsigned {
+            match arg_type {
+                ArgType::Imm => reducer.reduce(arg, info),
+                ArgType::Reg | ArgType::Unused => arg.as_(),
+            }
+        }
+
+        let arg_types = self.op_code.arg_types();
+        let info = ImmediateInfo {
+            // TODO: is_shift: op_code.is_shift_instruction(),
+            is_shift: true,
+        };
         Inst {
             op_code: self.op_code,
             cond_code: self.cond_code,
             args: [
-                self.args[0].as_(),
-                self.args[1].as_(),
-                self.args[2].as_(),
+                reduce_arg(reducer, self.args[0], arg_types[0], &info),
+                reduce_arg(reducer, self.args[1], arg_types[1], &info),
+                reduce_arg(reducer, self.args[2], arg_types[2], &info),
             ],
         }
+    }
+
+    pub fn extend<WBig: Word>(
+        &self,
+        reducer: &Reducer<WBig, W>,
+    ) -> impl Iterator<Item = Inst<WBig>> + Clone {
+        fn extend_arg<WSmall: Word, WBig: Word>(
+            reducer: &Reducer<WBig, WSmall>,
+            arg: WSmall::Unsigned,
+            arg_type: ArgType,
+        ) -> SliceOrSingle<'_, WBig::Unsigned> {
+            match arg_type {
+                ArgType::Imm => reducer.extend(arg),
+                ArgType::Reg | ArgType::Unused => SliceOrSingle::Single(arg.as_()),
+            }
+        }
+        // If only we had do notation 🥹
+        let args = self.args;
+        let arg_types = self.op_code.arg_types();
+        extend_arg(reducer, args[0], arg_types[0]).flat_map(move |arg0| {
+            extend_arg(reducer, args[1], arg_types[1]).flat_map(move |arg1| {
+                extend_arg(reducer, args[2], arg_types[2]).map(move |arg2| Inst {
+                    op_code: self.op_code,
+                    cond_code: self.cond_code,
+                    args: [arg0, arg1, arg2],
+                })
+            })
+        })
     }
 }
 
@@ -372,4 +439,25 @@ macro_rules! inst {
     ( $op_code:ident, $( $arg:expr ),* $(,)? ) => {
         inst!($op_code Al, $( $arg ),* )
     };
+}
+
+pub fn extend_program_for_each<F, T, WBig, WSmall>(
+    program: &[Inst<WSmall>],
+    reducer: &Reducer<WBig, WSmall>,
+    mut f: F,
+) -> ControlFlow<T>
+where
+    F: FnMut(&[Inst<WBig>]) -> ControlFlow<T>,
+    WBig: Word,
+    WSmall: Word,
+{
+    let mut ret = vec![];
+    let iters: Vec<_> = program.iter().map(|inst| inst.extend(reducer)).collect();
+    let mut iter = PermutationIter::new(iters.as_slice());
+    while let Some(perm) = iter.next_slice() {
+        ret.clear();
+        ret.extend_from_slice(perm);
+        f(&ret)?;
+    }
+    ControlFlow::Continue(())
 }
