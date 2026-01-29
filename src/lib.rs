@@ -11,8 +11,8 @@ mod programs;
 mod graph;
 /// This module collects registers and immediates that appear in a program.
 mod collect;
-/// Used for returning reduced-bitwidth values from to their original bitwidth.
-mod extend_bitwidth;
+/// Converting programs to equivalent ones with a reduced bit-width.
+mod reduce_bit_width;
 /// Main loop where the big picture stuff happens.
 mod main_loop;
 
@@ -21,6 +21,7 @@ mod main_loop;
 mod all_permutations;
 /// TODO: Remove this probably.
 mod shortest_path;
+mod iter_slice_or_single;
 
 // Let's expose just the necessary items.
 

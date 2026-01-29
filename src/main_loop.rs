@@ -3,10 +3,10 @@
 
 use crate::collect::{self, Collector};
 use crate::enumerate::{EnumerationInfo, Enumerator};
-use crate::extend_bitwidth;
 use crate::graph;
 use crate::isa::{self, Flags, Inst, Register};
 use crate::programs;
+use crate::reduce_bit_width::Reducer;
 use crate::word::prelude::*;
 use rustc_hash::FxHashSet;
 use std::ops::ControlFlow::{Break, Continue};
@@ -46,7 +46,7 @@ impl<W: Word> State<W> {
         other.flags = self.flags;
     }
 
-    fn convert_to<T: Word>(&self) -> State<T> {
+    fn reduce_bit_width<T: Word>(&self) -> State<T> {
         State {
             registers: self.registers.iter().map(|(r, v)| (*r, v.as_())).collect(),
             flags: self.flags,
@@ -143,15 +143,15 @@ impl<W: Word> Oracle<W> for TestCasesOracle<W> {
 pub fn optimize<WT: Word, WS: Word>(
     program: &[Inst<WT>],
     inputs: &[&[(Register, WT::Unsigned)]], // TODO: Return a program in Program<WT> instead...
-) -> Program<WS> {
-    let program: Vec<Inst<WS>> = program.iter().map(|inst| inst.convert_to()).collect();
-    let program = program.as_slice();
+) -> Program<WT> {
+    let mut reducer = Reducer::<WT, WS>::default();
+    reducer.reduce_program(program);
 
     // Run the program on each input to get the outputs. We call these "test cases".
-    let test_cases: Vec<(State<WS>, State<WS>)> = inputs
+    let test_cases: Vec<(State<WT>, State<WT>)> = inputs
         .iter()
         .map(|input| {
-            let input: State<WS> = State {
+            let input: State<WT> = State {
                 registers: input.iter().map(|(r, v)| (*r, v.as_())).collect(),
                 flags: None,
             };
@@ -162,9 +162,15 @@ pub fn optimize<WT: Word, WS: Word>(
             (input, output)
         })
         .collect();
+    let test_cases_reduced: Vec<(State<WS>, State<WS>)> = test_cases
+        .iter()
+        .map(|(input, output)| {
+            todo!("I can't reduce the test cases")
+        })
+        .collect();
 
     // Collect all the registers and immediates that might be useful for synthesis.
-    let mut collector = Collector::<WS>::new();
+    let mut collector = Collector::<WT>::new();
     collector.program(program);
     collector.test_cases(&test_cases);
     let Collector {
@@ -174,15 +180,20 @@ pub fn optimize<WT: Word, WS: Word>(
     let immediates: Vec<WS::Unsigned> = immediates.into_iter().map(|imm| imm.as_()).collect();
 
     let oracle = TestCasesOracle { test_cases };
+    let oracle_reduced = TestCasesOracle {
+        test_cases: vec![],
+    };
 
-    synthesize::<WT, WS>(&registers, &immediates, oracle)
+    synthesize::<WT, WS>(&registers, &immediates, oracle, oracle_reduced, reducer)
 }
 
 fn synthesize<WT: Word, W: Word>(
     registers: &[Register],
     immediates: &[W::Unsigned],
-    oracle: impl Oracle<W>,
-) -> Program<W> {
+    oracle: impl Oracle<WT>,
+    oracle_reduced: impl Oracle<W>,
+    reducer: Reducer<WT, W>,
+) -> Program<WT> {
     // The forward and backward graphs start while having the empty program.
     let mut forward_graph = Graph::Leaf(Programs::program(vec![]));
     let mut backward_graph = Graph::Leaf(Programs::program(vec![]));
@@ -192,15 +203,16 @@ fn synthesize<WT: Word, W: Word>(
     };
     let mut globals = Globals {
         oracle,
+        oracle_reduced,
         inputs: vec![],
         outputs: vec![],
         forward_length: 0,
         backward_length: 0,
-        extender: extend_bitwidth::Extender::new(immediates.iter().cloned()),
+        extender: reducer,
     };
     // Generate a first input
     println!("Checking empty program");
-    match globals.oracle.check_program(&[]) {
+    match globals.oracle_reduced.check_program(&[]) {
         Ok(_) => return vec![], // Turns out it's actually the empty program 🤷
         Err(counter_example) => {
             globals.inputs.push(counter_example.0);
@@ -216,7 +228,7 @@ fn synthesize<WT: Word, W: Word>(
         // println!("Forward Graph: \n{}", forward_graph.pretty_print());
         // println!("Backward Graph: \n{}", backward_graph.pretty_print());
         for inst in Enumerator::new().into_iter(enumeration_info) {
-            let res = connect_and_refine(
+            let res = connect_and_refine::<WT, W>(
                 &mut globals,
                 &mut forward_graph,
                 &mut backward_graph,
@@ -254,18 +266,20 @@ enum ConnectAndRefineResult<W: Word> {
 }
 
 /// WT - word for the target program. WS - word for the synthesis process.
-struct Globals<WT: Word, WS: Word, O: Oracle<WT>> {
-    oracle: O,
+struct Globals<WT: Word, WS: Word, OT: Oracle<WT>, OS: Oracle<WS>> {
+    oracle: OT,
+    /// The oracle that checks program in the reduced word size.
+    oracle_reduced: OS,
     inputs: Vec<State<WS>>,
     outputs: Vec<State<WS>>,
     /// The length of the prefixes of the program being built.
     forward_length: usize,
     backward_length: usize,
-    extender: extend_bitwidth::Extender<WT, WS>,
+    extender: Reducer<WT, WS>,
 }
 
 fn connect_and_refine<WT: Word, WS: Word>(
-    globals: &mut Globals<WT, WS, impl Oracle<WT>>,
+    globals: &mut Globals<WT, WS, impl Oracle<WT>, impl Oracle<WS>>,
     forward_graph: &mut Graph<WS>,
     backward_graph: &mut Graph<WS>,
     inst: Inst<WS>,
@@ -280,9 +294,8 @@ fn connect_and_refine<WT: Word, WS: Word>(
                 // First, make a buffer to hold the program.
                 let mut program =
                     Vec::with_capacity(globals.forward_length + 1 + globals.backward_length);
-                let mut found = false;
                 let mut counter_examples = FxHashSet::default();
-                let _ = prefixes.try_for_each_ref(&mut |prefix| {
+                let ret = prefixes.try_for_each_ref(&mut |prefix| {
                     debug_assert_eq!(prefix.len(), globals.forward_length);
                     postfixes.try_for_each_ref(&mut |postfix| {
                         debug_assert_eq!(postfix.len(), globals.backward_length);
@@ -295,12 +308,18 @@ fn connect_and_refine<WT: Word, WS: Word>(
                         for inst in &program {
                             println!("  {inst}");
                         }
-                        match globals.oracle.check_program(&program) {
+                        match globals.oracle_reduced.check_program(&program) {
                             // Found!
-                            Ok(()) => {
-                                found = true;
-                                Break(())
-                            }
+                            Ok(()) => globals.extender.extend_program_for_each(
+                                &program,
+                                |extended_program| match globals
+                                    .oracle
+                                    .check_program(extended_program)
+                                {
+                                    Ok(()) => Break(extended_program.to_vec()),
+                                    Err(_) => Continue(()),
+                                },
+                            ),
                             Err(counter_example) => {
                                 if !counter_examples.contains(&counter_example) {
                                     counter_examples.insert(counter_example.clone());
@@ -312,8 +331,8 @@ fn connect_and_refine<WT: Word, WS: Word>(
                         }
                     })
                 });
-                if found {
-                    return ConnectAndRefineResult::Found(program);
+                if let Break(extended_program) = ret {
+                    return ConnectAndRefineResult::Found(extended_program);
                 }
             }
             _ => {
