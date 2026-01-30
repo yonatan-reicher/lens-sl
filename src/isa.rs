@@ -424,14 +424,14 @@ impl<W: Word> Inst<W> {
 macro_rules! inst {
     ( $op_code:ident $cond_code:ident, $( $arg:expr ),* $(,)? ) => {
         {
-            let mut args_iter = [$( $arg as _ ),*].iter();
+            let args_iter = [$( $arg ),*];
             $crate::Inst {
                 op_code: $crate::OpCode::$op_code,
                 cond_code: $crate::CondCode::$cond_code,
                 args: [
-                    *args_iter.next().unwrap_or(&0),
-                    *args_iter.next().unwrap_or(&0),
-                    *args_iter.next().unwrap_or(&0),
+                    *args_iter.get(0).unwrap_or(&Default::default()),
+                    *args_iter.get(1).unwrap_or(&Default::default()),
+                    *args_iter.get(2).unwrap_or(&Default::default()),
                 ],
             }
         }
