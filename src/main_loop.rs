@@ -488,16 +488,26 @@ fn build_forwards_or_backwards<W: Word>(
     let old_graph = std::mem::replace(graph, Graph::Nest(Default::default()));
     let mut my_outputs = Vec::with_capacity(initial_states.len());
     old_graph.for_each(&mut |programs| {
-        let program = programs
-            .sample()
-            .expect("programs should not be empty here.");
-        my_outputs.clear();
-        for i in initial_states {
-            let mut my_output = i.clone();
-            step(&program, &mut my_output);
-            my_outputs.push(my_output);
-        }
-        graph.insert_all(&my_outputs, programs);
+        programs.for_each_ref(&mut |program| {
+            my_outputs.clear();
+            for i in initial_states {
+                let mut my_output = i.clone();
+                step(&program, &mut my_output);
+                my_outputs.push(my_output);
+            }
+            graph.insert_all(&my_outputs, Programs::Program(program));
+        });
+        // let program = programs
+        //     .sample()
+        //     .expect("programs should not be empty here.");
+        // my_outputs.clear();
+        // dbg!(programs.len());
+        // for i in initial_states {
+        //     let mut my_output = i.clone();
+        //     step(&program, &mut my_output);
+        //     my_outputs.push(my_output);
+        // }
+        // graph.insert_all(&my_outputs, programs);
     });
 }
 
