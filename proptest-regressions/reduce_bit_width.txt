@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 222d7d4d0138445732fff7e79604d73fa8b1e4894aa594523cec214f570ee76e # shrinks to TestReduceExtendArgs = TestReduceExtendArgs { c: 0, v: {1768953154736998912} }
+cc e7afcc81fdeab8133847f23854d447e8f020c70c7614883d1a55ba80faca4087 # shrinks to TestReduceExtendArgs = TestReduceExtendArgs { v: {0} }

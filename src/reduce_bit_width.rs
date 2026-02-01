@@ -39,9 +39,7 @@ impl<WBig: Word, WSmall: Word> Reducer<WBig, WSmall> {
     #[inline]
     pub fn reduce(&mut self, value: WBig::Unsigned, info: &ImmediateInfo) -> WSmall::Unsigned {
         let reduced = reduce::<WBig, WSmall>(value, info);
-        let bucket = self.0
-            .entry(reduced)
-            .or_insert_with(|| vec![value]);
+        let bucket = self.0.entry(reduced).or_insert_with(|| vec![value]);
         if !bucket.contains(&value) {
             bucket.push(value);
         }
@@ -57,5 +55,36 @@ impl<WBig: Word, WSmall: Word> Reducer<WBig, WSmall> {
 
     pub fn immediates(&self) -> impl Iterator<Item = WSmall::Unsigned> + '_ {
         self.0.keys().cloned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+    use proptest::property_test;
+    use std::collections::HashSet;
+
+    #[property_test]
+    fn test_reduce_extend(v: HashSet<u64>) {
+        prop_assume!(!v.is_empty());
+        println!("v = {v:?}");
+        // Initialize reducer
+        let mut reducer = Reducer::<Word64, Word4>::default();
+        let info = ImmediateInfo { is_shift: false };
+        for &val in &v {
+            reducer.reduce(val, &info);
+        }
+        let c = v.iter().next().copied().unwrap();
+        let expected: HashSet<u64> = v
+            .iter()
+            .copied()
+            .filter(|val| u4::masked_new(c) == val.as_())
+            .collect();
+        // Reduce and then extend
+        let reduced = reducer.reduce(c, &info);
+        let extended: HashSet<u64> = reducer.extend(reduced).collect();
+        // Assert
+        prop_assert_eq!(extended, expected);
     }
 }

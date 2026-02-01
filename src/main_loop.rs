@@ -8,6 +8,7 @@ use crate::isa::{self, Flags, Inst, Register, extend_program_for_each};
 use crate::programs;
 use crate::reduce_bit_width::Reducer;
 use crate::word::prelude::*;
+use crate::inst;
 use rustc_hash::FxHashSet;
 use std::ops::ControlFlow::{Break, Continue};
 use std::rc::Rc;
@@ -317,6 +318,15 @@ fn connect_and_refine<WT: Word, WS: Word>(
                         program.extend(prefix.iter());
                         program.push(inst);
                         program.extend(postfix.iter());
+                        if program == vec![
+                            inst!(SubI, 3.as_(), 0.as_(), 1.as_()),
+                            inst!(Orr, 3.as_(), 3.as_(), 0.as_()),
+                            inst!(AddI, 3.as_(), 3.as_(), 1.as_()),
+                            inst!(And, 0.as_(), 3.as_(), 0.as_()),
+                            inst!(AddI, 0.as_(), 0.as_(), 10.as_()),
+                        ] {
+                            panic!("Here we are?!");
+                        }
                         // println!("Found candidate program:");
                         // for inst in &program {
                         //     println!("  {inst}");
@@ -338,8 +348,19 @@ fn connect_and_refine<WT: Word, WS: Word>(
                                 match ret {
                                     Break(extended_program) => Break(extended_program),
                                     Continue(()) => {
+                                        println!("Should have found the extended program.");
+                                        println!("Reduced program:");
                                         for inst in &program {
                                             println!("  {inst}");
+                                        }
+                                        println!("Reducer contents:");
+                                        for reduced in globals.extender.immediates() {
+                                            let originals: Vec<WT::Unsigned> = globals
+                                                .extender
+                                                .extend(reduced)
+                                                .map(|v| v.as_())
+                                                .collect();
+                                            println!("  {reduced} => {:?}", originals);
                                         }
                                         panic!("Should have found the reduced program.");
                                     }

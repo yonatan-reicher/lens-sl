@@ -5,12 +5,12 @@ mod word;
 mod graph;
 /// Definitions of how we represent programs in an efficient way.
 mod programs;
+/// Converting programs to equivalent ones with a reduced bit-width.
+mod reduce_bit_width;
 /// The instruction set.
 mod isa;
 /// Enumerating all instructions and whatever.
 mod enumerate;
-/// Converting programs to equivalent ones with a reduced bit-width.
-mod reduce_bit_width;
 // TODO:
 // /// Representation of the state of the program execution.
 // mod state;

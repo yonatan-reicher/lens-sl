@@ -69,3 +69,38 @@ pub mod prelude {
     pub use super::{Word, Word4, Word8, Word64};
     pub use arbitrary_int::prelude::*;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+    use proptest::property_test;
+
+    fn any_u4() -> impl Strategy<Value = u4> {
+        proptest::num::u8::ANY.prop_map(|u| u.as_())
+    }
+
+    #[property_test]
+    fn overflowing_add_u4_eq_add_i4(#[strategy = any_u4()] x: u4, #[strategy = any_u4()] y: u4) {
+        let (sum_u4, _overflow_u4) = x.overflowing_add(y);
+        let x_i4: i4 = x.as_();
+        let y_i4: i4 = y.as_();
+        let (sum_i4, _overflow_i4) = x_i4.overflowing_add(y_i4);
+        prop_assert_eq!(sum_u4, sum_i4.as_());
+    }
+
+    #[property_test]
+    fn overflowing_u4_always_overflows(
+        #[strategy = any_u4()] x: u4,
+        #[strategy = any_u4()] overflow_amount: u4,
+    ) {
+        prop_assume!(!overflow_amount.is_zero());
+        prop_assume!(overflow_amount < x);
+        let y = u32::from(overflow_amount).wrapping_sub(x.as_());
+        let y: u4 = y.as_();
+        println!("x: {}, y: {}, overflow_amount: {}", x, y, overflow_amount);
+        let (sum_u4, overflow_u4) = x.overflowing_add(y);
+        prop_assert!(overflow_u4);
+        prop_assert_eq!(sum_u4, overflow_amount);
+    }
+}

@@ -10,6 +10,7 @@ use crate::{
 };
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(test, derive(proptest_derive::Arbitrary))]
 pub enum ArgType {
     /// Register
     Reg,
@@ -22,6 +23,7 @@ pub enum ArgType {
 /// In Arm, every instruction can be conditionally executed based on the state
 /// of the flags.
 #[derive(Copy, Clone, Debug, derive_more::Display, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(test, derive(proptest_derive::Arbitrary))]
 #[display("{}", self.to_string())]
 pub enum CondCode {
     /// Always (unconditional)
@@ -92,6 +94,7 @@ macro_rules! define_instructions {
     ) => {
         /// The operation codes supported by our ISA.
         #[derive(Copy, Clone, Debug, derive_more::Display, PartialEq, Eq, Hash)]
+        #[cfg_attr(test, derive(proptest_derive::Arbitrary))]
         #[display("{}", self.to_string())]
         pub enum OpCode {
             $( $op_code, )+
@@ -152,6 +155,7 @@ define_instructions! {
     PartialOrd,
     Ord,
 )]
+#[cfg_attr(test, derive(proptest_derive::Arbitrary))]
 #[debug("r{_0}")]
 #[display("r{_0}")]
 pub struct Register(pub u8);
@@ -163,6 +167,7 @@ impl Register {
 
 /// A single instruction.
 #[derive(derive_more::Debug, derive_more::Display, PartialEq, Eq, Hash)]
+#[cfg_attr(test, derive(proptest_derive::Arbitrary))]
 #[debug("{op_code:?}{}{args:?}",
     match cond_code {
         CondCode::Al => "".to_string(),
@@ -196,6 +201,27 @@ bitflags::bitflags! {
         const C = 0b0010;
         /// Overflow - on signed addition/subtraction, on when result is out of signed range.
         const V = 0b1000;
+    }
+}
+
+#[cfg(test)]
+impl proptest::arbitrary::Arbitrary for Flags {
+    type Parameters = ();
+    type Strategy = proptest::strategy::BoxedStrategy<Self>;
+
+    #[rustfmt::skip]
+    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+        use proptest::prelude::*;
+        (any::<bool>(), any::<bool>(), any::<bool>(), any::<bool>())
+            .prop_map(|(z, n, c, v)| {
+                let mut flags = Flags::empty();
+                if z { flags |= Flags::Z; }
+                if n { flags |= Flags::N; }
+                if c { flags |= Flags::C; }
+                if v { flags |= Flags::V; }
+                flags
+            })
+            .boxed()
     }
 }
 
@@ -377,7 +403,7 @@ impl<W: Word> Inst<W> {
         let arg_types = self.op_code.arg_types();
         let info = ImmediateInfo {
             // TODO: is_shift: op_code.is_shift_instruction(),
-            is_shift: true,
+            is_shift: false,
         };
         Inst {
             op_code: self.op_code,
@@ -460,4 +486,37 @@ where
         f(&ret)?;
     }
     ControlFlow::Continue(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::word::prelude::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn basic_extend_test() {
+        let program: [Inst<Word64>; _] = [inst!(AddI, 0, 1, 1242), inst!(Sub, 2, 0, 1)];
+        let mut reducer = Reducer::<Word64, Word4>::default();
+        // Add another constant that clashes with 1242 when reduced.
+        reducer.reduce(1242 + 16, &ImmediateInfo { is_shift: false });
+        let mut programs = HashSet::new();
+        let program_reduced = program.map(|inst| inst.reduce(&mut reducer));
+        let _ = extend_program_for_each(&program_reduced, &reducer, |extended_program| {
+            for inst in extended_program {
+                println!("{}", inst);
+            }
+            println!("---");
+            programs.insert(extended_program.to_vec());
+            ControlFlow::<(), ()>::Continue(())
+        });
+        assert_eq!(
+            programs,
+            [
+                program.to_vec(),
+                vec![inst!(AddI, 0, 1, 1242 + 16), inst!(Sub, 2, 0, 1),],
+            ]
+            .into()
+        );
+    }
 }

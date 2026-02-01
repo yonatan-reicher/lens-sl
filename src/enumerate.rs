@@ -185,6 +185,9 @@ impl<'a, W: Word> Iterator for Iter<'a, W> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+    use proptest::property_test;
+    use std::collections::HashSet;
 
     fn to_vec<W: Word>(ei: &EnumerationInfo<W>) -> Vec<Inst<W>> {
         let mut e = Enumerator::new();
@@ -200,11 +203,60 @@ mod tests {
     }
 
     #[test]
-    pub fn test_basic() {
+    pub fn test_count() {
         let v = to_vec(&EnumerationInfo::<Word8> {
             registers: &[Register(2)],
             immediates: &[42],
         });
         assert_eq!(v.len(), OpCode::COUNT as usize * CondCode::COUNT as usize);
+    }
+
+    #[property_test(config = ProptestConfig { cases: 20, ..ProptestConfig::default() })]
+    fn all_registers_and_immediates_appear(
+        #[strategy = prop::collection::hash_set(any::<Register>(), 1..15)]
+        registers: HashSet<Register>,
+        #[strategy = prop::collection::hash_set(0..100u8, 1..15)]
+        immediates: HashSet<u8>,
+    ) {
+        prop_assume!(!registers.is_empty());
+        prop_assume!(!immediates.is_empty());
+        let ei = EnumerationInfo::<Word8> {
+            registers: &registers.iter().copied().collect::<Box<[_]>>(),
+            immediates: &immediates.iter().copied().collect::<Box<[_]>>(),
+        };
+        let registers_used: std::collections::HashSet<_> = Enumerator::new()
+            .into_iter(&ei)
+            .flat_map(|inst| {
+                inst.args
+                    .iter()
+                    .zip(inst.op_code.arg_types())
+                    .filter_map(|(arg, arg_type)| {
+                        if arg_type == ArgType::Reg {
+                            Some(Register(arg.as_()))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let immediates_used = Enumerator::new()
+            .into_iter(&ei)
+            .flat_map(|inst| {
+                inst.args
+                    .iter()
+                    .zip(inst.op_code.arg_types())
+                    .filter_map(|(arg, arg_type)| {
+                        if arg_type == ArgType::Imm {
+                            Some(*arg)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<std::collections::HashSet<_>>();
+        prop_assert_eq!(registers_used, registers);
+        prop_assert_eq!(immediates_used, immediates);
     }
 }
