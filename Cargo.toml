@@ -11,5 +11,15 @@ functionality = "1.0.0"
 # This is the same version as used by arbitrary-int above
 rustc-hash = "2.1.1"
 
+[dev-dependencies]
+proptest = { version = "1.9.0", features = ["attr-macro"] }
+proptest-derive = "0.7.0"
+
 [profile.release]
 debug = true
+
+[profile.test.package.proptest]
+opt-level = 3
+
+[profile.test.package.rand_chacha]
+opt-level = 3
