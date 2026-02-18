@@ -1,28 +1,31 @@
 use std::fmt::{Debug, Display};
+use std::hash::Hash;
 
 use arbitrary_int::traits::{Integer, SignedInteger, UnsignedInteger};
 use arbitrary_int::{i4, u4};
 
-pub trait Word {
-    type Signed: Sized + Debug + Display + SignedInteger + WordOps;
-    type Unsigned: Sized + Debug + Display + UnsignedInteger + WordOps;
+pub trait Word:
+    Sized + Clone + Copy + Debug + Default + PartialEq + Eq + PartialOrd + Ord + Hash
+{
+    type Signed: Sized + Debug + Default + Display + Hash + SignedInteger + WordOps;
+    type Unsigned: Sized + Debug + Default + Display + Hash + UnsignedInteger + WordOps;
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Word64;
 impl Word for Word64 {
     type Unsigned = u64;
     type Signed = i64;
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Word8;
 impl Word for Word8 {
     type Unsigned = u8;
     type Signed = i8;
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Word4;
 impl Word for Word4 {
     type Unsigned = u4;
@@ -61,14 +64,43 @@ define_word_ops!(i8);
 define_word_ops!(u64);
 define_word_ops!(i64);
 
-
 pub mod prelude {
     #[allow(unused_imports)]
-    pub use super::{
-        Word,
-        Word4,
-        Word8,
-        Word64,
-    };
+    pub use super::{Word, Word4, Word8, Word64};
     pub use arbitrary_int::prelude::*;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+    use proptest::property_test;
+
+    fn any_u4() -> impl Strategy<Value = u4> {
+        proptest::num::u8::ANY.prop_map(|u| u.as_())
+    }
+
+    #[property_test]
+    fn overflowing_add_u4_eq_add_i4(#[strategy = any_u4()] x: u4, #[strategy = any_u4()] y: u4) {
+        let (sum_u4, _overflow_u4) = x.overflowing_add(y);
+        let x_i4: i4 = x.as_();
+        let y_i4: i4 = y.as_();
+        let (sum_i4, _overflow_i4) = x_i4.overflowing_add(y_i4);
+        prop_assert_eq!(sum_u4, sum_i4.as_());
+    }
+
+    #[property_test]
+    fn overflowing_u4_always_overflows(
+        #[strategy = any_u4()] x: u4,
+        #[strategy = any_u4()] overflow_amount: u4,
+    ) {
+        prop_assume!(!overflow_amount.is_zero());
+        prop_assume!(overflow_amount < x);
+        let y = u32::from(overflow_amount).wrapping_sub(x.as_());
+        let y: u4 = y.as_();
+        println!("x: {}, y: {}, overflow_amount: {}", x, y, overflow_amount);
+        let (sum_u4, overflow_u4) = x.overflowing_add(y);
+        prop_assert!(overflow_u4);
+        prop_assert_eq!(sum_u4, overflow_amount);
+    }
 }

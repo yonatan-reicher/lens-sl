@@ -7,34 +7,30 @@ pub trait State<W: Word> {
 
 /// Collects the registers and immediates that appear in a program or in test cases.
 #[derive(Debug)]
-pub struct Collector<W: Word> {
+pub struct Collector {
     pub registers: Vec<Register>,
-    pub immediates: Vec<W::Unsigned>,
 }
 
-impl<W: Word> Collector<W> {
-    pub fn new() -> Self {
-        Self {
-            registers: vec![],
-            immediates: vec![],
-        }
+impl Collector {
+    pub const fn new() -> Self {
+        Self { registers: vec![] }
     }
 
     // --- Program ---
 
-    pub fn program(&mut self, program: &[Inst<W>]) {
+    pub fn program<W: Word>(&mut self, program: &[Inst<W>]) {
         for inst in program {
             self.inst(*inst);
         }
     }
 
-    fn inst(&mut self, inst: Inst<W>) {
+    fn inst<W: Word>(&mut self, inst: Inst<W>) {
         for (arg, arg_type) in inst.args.iter().zip(inst.op_code.arg_types()) {
-            self.arg(*arg, arg_type);
+            self.arg::<W>(*arg, arg_type);
         }
     }
 
-    fn arg(&mut self, arg: W::Unsigned, arg_type: ArgType) {
+    fn arg<W: Word>(&mut self, arg: W::Unsigned, arg_type: ArgType) {
         match arg_type {
             ArgType::Reg => {
                 let reg: Register = Register(arg.as_());
@@ -42,33 +38,43 @@ impl<W: Word> Collector<W> {
                     self.registers.push(reg);
                 }
             }
-            ArgType::Imm => {
-                let imm = arg;
-                if !self.immediates.contains(&imm) {
-                    self.immediates.push(imm);
-                }
-            }
-            ArgType::Unused => {}
+            ArgType::Imm | ArgType::Unused => {}
         }
     }
 
     // --- Test cases ---
 
-    pub fn test_cases<S: State<W>>(&mut self, test_cases: &[(S, S)]) {
+    pub fn test_cases<W: Word, S: State<W>>(&mut self, test_cases: &[(S, S)]) {
         for (input, output) in test_cases {
             self.state(input);
             self.state(output);
         }
     }
 
-    fn state<S: State<W>>(&mut self, state: &S) {
-        for (reg, value) in state.registers() {
+    fn state<W: Word, S: State<W>>(&mut self, state: &S) {
+        for (reg, _) in state.registers() {
             if !self.registers.contains(&reg) {
                 self.registers.push(reg);
             }
-            if !self.immediates.contains(&value) {
-                self.immediates.push(value);
-            }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::inst;
+    use crate::Word64;
+    use super::*;
+
+    #[test]
+    fn test_1() {
+        let mut collector = Collector::new();
+        collector.program::<Word64>(&[
+            inst!(Add, 0, 1, 2),
+            inst!(Add, 0, 1, 2),
+            inst!(Sub, 0, 3, 2),
+            inst!(SubI, 0, 3, 5),
+        ]);
+        assert_eq!(collector.registers, vec![Register(0), Register(1), Register(2), Register(3)]);
     }
 }

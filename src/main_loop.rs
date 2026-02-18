@@ -1,12 +1,14 @@
 //! The main loop for synthesis and optimization.
 //! Here we have basically the code that you would see in the actual paper that describes Lens.
 
-use crate::collect::{self, Collector};
+use crate::collect_registers::{self, Collector};
 use crate::enumerate::{EnumerationInfo, Enumerator};
 use crate::graph;
-use crate::isa::{self, Flags, Inst, Register};
+use crate::isa::{self, Flags, Inst, Register, extend_program_for_each};
 use crate::programs;
-use crate::word::{Word, Word64};
+use crate::reduce_bit_width::Reducer;
+use crate::word::prelude::*;
+use crate::inst;
 use rustc_hash::FxHashSet;
 use std::ops::ControlFlow::{Break, Continue};
 use std::rc::Rc;
@@ -27,15 +29,15 @@ use std::rc::Rc;
         None => "None".to_string(),
     }
 )]
-struct State {
+struct State<W: Word> {
     /// This vector is always sorted by register.
     /// Registers that are not present are not "live".
-    pub registers: Vec<(Register, u64)>,
+    pub registers: Vec<(Register, W::Unsigned)>,
     /// The value of the flags register. If None, flags is not "live".
     pub flags: Option<Flags>,
 }
 
-impl State {
+impl<W: Word> State<W> {
     /// Copies this state to another state object. Used to avoid clones, that in a loop, can
     /// allocate more.
     #[inline]
@@ -44,12 +46,21 @@ impl State {
         other.registers.extend(&self.registers);
         other.flags = self.flags;
     }
+
+    fn reduce<WSmall: Word>(&self, reducer: &mut Reducer<W, WSmall>) -> State<WSmall> {
+        State {
+            registers: self
+                .registers
+                .iter()
+                .map(|(r, v)| (*r, reducer.reduce(*v, &Default::default())))
+                .collect(),
+            flags: self.flags,
+        }
+    }
 }
 
-impl isa::State for State {
-    type W = Word64;
-
-    fn get_register(&self, reg: Register) -> u64 {
+impl<W: Word> isa::State<W> for State<W> {
+    fn get_register(&self, reg: Register) -> W::Unsigned {
         for (r, v) in &self.registers {
             if *r == reg {
                 return *v;
@@ -58,7 +69,7 @@ impl isa::State for State {
         panic!("Register {reg:?} not found in state.");
     }
 
-    fn set_register(&mut self, reg: Register, value: u64) {
+    fn set_register(&mut self, reg: Register, value: W::Unsigned) {
         for (r, v) in &mut self.registers {
             if *r == reg {
                 *v = value;
@@ -78,51 +89,44 @@ impl isa::State for State {
     }
 }
 
-impl collect::State<Word64> for State {
-    fn registers(&self) -> impl Iterator<Item = (Register, <Word64 as Word>::Unsigned)> {
+impl<W: Word> collect_registers::State<W> for State<W> {
+    fn registers(&self) -> impl Iterator<Item = (Register, W::Unsigned)> {
         self.registers.iter().cloned()
     }
 }
 
 // =========================================== Graph ==============================================
 
-type Program = programs::Program<Inst<Word64>>;
+type Program<W> = programs::Program<Inst<W>>;
 
-type Programs = programs::Programs<Inst<Word64>>;
+type Programs<W> = programs::Programs<Inst<W>>;
 
-type Graph = graph::Graph<State, Programs>;
+type Graph<W> = graph::Graph<State<W>, Programs<W>>;
 
 // ========================================== Oracle ==============================================
 
-type CounterExample = (State, State);
+type CounterExample<W> = (State<W>, State<W>);
 
 /// In the future, we will have a solver implement this trait.
-trait Oracle {
-    fn check_program(&mut self, program: &[Inst<Word64>]) -> Result<(), CounterExample>;
+trait Oracle<W: Word> {
+    fn check_program(&mut self, program: &[Inst<W>]) -> Result<(), &CounterExample<W>>;
 }
 
-struct TestCasesOracle {
-    test_cases: Vec<CounterExample>,
+struct TestCasesOracle<W: Word> {
+    test_cases: Vec<CounterExample<W>>,
 }
 
-impl Oracle for TestCasesOracle {
-    fn check_program(&mut self, program: &[Inst<Word64>]) -> Result<(), CounterExample> {
+impl<W: Word> Oracle<W> for TestCasesOracle<W> {
+    fn check_program(&mut self, program: &[Inst<W>]) -> Result<(), &CounterExample<W>> {
         // Maybe we could not check test cases again, but it's probably not really slowing us down.
-        for (i, (input, expected_output)) in self.test_cases.iter().enumerate() {
-            let mut output = input.clone();
+        let mut output = State::default();
+        for test @ (input, expected_output) in self.test_cases.iter() {
+            input.clone_to(&mut output);
             for inst in program {
                 inst.run(&mut output);
             }
             if &output != expected_output {
-                println!(
-                    "Oracle found counter example {}/{}.",
-                    i + 1,
-                    self.test_cases.len()
-                );
-                println!("  Input: {input:?}");
-                println!("  Expected output: {expected_output:?}");
-                println!("  Actual output: {output:?}");
-                return Err((input.clone(), expected_output.clone()));
+                return Err(test);
             }
         }
         Ok(())
@@ -132,17 +136,40 @@ impl Oracle for TestCasesOracle {
 // ====================================== Implementation ==========================================
 
 // This is the main function that gets exposed.
-pub fn optimize(program: &[Inst<Word64>], inputs: &[&[(Register, u64)]]) -> Program {
+/// `WT` for word size of the target program.
+/// `WS` for word size of the synthesis process.
+pub fn optimize<WT: Word, WS: Word>(
+    program: &[Inst<WT>],
+    inputs: &[&[(Register, WT::Unsigned)]], // TODO: Return a program in Program<WT> instead...
+) -> Program<WT> {
+    let mut reducer = Reducer::<WT, WS>::default();
+    let mut reduced_program = Vec::with_capacity(program.len());
+    for inst in program {
+        // This puts the original unreduced constants into the reducer.
+        reduced_program.push(inst.reduce(&mut reducer));
+    }
+
     // Run the program on each input to get the outputs. We call these "test cases".
-    let test_cases: Vec<(State, State)> = inputs
+    let test_cases: Vec<(State<WT>, State<WT>)> = inputs
         .iter()
         .map(|input| {
-            let input = State {
-                registers: input.to_vec(),
+            let input: State<WT> = State {
+                registers: input.iter().map(|(r, v)| (*r, v.as_())).collect(),
                 flags: None,
             };
             let mut output = input.clone();
             for inst in program {
+                inst.run(&mut output);
+            }
+            (input, output)
+        })
+        .collect();
+    let test_cases_reduced: Vec<(State<WS>, State<WS>)> = test_cases
+        .iter()
+        .map(|(input, _output)| {
+            let input = input.reduce(&mut reducer.clone());
+            let mut output = input.clone();
+            for inst in &reduced_program {
                 inst.run(&mut output);
             }
             (input, output)
@@ -153,50 +180,69 @@ pub fn optimize(program: &[Inst<Word64>], inputs: &[&[(Register, u64)]]) -> Prog
     let mut collector = Collector::new();
     collector.program(program);
     collector.test_cases(&test_cases);
-    let Collector {
-        registers,
-        immediates,
-    } = collector;
+    let Collector { registers } = collector;
+    let immediates: Vec<WS::Unsigned> = reducer.immediates().collect();
 
     let oracle = TestCasesOracle { test_cases };
+    let oracle_reduced = TestCasesOracle {
+        test_cases: test_cases_reduced,
+    };
 
-    synthesize(&registers, &immediates, oracle)
+    synthesize::<WT, WS>(&registers, &immediates, oracle, oracle_reduced, reducer)
 }
 
-fn synthesize(registers: &[Register], immediates: &[u64], oracle: impl Oracle) -> Program {
-    // The length of the prefixes of the program being built.
-    let forward_length = 0;
-    let backward_length = 0;
+fn synthesize<WT: Word, W: Word>(
+    registers: &[Register],
+    immediates: &[W::Unsigned],
+    oracle: impl Oracle<WT>,
+    oracle_reduced: impl Oracle<W>,
+    reducer: Reducer<WT, W>,
+) -> Program<WT> {
     // The forward and backward graphs start while having the empty program.
     let mut forward_graph = Graph::Leaf(Programs::program(vec![]));
     let mut backward_graph = Graph::Leaf(Programs::program(vec![]));
-    let enumeration_info = &EnumerationInfo {
+    let enumeration_info = &EnumerationInfo::<W> {
         registers,
         immediates,
     };
+    // // Show the reducer
+    // println!("Reducer contents:");
+    // for reduced in reducer.immediates() {
+    //     let originals: Vec<WT::Unsigned> = reducer
+    //         .extend(reduced)
+    //         .map(|v| v.as_())
+    //         .collect();
+    //     println!("  {reduced} => {:?}", originals);
+    // }
+    // panic!("Stop before synthesis loop.");
     let mut globals = Globals {
         oracle,
+        oracle_reduced,
         inputs: vec![],
         outputs: vec![],
-        forward_length,
-        backward_length,
+        forward_length: 0,
+        backward_length: 0,
+        extender: reducer,
     };
     // Generate a first input
     println!("Checking empty program");
-    match globals.oracle.check_program(&[]) {
-        Ok(_) => return vec![], // Turns out it's actually the empty program 🤷
+    match globals.oracle_reduced.check_program(&[]) {
+        Ok(()) => return vec![], // Turns out it's actually the empty program 🤷
         Err(counter_example) => {
-            globals.inputs.push(counter_example.0);
-            globals.outputs.push(counter_example.1);
+            globals.inputs.push(counter_example.0.clone());
+            globals.outputs.push(counter_example.1.clone());
         }
     }
     loop {
         // Searching phase
-        println!("Searching forward_length={forward_length} backward_length={backward_length}");
+        println!(
+            "Searching forward_length={} backward_length={}",
+            globals.forward_length, globals.backward_length
+        );
         // println!("Forward Graph: \n{}", forward_graph.pretty_print());
         // println!("Backward Graph: \n{}", backward_graph.pretty_print());
         for inst in Enumerator::new().into_iter(enumeration_info) {
-            let res = connect_and_refine(
+            let res = connect_and_refine::<WT, W>(
                 &mut globals,
                 &mut forward_graph,
                 &mut backward_graph,
@@ -228,27 +274,32 @@ fn synthesize(registers: &[Register], immediates: &[u64], oracle: impl Oracle) -
     }
 }
 
-enum ConnectAndRefineResult {
-    Found(Program),
+enum ConnectAndRefineResult<W: Word> {
+    Found(Program<W>),
     Continue,
 }
 
-struct Globals<O: Oracle> {
-    oracle: O,
-    inputs: Vec<State>,
-    outputs: Vec<State>,
+/// WT - word for the target program. WS - word for the synthesis process.
+struct Globals<WT: Word, WS: Word, OT: Oracle<WT>, OS: Oracle<WS>> {
+    oracle: OT,
+    /// The oracle that checks program in the reduced word size.
+    oracle_reduced: OS,
+    inputs: Vec<State<WS>>,
+    outputs: Vec<State<WS>>,
+    /// The length of the prefixes of the program being built.
     forward_length: usize,
     backward_length: usize,
+    extender: Reducer<WT, WS>,
 }
 
-fn connect_and_refine(
-    globals: &mut Globals<impl Oracle>,
-    forward_graph: &mut Graph,
-    backward_graph: &mut Graph,
-    inst: Inst<Word64>,
+fn connect_and_refine<WT: Word, WS: Word>(
+    globals: &mut Globals<WT, WS, impl Oracle<WT>, impl Oracle<WS>>,
+    forward_graph: &mut Graph<WS>,
+    backward_graph: &mut Graph<WS>,
+    inst: Inst<WS>,
     // This is the index of the input/output pair we are currently trying to connect.
     k: usize,
-) -> ConnectAndRefineResult {
+) -> ConnectAndRefineResult<WT> {
     if k > globals.inputs.len() {
         match (&forward_graph, &backward_graph) {
             (Graph::Leaf(prefixes), Graph::Leaf(postfixes)) => {
@@ -257,40 +308,84 @@ fn connect_and_refine(
                 // First, make a buffer to hold the program.
                 let mut program =
                     Vec::with_capacity(globals.forward_length + 1 + globals.backward_length);
-                let mut found = false;
                 let mut counter_examples = FxHashSet::default();
-                let _ = prefixes.try_for_each_ref(&mut |prefix| {
+                let ret = prefixes.try_for_each_ref(&mut |prefix| {
                     debug_assert_eq!(prefix.len(), globals.forward_length);
                     postfixes.try_for_each_ref(&mut |postfix| {
                         debug_assert_eq!(postfix.len(), globals.backward_length);
-                        // Build the current candidate program.
+                        // Build the current candidate (reduced) program.
                         program.clear();
                         program.extend(prefix.iter());
                         program.push(inst);
                         program.extend(postfix.iter());
-                        println!("Found candidate program:");
-                        for inst in &program {
-                            println!("  {inst}");
+                        if program == vec![
+                            inst!(SubI, 3.as_(), 0.as_(), 1.as_()),
+                            inst!(Orr, 3.as_(), 3.as_(), 0.as_()),
+                            inst!(AddI, 3.as_(), 3.as_(), 1.as_()),
+                            inst!(And, 0.as_(), 3.as_(), 0.as_()),
+                            inst!(AddI, 0.as_(), 0.as_(), 10.as_()),
+                        ] {
+                            panic!("Here we are?!");
                         }
-                        match globals.oracle.check_program(&program) {
+                        // println!("Found candidate program:");
+                        // for inst in &program {
+                        //     println!("  {inst}");
+                        // }
+                        match globals.oracle_reduced.check_program(&program) {
                             // Found!
                             Ok(()) => {
-                                found = true;
-                                Break(())
+                                let ret = extend_program_for_each(
+                                    &program,
+                                    &globals.extender,
+                                    |extended_program| match globals
+                                        .oracle
+                                        .check_program(extended_program)
+                                    {
+                                        Ok(()) => Break(extended_program.to_vec()),
+                                        Err(_) => Continue(()),
+                                    },
+                                );
+                                match ret {
+                                    Break(extended_program) => Break(extended_program),
+                                    Continue(()) => {
+                                        println!("Should have found the extended program.");
+                                        println!("Reduced program:");
+                                        for inst in &program {
+                                            println!("  {inst}");
+                                        }
+                                        println!("Reducer contents:");
+                                        for reduced in globals.extender.immediates() {
+                                            let originals: Vec<WT::Unsigned> = globals
+                                                .extender
+                                                .extend(reduced)
+                                                .map(|v| v.as_())
+                                                .collect();
+                                            println!("  {reduced} => {:?}", originals);
+                                        }
+                                        panic!("Should have found the reduced program.");
+                                    }
+                                }
                             }
                             Err(counter_example) => {
-                                if !counter_examples.contains(&counter_example) {
+                                if !counter_examples.contains(counter_example) {
+                                    println!("Oracle found counter example.");
+                                    println!("  Input: {:?}", &counter_example.0);
+                                    println!("  Expected output: {:?}", &counter_example.1);
+                                    println!("  For program:");
+                                    for inst in &program {
+                                        println!("    {inst}");
+                                    }
                                     counter_examples.insert(counter_example.clone());
-                                    globals.inputs.push(counter_example.0);
-                                    globals.outputs.push(counter_example.1);
+                                    globals.inputs.push(counter_example.0.clone());
+                                    globals.outputs.push(counter_example.1.clone());
                                 }
                                 Continue(())
                             }
                         }
                     })
                 });
-                if found {
-                    return ConnectAndRefineResult::Found(program);
+                if let Break(extended_program) = ret {
+                    return ConnectAndRefineResult::Found(extended_program);
                 }
             }
             _ => {
@@ -338,8 +433,13 @@ fn connect_and_refine(
 /// Go through each program prefix in the graph, and expand it by one
 /// instruction forward. This is done for each program, and for each
 /// instruction.
-fn expand_forward(graph: &mut Graph, inputs: &Vec<State>, ei: &EnumerationInfo) {
-    fn inner(graph: Graph, inputs: &Vec<State>, out: &mut Graph, ei: &EnumerationInfo) {
+fn expand_forward<W: Word>(graph: &mut Graph<W>, inputs: &Vec<State<W>>, ei: &EnumerationInfo<W>) {
+    fn inner<W: Word>(
+        graph: Graph<W>,
+        inputs: &Vec<State<W>>,
+        out: &mut Graph<W>,
+        ei: &EnumerationInfo<W>,
+    ) {
         match graph {
             Graph::Leaf(programs) if programs.is_empty() => {}
             Graph::Leaf(programs) => {
@@ -348,7 +448,7 @@ fn expand_forward(graph: &mut Graph, inputs: &Vec<State>, ei: &EnumerationInfo) 
                 let program = programs
                     .sample()
                     .expect("programs should not be empty here.");
-                let outputs: Vec<State> = inputs
+                let outputs: Vec<State<W>> = inputs
                     .iter()
                     .map(|input| {
                         let mut state = input.clone();
@@ -382,9 +482,9 @@ fn expand_forward(graph: &mut Graph, inputs: &Vec<State>, ei: &EnumerationInfo) 
     inner(old_graph, inputs, graph, ei);
 }
 
-fn expand_backward(_graph: &mut Graph) {}
+fn expand_backward<W: Word>(_graph: &mut Graph<W>) {}
 
-fn build_forward(graph: &mut Graph, test_cases_inputs: &[State]) {
+fn build_forward<W: Word>(graph: &mut Graph<W>, test_cases_inputs: &[State<W>]) {
     build_forwards_or_backwards(graph, test_cases_inputs, |program, state| {
         for inst in program {
             inst.run(state);
@@ -392,38 +492,48 @@ fn build_forward(graph: &mut Graph, test_cases_inputs: &[State]) {
     });
 }
 
-fn build_backward(graph: &mut Graph, test_cases_outputs: &[State]) {
-    build_forwards_or_backwards(graph, test_cases_outputs, |program, _state| {
+fn build_backward<W: Word>(graph: &mut Graph<W>, test_cases_outputs: &[State<W>]) {
+    build_forwards_or_backwards::<W>(graph, test_cases_outputs, |program, _state| {
         for _inst in program.iter().rev() {
             todo!("Backward execution not implemented yet.");
         }
     });
 }
 
-fn build_forwards_or_backwards(
-    graph: &mut Graph,
-    initial_states: &[State],
-    step: impl Fn(&Program, &mut State),
+fn build_forwards_or_backwards<W: Word>(
+    graph: &mut Graph<W>,
+    initial_states: &[State<W>],
+    step: impl Fn(&Program<W>, &mut State<W>),
 ) {
     // Rebuild the graph.
     let old_graph = std::mem::replace(graph, Graph::Nest(Default::default()));
     let mut my_outputs = Vec::with_capacity(initial_states.len());
     old_graph.for_each(&mut |programs| {
-        let program = programs
-            .sample()
-            .expect("programs should not be empty here.");
-        my_outputs.clear();
-        for i in initial_states {
-            let mut my_output = i.clone();
-            step(&program, &mut my_output);
-            my_outputs.push(my_output);
-        }
-        graph.insert_all(&my_outputs, programs);
+        programs.for_each_ref(&mut |program| {
+            my_outputs.clear();
+            for i in initial_states {
+                let mut my_output = i.clone();
+                step(&program, &mut my_output);
+                my_outputs.push(my_output);
+            }
+            graph.insert_all(&my_outputs, Programs::Program(program));
+        });
+        // let program = programs
+        //     .sample()
+        //     .expect("programs should not be empty here.");
+        // my_outputs.clear();
+        // dbg!(programs.len());
+        // for i in initial_states {
+        //     let mut my_output = i.clone();
+        //     step(&program, &mut my_output);
+        //     my_outputs.push(my_output);
+        // }
+        // graph.insert_all(&my_outputs, programs);
     });
 }
 
 /// Print information that shows us growth and memory usage of the graphs.
-fn print_stats(forward_graph: &Graph, backward_graph: &Graph) {
+fn print_stats<W: Word>(forward_graph: &Graph<W>, backward_graph: &Graph<W>) {
     macro_rules! ignore {
         ( $a:tt, $b:tt ) => {
             $b

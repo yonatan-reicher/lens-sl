@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 6a2dbbc7171211727aad984a7eb4e05df24c12fa0ca4f80694cb198c13dd09ab # shrinks to OverflowingAddU4EqAddI4Args = OverflowingAddU4EqAddI4Args { x: 3, y: 5 }
+cc 44c84e5d43b7e1e2310cc63fec19e2055293f8c2d4d5dfde99bfefdedff03a70 # shrinks to OverflowingU4AlwaysOverflowsArgs = OverflowingU4AlwaysOverflowsArgs { x: 12, overflow_amount: 1 }

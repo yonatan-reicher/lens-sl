@@ -1,9 +1,16 @@
-use std::fmt::Debug;
+use crate::all_permutations::Iter as PermutationIter;
+use crate::iter_slice_or_single::Iter as SliceOrSingle;
 use arbitrary_int::traits::Integer;
+use std::fmt::Debug;
+use std::ops::ControlFlow;
 
-use crate::word::{Word, WordOps};
+use crate::{
+    reduce_bit_width::{ImmediateInfo, Reducer},
+    word::{Word, WordOps},
+};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(test, derive(proptest_derive::Arbitrary))]
 pub enum ArgType {
     /// Register
     Reg,
@@ -16,6 +23,7 @@ pub enum ArgType {
 /// In Arm, every instruction can be conditionally executed based on the state
 /// of the flags.
 #[derive(Copy, Clone, Debug, derive_more::Display, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(test, derive(proptest_derive::Arbitrary))]
 #[display("{}", self.to_string())]
 pub enum CondCode {
     /// Always (unconditional)
@@ -86,6 +94,7 @@ macro_rules! define_instructions {
     ) => {
         /// The operation codes supported by our ISA.
         #[derive(Copy, Clone, Debug, derive_more::Display, PartialEq, Eq, Hash)]
+        #[cfg_attr(test, derive(proptest_derive::Arbitrary))]
         #[display("{}", self.to_string())]
         pub enum OpCode {
             $( $op_code, )+
@@ -123,6 +132,8 @@ define_instructions! {
     | Nop     | Unused | Unused | Unused | "nop"  |
     | Add     | Reg    | Reg    | Reg    | "add"  |
     | AddI    | Reg    | Reg    | Imm    | "add"  |
+    | Sub     | Reg    | Reg    | Reg    | "sub"  |
+    | SubI    | Reg    | Reg    | Imm    | "sub"  |
     | And     | Reg    | Reg    | Reg    | "and"  |
     | Eor     | Reg    | Reg    | Reg    | "eor"  |
     | Mov     | Reg    | Reg    | Unused | "mov"  |
@@ -144,6 +155,7 @@ define_instructions! {
     PartialOrd,
     Ord,
 )]
+#[cfg_attr(test, derive(proptest_derive::Arbitrary))]
 #[debug("r{_0}")]
 #[display("r{_0}")]
 pub struct Register(pub u8);
@@ -155,6 +167,7 @@ impl Register {
 
 /// A single instruction.
 #[derive(derive_more::Debug, derive_more::Display, PartialEq, Eq, Hash)]
+#[cfg_attr(test, derive(proptest_derive::Arbitrary))]
 #[debug("{op_code:?}{}{args:?}",
     match cond_code {
         CondCode::Al => "".to_string(),
@@ -191,11 +204,30 @@ bitflags::bitflags! {
     }
 }
 
-pub trait State {
-    type W: Word;
+#[cfg(test)]
+impl proptest::arbitrary::Arbitrary for Flags {
+    type Parameters = ();
+    type Strategy = proptest::strategy::BoxedStrategy<Self>;
 
-    fn get_register(&self, reg: Register) -> <Self::W as Word>::Unsigned;
-    fn set_register(&mut self, reg: Register, value: <Self::W as Word>::Unsigned);
+    #[rustfmt::skip]
+    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+        use proptest::prelude::*;
+        (any::<bool>(), any::<bool>(), any::<bool>(), any::<bool>())
+            .prop_map(|(z, n, c, v)| {
+                let mut flags = Flags::empty();
+                if z { flags |= Flags::Z; }
+                if n { flags |= Flags::N; }
+                if c { flags |= Flags::C; }
+                if v { flags |= Flags::V; }
+                flags
+            })
+            .boxed()
+    }
+}
+
+pub trait State<W: Word> {
+    fn get_register(&self, reg: Register) -> W::Unsigned;
+    fn set_register(&mut self, reg: Register, value: W::Unsigned);
     fn get_flags(&self) -> Flags;
     fn set_flags(&mut self, flags: Flags);
 }
@@ -206,7 +238,7 @@ enum AddOrSub {
     Sub,
 }
 
-fn run_addition_or_subtraction<W: Word, S: State<W = W>>(
+fn run_addition_or_subtraction<W: Word, S: State<W>>(
     state: &mut S,
     left: W::Unsigned,
     right: W::Unsigned,
@@ -253,7 +285,7 @@ fn run_addition_or_subtraction<W: Word, S: State<W = W>>(
     state.set_flags(flags);
 }
 
-fn run_instruction<W: Word, S: State<W = W>>(inst: &Inst<S::W>, state: &mut S) {
+fn run_instruction<W: Word, S: State<W>>(inst: &Inst<W>, state: &mut S) {
     /// Get a register value.
     macro_rules! r {
         ($i:literal u) => {{
@@ -305,6 +337,20 @@ fn run_instruction<W: Word, S: State<W = W>>(inst: &Inst<S::W>, state: &mut S) {
             Register(inst.args[0].as_()),
             AddOrSub::Add,
         ),
+        Sub => run_addition_or_subtraction(
+            state,
+            r![1 u],
+            r![2 u],
+            Register(inst.args[0].as_()),
+            AddOrSub::Sub,
+        ),
+        SubI => run_addition_or_subtraction(
+            state,
+            r![1 u],
+            imm![2 u],
+            Register(inst.args[0].as_()),
+            AddOrSub::Sub,
+        ),
         And => set!(r![0 u] <- r![1 u] & r![2 u]),
         Eor => set!(r![0 u] <- r![1 u] ^ r![2 u]),
         Mov => set!(r![0 u] <- r![1 u]),
@@ -315,7 +361,7 @@ fn run_instruction<W: Word, S: State<W = W>>(inst: &Inst<S::W>, state: &mut S) {
 }
 
 impl<W: Word> Inst<W> {
-    pub fn run<S: State<W = W>>(&self, state: &mut S) {
+    pub fn run<S: State<W>>(&self, state: &mut S) {
         run_instruction(self, state)
     }
 
@@ -340,6 +386,63 @@ impl<W: Word> Inst<W> {
             format!("{op_code}{cond_code} {}, {}, {}", args[0], args[1], args[2])
         }
     }
+
+    pub fn reduce<WSmall: Word>(&self, reducer: &mut Reducer<W, WSmall>) -> Inst<WSmall> {
+        fn reduce_arg<W: Word, WSmall: Word>(
+            reducer: &mut Reducer<W, WSmall>,
+            arg: W::Unsigned,
+            arg_type: ArgType,
+            info: &ImmediateInfo,
+        ) -> WSmall::Unsigned {
+            match arg_type {
+                ArgType::Imm => reducer.reduce(arg, info),
+                ArgType::Reg | ArgType::Unused => arg.as_(),
+            }
+        }
+
+        let arg_types = self.op_code.arg_types();
+        let info = ImmediateInfo {
+            // TODO: is_shift: op_code.is_shift_instruction(),
+            is_shift: false,
+        };
+        Inst {
+            op_code: self.op_code,
+            cond_code: self.cond_code,
+            args: [
+                reduce_arg(reducer, self.args[0], arg_types[0], &info),
+                reduce_arg(reducer, self.args[1], arg_types[1], &info),
+                reduce_arg(reducer, self.args[2], arg_types[2], &info),
+            ],
+        }
+    }
+
+    pub fn extend<WBig: Word>(
+        &self,
+        reducer: &Reducer<WBig, W>,
+    ) -> impl Iterator<Item = Inst<WBig>> + Clone {
+        fn extend_arg<WSmall: Word, WBig: Word>(
+            reducer: &Reducer<WBig, WSmall>,
+            arg: WSmall::Unsigned,
+            arg_type: ArgType,
+        ) -> SliceOrSingle<'_, WBig::Unsigned> {
+            match arg_type {
+                ArgType::Imm => reducer.extend(arg),
+                ArgType::Reg | ArgType::Unused => SliceOrSingle::Single(arg.as_()),
+            }
+        }
+        // If only we had do notation 🥹
+        let args = self.args;
+        let arg_types = self.op_code.arg_types();
+        extend_arg(reducer, args[0], arg_types[0]).flat_map(move |arg0| {
+            extend_arg(reducer, args[1], arg_types[1]).flat_map(move |arg1| {
+                extend_arg(reducer, args[2], arg_types[2]).map(move |arg2| Inst {
+                    op_code: self.op_code,
+                    cond_code: self.cond_code,
+                    args: [arg0, arg1, arg2],
+                })
+            })
+        })
+    }
 }
 
 /// A macro to create an instruction more easily.
@@ -347,14 +450,14 @@ impl<W: Word> Inst<W> {
 macro_rules! inst {
     ( $op_code:ident $cond_code:ident, $( $arg:expr ),* $(,)? ) => {
         {
-            let mut args_iter = [$( $arg as _ ),*].iter();
+            let args_iter = [$( $arg ),*];
             $crate::Inst {
                 op_code: $crate::OpCode::$op_code,
                 cond_code: $crate::CondCode::$cond_code,
                 args: [
-                    *args_iter.next().unwrap_or(&0),
-                    *args_iter.next().unwrap_or(&0),
-                    *args_iter.next().unwrap_or(&0),
+                    *args_iter.get(0).unwrap_or(&Default::default()),
+                    *args_iter.get(1).unwrap_or(&Default::default()),
+                    *args_iter.get(2).unwrap_or(&Default::default()),
                 ],
             }
         }
@@ -362,4 +465,58 @@ macro_rules! inst {
     ( $op_code:ident, $( $arg:expr ),* $(,)? ) => {
         inst!($op_code Al, $( $arg ),* )
     };
+}
+
+pub fn extend_program_for_each<F, T, WBig, WSmall>(
+    program: &[Inst<WSmall>],
+    reducer: &Reducer<WBig, WSmall>,
+    mut f: F,
+) -> ControlFlow<T>
+where
+    F: FnMut(&[Inst<WBig>]) -> ControlFlow<T>,
+    WBig: Word,
+    WSmall: Word,
+{
+    let mut ret = vec![];
+    let iters: Vec<_> = program.iter().map(|inst| inst.extend(reducer)).collect();
+    let mut iter = PermutationIter::new(iters.as_slice());
+    while let Some(perm) = iter.next_slice() {
+        ret.clear();
+        ret.extend_from_slice(perm);
+        f(&ret)?;
+    }
+    ControlFlow::Continue(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::word::prelude::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn basic_extend_test() {
+        let program: [Inst<Word64>; _] = [inst!(AddI, 0, 1, 1242), inst!(Sub, 2, 0, 1)];
+        let mut reducer = Reducer::<Word64, Word4>::default();
+        // Add another constant that clashes with 1242 when reduced.
+        reducer.reduce(1242 + 16, &ImmediateInfo { is_shift: false });
+        let mut programs = HashSet::new();
+        let program_reduced = program.map(|inst| inst.reduce(&mut reducer));
+        let _ = extend_program_for_each(&program_reduced, &reducer, |extended_program| {
+            for inst in extended_program {
+                println!("{}", inst);
+            }
+            println!("---");
+            programs.insert(extended_program.to_vec());
+            ControlFlow::<(), ()>::Continue(())
+        });
+        assert_eq!(
+            programs,
+            [
+                program.to_vec(),
+                vec![inst!(AddI, 0, 1, 1242 + 16), inst!(Sub, 2, 0, 1),],
+            ]
+            .into()
+        );
+    }
 }
