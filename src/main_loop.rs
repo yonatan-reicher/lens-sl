@@ -205,16 +205,6 @@ fn synthesize<WT: Word, W: Word>(
         registers,
         immediates,
     };
-    // // Show the reducer
-    // println!("Reducer contents:");
-    // for reduced in reducer.immediates() {
-    //     let originals: Vec<WT::Unsigned> = reducer
-    //         .extend(reduced)
-    //         .map(|v| v.as_())
-    //         .collect();
-    //     println!("  {reduced} => {:?}", originals);
-    // }
-    // panic!("Stop before synthesis loop.");
     let mut globals = Globals {
         oracle,
         oracle_reduced,
