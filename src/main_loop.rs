@@ -313,7 +313,7 @@ fn connect_and_refine<WT: Word, WS: Word>(
                     debug_assert_eq!(prefix.len(), globals.forward_length);
                     postfixes.try_for_each_ref(&mut |postfix| {
                         debug_assert_eq!(postfix.len(), globals.backward_length);
-                        // Build the current candidate program.
+                        // Build the current candidate (reduced) program.
                         program.clear();
                         program.extend(prefix.iter());
                         program.push(inst);
