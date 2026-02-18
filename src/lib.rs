@@ -51,6 +51,6 @@ mod iter_slice_or_single;
 
 // Let's expose just the necessary items.
 
-pub use isa::{CondCode, Flags, Inst, OpCode, Register};
+pub use isa::{CondCode, Flags, Inst, OpCode, Register, State};
 pub use main_loop::optimize;
 pub use word::{Word, Word4, Word8, Word64};

@@ -191,7 +191,7 @@ impl<W: Word> Clone for Inst<W> {
 }
 
 bitflags::bitflags! {
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
     pub struct Flags: u8 {
         /// Zero - is the result zero? Disregard overflow and carry.
         const Z = 0b0001;

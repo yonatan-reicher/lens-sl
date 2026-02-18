@@ -2,6 +2,8 @@
 name = "lens-sl"
 version = "0.1.0"
 edition = "2024"
+# We have multiple binaries in this package, use the main file as the default one.
+default-run = "lens-sl"
 
 [dependencies]
 arbitrary-int = { git = "https://github.com/danlehmann/arbitrary-int", rev = "0b888b8" }
