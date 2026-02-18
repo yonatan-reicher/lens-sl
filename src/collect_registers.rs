@@ -59,3 +59,22 @@ impl Collector {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::inst;
+    use crate::Word64;
+    use super::*;
+
+    #[test]
+    fn test_1() {
+        let mut collector = Collector::new();
+        collector.program::<Word64>(&[
+            inst!(Add, 0, 1, 2),
+            inst!(Add, 0, 1, 2),
+            inst!(Sub, 0, 3, 2),
+            inst!(SubI, 0, 3, 5),
+        ]);
+        assert_eq!(collector.registers, vec![Register(0), Register(1), Register(2), Register(3)]);
+    }
+}
