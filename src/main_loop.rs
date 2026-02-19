@@ -188,7 +188,14 @@ pub fn optimize<WT: Word, WS: Word>(
         test_cases: test_cases_reduced,
     };
 
-    synthesize::<WT, WS>(&registers, &immediates, oracle, oracle_reduced, reducer)
+    synthesize::<WT, WS>(
+        &registers,
+        &immediates,
+        oracle,
+        oracle_reduced,
+        reducer,
+        program.len(),
+    )
 }
 
 fn synthesize<WT: Word, W: Word>(
@@ -197,6 +204,9 @@ fn synthesize<WT: Word, W: Word>(
     oracle: impl Oracle<WT>,
     oracle_reduced: impl Oracle<W>,
     reducer: Reducer<WT, W>,
+    // The length of the original program.
+    // In the future, this could be max_cost.
+    original_length: usize,
 ) -> Program<WT> {
     // The forward and backward graphs start while having the empty program.
     let mut forward_graph = Graph::Leaf(Programs::program(vec![]));
@@ -246,6 +256,9 @@ fn synthesize<WT: Word, W: Word>(
                 }
                 ConnectAndRefineResult::Continue => {}
             }
+        }
+        if globals.forward_length + globals.backward_length + 1 == original_length - 1 {
+            panic!("could not find a program better than the original one.");
         }
         // println!("Forward Graph: \n{}", forward_graph.pretty_print());
         // println!("Backward Graph: \n{}", backward_graph.pretty_print());
