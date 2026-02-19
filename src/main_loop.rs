@@ -321,10 +321,6 @@ fn connect_and_refine<WT: Word, WS: Word>(
                         program.extend(prefix.iter());
                         program.push(inst);
                         program.extend(postfix.iter());
-                        // println!("Found candidate program:");
-                        // for inst in &program {
-                        //     println!("  {inst}");
-                        // }
                         match globals.oracle_reduced.check_program(&program) {
                             // Found!
                             Ok(()) => {
@@ -392,12 +388,10 @@ fn connect_and_refine<WT: Word, WS: Word>(
     }
 
     if matches!(forward_graph, Graph::Leaf(..)) {
-        println!("Building forward");
         build_forward(forward_graph, &globals.inputs[k - 1..]);
     }
 
     if matches!(backward_graph, Graph::Leaf(..)) {
-        println!("Building backward");
         build_backward(backward_graph, &globals.outputs[k - 1..]);
     }
 
@@ -412,8 +406,6 @@ fn connect_and_refine<WT: Word, WS: Word>(
         forward_output.clone_to(&mut next);
         inst.run(&mut next);
         if let Some(backward_subgraph) = backward_outputs.get_mut(&next) {
-            // println!("  Found matching state: {next}");
-            // println!("  k = {k}  inputs.len()={}", inputs.len());
             let res = connect_and_refine(globals, forward_subgraph, backward_subgraph, inst, k + 1);
             match res {
                 ConnectAndRefineResult::Found(prog) => return ConnectAndRefineResult::Found(prog),
