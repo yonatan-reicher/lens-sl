@@ -4,11 +4,11 @@
 use crate::collect_registers::{self, Collector};
 use crate::enumerate::{EnumerationInfo, Enumerator};
 use crate::graph;
+use crate::inst;
 use crate::isa::{self, Flags, Inst, Register, extend_program_for_each};
 use crate::programs;
 use crate::reduce_bit_width::Reducer;
 use crate::word::prelude::*;
-use crate::inst;
 use rustc_hash::FxHashSet;
 use std::ops::ControlFlow::{Break, Continue};
 use std::rc::Rc;
