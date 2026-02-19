@@ -321,15 +321,6 @@ fn connect_and_refine<WT: Word, WS: Word>(
                         program.extend(prefix.iter());
                         program.push(inst);
                         program.extend(postfix.iter());
-                        if program == vec![
-                            inst!(SubI, 3.as_(), 0.as_(), 1.as_()),
-                            inst!(Orr, 3.as_(), 3.as_(), 0.as_()),
-                            inst!(AddI, 3.as_(), 3.as_(), 1.as_()),
-                            inst!(And, 0.as_(), 3.as_(), 0.as_()),
-                            inst!(AddI, 0.as_(), 0.as_(), 10.as_()),
-                        ] {
-                            panic!("Here we are?!");
-                        }
                         // println!("Found candidate program:");
                         // for inst in &program {
                         //     println!("  {inst}");
