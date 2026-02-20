@@ -324,7 +324,7 @@ fn connect_and_refine<WT: Word, WS: Word>(
                         match globals.oracle_reduced.check_program(&program) {
                             // Found!
                             Ok(()) => {
-                                let ret = extend_program_for_each(
+                                extend_program_for_each(
                                     &program,
                                     &globals.extender,
                                     |extended_program| match globals
@@ -334,8 +334,7 @@ fn connect_and_refine<WT: Word, WS: Word>(
                                         Ok(()) => Break(extended_program.to_vec()),
                                         Err(_) => Continue(()),
                                     },
-                                );
-                                ret
+                                )
                             }
                             Err(counter_example) => {
                                 if !counter_examples.contains(counter_example) {
