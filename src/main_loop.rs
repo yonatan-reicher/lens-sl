@@ -335,26 +335,7 @@ fn connect_and_refine<WT: Word, WS: Word>(
                                         Err(_) => Continue(()),
                                     },
                                 );
-                                match ret {
-                                    Break(extended_program) => Break(extended_program),
-                                    Continue(()) => {
-                                        println!("Should have found the extended program.");
-                                        println!("Reduced program:");
-                                        for inst in &program {
-                                            println!("  {inst}");
-                                        }
-                                        println!("Reducer contents:");
-                                        for reduced in globals.extender.immediates() {
-                                            let originals: Vec<WT::Unsigned> = globals
-                                                .extender
-                                                .extend(reduced)
-                                                .map(|v| v.as_())
-                                                .collect();
-                                            println!("  {reduced} => {:?}", originals);
-                                        }
-                                        panic!("Should have found the reduced program.");
-                                    }
-                                }
+                                ret
                             }
                             Err(counter_example) => {
                                 if !counter_examples.contains(counter_example) {
