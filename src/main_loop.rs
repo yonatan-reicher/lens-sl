@@ -323,19 +323,17 @@ fn connect_and_refine<WT: Word, WS: Word>(
                         program.extend(postfix.iter());
                         match globals.oracle_reduced.check_program(&program) {
                             // Found!
-                            Ok(()) => {
-                                extend_program_for_each(
-                                    &program,
-                                    &globals.extender,
-                                    |extended_program| match globals
-                                        .oracle
-                                        .check_program(extended_program)
-                                    {
-                                        Ok(()) => Break(extended_program.to_vec()),
-                                        Err(_) => Continue(()),
-                                    },
-                                )
-                            }
+                            Ok(()) => extend_program_for_each(
+                                &program,
+                                &globals.extender,
+                                |extended_program| match globals
+                                    .oracle
+                                    .check_program(extended_program)
+                                {
+                                    Ok(()) => Break(extended_program.to_vec()),
+                                    Err(_) => Continue(()),
+                                },
+                            ),
                             Err(counter_example) => {
                                 if !counter_examples.contains(counter_example) {
                                     println!("Oracle found counter example.");
