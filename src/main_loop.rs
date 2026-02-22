@@ -463,6 +463,8 @@ fn build_backward<W: Word>(graph: &mut Graph<W>, test_cases_outputs: &[State<W>]
     });
 }
 
+/// Takes a graph, a slice of inputs, and a stepping function. Modifies the graph, by making the
+/// graph deeper by the length of the slice.
 fn build_forwards_or_backwards<W: Word>(
     graph: &mut Graph<W>,
     initial_states: &[State<W>],
