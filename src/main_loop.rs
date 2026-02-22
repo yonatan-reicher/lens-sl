@@ -530,3 +530,26 @@ fn print_stats<W: Word>(forward_graph: &Graph<W>, backward_graph: &Graph<W>) {
         backward_graph.depth()
     ];
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::inst;
+    use proptest::prelude::*;
+    use proptest::property_test;
+    use super::*;
+
+    #[property_test]
+    fn test_build_forward_empty_slice(
+        graph: Graph::<Word64>,
+    ) {
+        let mut graph = Graph::Nest(Default::default());
+        let programs = Programs::List(vec![
+            Programs::Program(vec![inst!(AddI, 0, 0, 5)]),
+            Programs::Program(vec![inst!(AddI, 0, 0, 3)]),
+        ]);
+        let s1 = State::<Word64>::default();
+        graph.insert_all(&[s1], programs);
+        assert_eq!(graph.depth(), 0);
+        build_forward(&mut graph, &[]);
+    }
+}
