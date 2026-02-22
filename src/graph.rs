@@ -1,5 +1,5 @@
 use rustc_hash::FxHashMap;
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 use std::hash::Hash;
 
 pub trait Programs: Default + Into<Vec<Self::Program>> {
@@ -208,3 +208,29 @@ impl<S: Clone + Eq + Hash, P: Programs> Iterator for GraphIterator<S, P> {
     }
 }
 */
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    impl<S, P> Arbitrary for Graph<S, P>
+    where
+        P: Arbitrary + Debug + Programs + 'static,
+        P::Strategy: 'static,
+        S: Arbitrary + Debug + Eq + Hash + 'static,
+        S::Parameters: Clone,
+    {
+        type Parameters = (S::Parameters, P::Parameters, usize);
+        type Strategy = BoxedStrategy<Self>;
+
+        fn arbitrary_with(args: Self::Parameters) -> Self::Strategy {
+            let leaf = any_with::<P>(args.1).prop_map(Graph::Leaf);
+            leaf.prop_recursive(8, 256, 10, move |inner| {
+                prop::collection::hash_map(any_with::<S>(args.0.clone()), inner, 0..args.2)
+                    .prop_map(|x| Graph::Nest(x.into_iter().collect()))
+            })
+            .boxed()
+        }
+    }
+}
