@@ -82,6 +82,7 @@ where
     /// Insert the given programs under the given set of states. The length of
     /// the slice of output states must be of the same depth as the graph.
     pub fn insert_all(&mut self, outputs: &[S], progs: P) {
+        debug_assert!(!progs.is_empty());
         match self {
             Self::Leaf(programs) => {
                 debug_assert!(outputs.is_empty());
