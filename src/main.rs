@@ -12,6 +12,13 @@ fn main() {
         ],
         &[
             &[(Register(0), 0), (Register(1), 0)],
+            &[(Register(0), 1), (Register(1), 0)],
+            &[(Register(0), 0), (Register(1), 1)],
+            &[(Register(0), 1), (Register(1), 1)],
+            &[(Register(0), 20), (Register(1), 1)],
+            &[(Register(0), 8), (Register(1), 1)],
+            &[(Register(0), 93), (Register(1), 1)],
+            &[(Register(0), 92), (Register(1), 11)],
         ],
     );
     println!("Optimized program:");
