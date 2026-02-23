@@ -4,7 +4,6 @@
 use crate::collect_registers::{self, Collector};
 use crate::enumerate::{EnumerationInfo, Enumerator};
 use crate::graph;
-use crate::inst;
 use crate::isa::{self, Flags, Inst, Register, extend_program_for_each};
 use crate::programs;
 use crate::reduce_bit_width::Reducer;
@@ -304,6 +303,7 @@ fn connect_and_refine<WT: Word, WS: Word>(
     k: usize,
 ) -> ConnectAndRefineResult<WT> {
     if k > globals.inputs.len() {
+        let mut counter_example_added = false;
         match (&forward_graph, &backward_graph) {
             (Graph::Leaf(prefixes), Graph::Leaf(postfixes)) => {
                 // We found a class of candidate programs.
@@ -323,39 +323,17 @@ fn connect_and_refine<WT: Word, WS: Word>(
                         program.extend(postfix.iter());
                         match globals.oracle_reduced.check_program(&program) {
                             // Found!
-                            Ok(()) => {
-                                let ret = extend_program_for_each(
-                                    &program,
-                                    &globals.extender,
-                                    |extended_program| match globals
-                                        .oracle
-                                        .check_program(extended_program)
-                                    {
-                                        Ok(()) => Break(extended_program.to_vec()),
-                                        Err(_) => Continue(()),
-                                    },
-                                );
-                                match ret {
-                                    Break(extended_program) => Break(extended_program),
-                                    Continue(()) => {
-                                        println!("Should have found the extended program.");
-                                        println!("Reduced program:");
-                                        for inst in &program {
-                                            println!("  {inst}");
-                                        }
-                                        println!("Reducer contents:");
-                                        for reduced in globals.extender.immediates() {
-                                            let originals: Vec<WT::Unsigned> = globals
-                                                .extender
-                                                .extend(reduced)
-                                                .map(|v| v.as_())
-                                                .collect();
-                                            println!("  {reduced} => {:?}", originals);
-                                        }
-                                        panic!("Should have found the reduced program.");
-                                    }
-                                }
-                            }
+                            Ok(()) => extend_program_for_each(
+                                &program,
+                                &globals.extender,
+                                |extended_program| match globals
+                                    .oracle
+                                    .check_program(extended_program)
+                                {
+                                    Ok(()) => Break(extended_program.to_vec()),
+                                    Err(_) => Continue(()),
+                                },
+                            ),
                             Err(counter_example) => {
                                 if !counter_examples.contains(counter_example) {
                                     println!("Oracle found counter example.");
@@ -368,6 +346,7 @@ fn connect_and_refine<WT: Word, WS: Word>(
                                     counter_examples.insert(counter_example.clone());
                                     globals.inputs.push(counter_example.0.clone());
                                     globals.outputs.push(counter_example.1.clone());
+                                    counter_example_added = true;
                                 }
                                 Continue(())
                             }
@@ -385,6 +364,13 @@ fn connect_and_refine<WT: Word, WS: Word>(
                 panic!();
             }
         }
+        if !counter_example_added {
+            // When we don't find a counter-example, we know that we are already at the deepest part of
+            // the graph, a leaf. When you are at a leaf, it means you don't have any more input-output
+            // pairs to match between the forward and backward graph, so you can't connect the forward
+            // and backwards graphs. That is to say, you are done!
+            return ConnectAndRefineResult::Continue;
+        }
     }
 
     if matches!(forward_graph, Graph::Leaf(..)) {
@@ -395,6 +381,7 @@ fn connect_and_refine<WT: Word, WS: Word>(
         build_backward(backward_graph, &globals.outputs[k - 1..]);
     }
 
+    // Must be nests, because build_forwards/backwards always turn leaves into nests.
     let Graph::Nest(forward_outputs) = forward_graph else {
         panic!();
     };
@@ -491,7 +478,11 @@ fn build_forwards_or_backwards<W: Word>(
     initial_states: &[State<W>],
     step: impl Fn(&Program<W>, &mut State<W>),
 ) {
+    assert!(!initial_states.is_empty(), "Must give initial states to build the graph from.");
     // Rebuild the graph.
+    // TODO: We can probably avoid completely rebuilding by just removing and adding programs on
+    // the same data-structure. This would reduce allocations, but you need to mark which programs
+    // have been visited, or store them in a list.
     let old_graph = std::mem::replace(graph, Graph::Nest(Default::default()));
     let mut my_outputs = Vec::with_capacity(initial_states.len());
     old_graph.for_each(&mut |programs| {
@@ -526,7 +517,7 @@ fn print_stats<W: Word>(forward_graph: &Graph<W>, backward_graph: &Graph<W>) {
         };
     }
     macro_rules! print_row {
-        ( $($e:expr),+ ) => {
+        ( $($e:expr),+ $(,)? ) => {
             println!(
                 concat!( $( ignore!($e, "{:<15}") ),+ ),
                 $( $e ),+
@@ -541,7 +532,6 @@ fn print_stats<W: Word>(forward_graph: &Graph<W>, backward_graph: &Graph<W>) {
         forward_graph.n_nodes(),
         forward_graph.n_leaves(),
         forward_graph.n_programs(),
-        forward_graph.depth()
     ];
     print_row![
         "Backward",
@@ -549,6 +539,5 @@ fn print_stats<W: Word>(forward_graph: &Graph<W>, backward_graph: &Graph<W>) {
         backward_graph.n_nodes(),
         backward_graph.n_leaves(),
         backward_graph.n_programs(),
-        backward_graph.depth()
     ];
 }
