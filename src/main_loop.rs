@@ -303,6 +303,7 @@ fn connect_and_refine<WT: Word, WS: Word>(
     k: usize,
 ) -> ConnectAndRefineResult<WT> {
     if k > globals.inputs.len() {
+        let mut counter_example_added = false;
         match (&forward_graph, &backward_graph) {
             (Graph::Leaf(prefixes), Graph::Leaf(postfixes)) => {
                 // We found a class of candidate programs.
@@ -345,6 +346,7 @@ fn connect_and_refine<WT: Word, WS: Word>(
                                     counter_examples.insert(counter_example.clone());
                                     globals.inputs.push(counter_example.0.clone());
                                     globals.outputs.push(counter_example.1.clone());
+                                    counter_example_added = true;
                                 }
                                 Continue(())
                             }
@@ -361,6 +363,13 @@ fn connect_and_refine<WT: Word, WS: Word>(
                 println!("Backward Graph: \n{}", backward_graph.pretty_print());
                 panic!();
             }
+        }
+        if !counter_example_added {
+            // When we don't find a counter-example, we know that we are already at the deepest part of
+            // the graph, a leaf. When you are at a leaf, it means you don't have any more input-output
+            // pairs to match between the forward and backward graph, so you can't connect the forward
+            // and backwards graphs. That is to say, you are done!
+            return ConnectAndRefineResult::Continue;
         }
     }
 
@@ -468,6 +477,7 @@ fn build_forwards_or_backwards<W: Word>(
     initial_states: &[State<W>],
     step: impl Fn(&Program<W>, &mut State<W>),
 ) {
+    assert!(!initial_states.is_empty(), "Must give initial states to build the graph from.");
     // Rebuild the graph.
     let old_graph = std::mem::replace(graph, Graph::Nest(Default::default()));
     let mut my_outputs = Vec::with_capacity(initial_states.len());
