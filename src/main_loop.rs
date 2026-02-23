@@ -479,6 +479,9 @@ fn build_forwards_or_backwards<W: Word>(
 ) {
     assert!(!initial_states.is_empty(), "Must give initial states to build the graph from.");
     // Rebuild the graph.
+    // TODO: We can probably avoid completely rebuilding by just removing and adding programs on
+    // the same data-structure. This would reduce allocations, but you need to mark which programs
+    // have been visited, or store them in a list.
     let old_graph = std::mem::replace(graph, Graph::Nest(Default::default()));
     let mut my_outputs = Vec::with_capacity(initial_states.len());
     old_graph.for_each(&mut |programs| {
