@@ -73,7 +73,7 @@ where
                     .values()
                     .map(|sub_graph| sub_graph.depth())
                     .max()
-                    .unwrap()
+                    .unwrap_or(0)
                     + 1
             }
         }

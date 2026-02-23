@@ -373,7 +373,6 @@ fn connect_and_refine<WT: Word, WS: Word>(
         build_backward(backward_graph, &globals.outputs[k - 1..]);
     }
 
-    // Must be nests, because build_forwards/backwards always turn leaves into nests.
     let Graph::Nest(forward_outputs) = forward_graph else {
         panic!();
     };
@@ -470,15 +469,9 @@ fn build_forwards_or_backwards<W: Word>(
     initial_states: &[State<W>],
     step: impl Fn(&Program<W>, &mut State<W>),
 ) {
-    // If the given inputs slice is empty, then we have no
-    if initial_states.is_empty() {
-        return;
-    }
     // Rebuild the graph.
     let old_graph = std::mem::replace(graph, Graph::Nest(Default::default()));
     let mut my_outputs = Vec::with_capacity(initial_states.len());
-    println!("Graph:");
-    println!("{}", old_graph.pretty_print());
     old_graph.for_each(&mut |programs| {
         programs.for_each_ref(&mut |program| {
             my_outputs.clear();
