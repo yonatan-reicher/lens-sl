@@ -381,6 +381,7 @@ fn connect_and_refine<WT: Word, WS: Word>(
         build_backward(backward_graph, &globals.outputs[k - 1..]);
     }
 
+    // Must be nests, because build_forwards/backwards always turn leaves into nests.
     let Graph::Nest(forward_outputs) = forward_graph else {
         panic!();
     };
