@@ -516,7 +516,7 @@ fn print_stats<W: Word>(forward_graph: &Graph<W>, backward_graph: &Graph<W>) {
         };
     }
     macro_rules! print_row {
-        ( $($e:expr),+ ) => {
+        ( $($e:expr),+ $(,)? ) => {
             println!(
                 concat!( $( ignore!($e, "{:<15}") ),+ ),
                 $( $e ),+
@@ -531,7 +531,6 @@ fn print_stats<W: Word>(forward_graph: &Graph<W>, backward_graph: &Graph<W>) {
         forward_graph.n_nodes(),
         forward_graph.n_leaves(),
         forward_graph.n_programs(),
-        forward_graph.depth()
     ];
     print_row![
         "Backward",
@@ -539,6 +538,5 @@ fn print_stats<W: Word>(forward_graph: &Graph<W>, backward_graph: &Graph<W>) {
         backward_graph.n_nodes(),
         backward_graph.n_leaves(),
         backward_graph.n_programs(),
-        backward_graph.depth()
     ];
 }
