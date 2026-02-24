@@ -472,7 +472,10 @@ fn build_forwards_or_backwards<W: Word>(
     initial_states: &[State<W>],
     step: impl Fn(&Program<W>, &mut State<W>),
 ) {
-    assert!(!initial_states.is_empty(), "Must give initial states to build the graph from.");
+    assert!(
+        !initial_states.is_empty(),
+        "Must give initial states to build the graph from."
+    );
     // Rebuild the graph.
     // TODO: We can probably avoid completely rebuilding by just removing and adding programs on
     // the same data-structure. This would reduce allocations, but you need to mark which programs
