@@ -5,10 +5,10 @@ use crate::collect_registers::{self, Collector};
 use crate::enumerate::{EnumerationInfo, Enumerator};
 use crate::graph;
 use crate::isa::{self, Flags, Inst, Register, extend_program_for_each};
+use crate::oracle::{self, Oracle, test_cases::TestCasesOracle};
 use crate::programs;
 use crate::reduce_bit_width::Reducer;
 use crate::word::prelude::*;
-use rustc_hash::FxHashSet;
 use std::ops::ControlFlow::{Break, Continue};
 use std::rc::Rc;
 
@@ -94,6 +94,12 @@ impl<W: Word> collect_registers::State<W> for State<W> {
     }
 }
 
+impl<W: Word> oracle::test_cases::State for State<W> {
+    fn clone_to(&self, output: &mut Self) {
+        self.clone_to(output);
+    }
+}
+
 // =========================================== Graph ==============================================
 
 type Program<W> = programs::Program<Inst<W>>;
@@ -104,31 +110,11 @@ type Graph<W> = graph::Graph<State<W>, Programs<W>>;
 
 // ========================================== Oracle ==============================================
 
-type CounterExample<W> = (State<W>, State<W>);
-
-/// In the future, we will have a solver implement this trait.
-trait Oracle<W: Word> {
-    fn check_program(&mut self, program: &[Inst<W>]) -> Result<(), &CounterExample<W>>;
-}
-
-struct TestCasesOracle<W: Word> {
-    test_cases: Vec<CounterExample<W>>,
-}
-
-impl<W: Word> Oracle<W> for TestCasesOracle<W> {
-    fn check_program(&mut self, program: &[Inst<W>]) -> Result<(), &CounterExample<W>> {
-        // Maybe we could not check test cases again, but it's probably not really slowing us down.
-        let mut output = State::default();
-        for test @ (input, expected_output) in self.test_cases.iter() {
-            input.clone_to(&mut output);
-            for inst in program {
-                inst.run(&mut output);
-            }
-            if &output != expected_output {
-                return Err(test);
-            }
+impl<W: Word> oracle::test_cases::Program<State<W>> for [Inst<W>] {
+    fn run(&self, state: &mut State<W>) {
+        for inst in self {
+            inst.run(state);
         }
-        Ok(())
     }
 }
 
@@ -200,8 +186,8 @@ pub fn optimize<WT: Word, WS: Word>(
 fn synthesize<WT: Word, W: Word>(
     registers: &[Register],
     immediates: &[W::Unsigned],
-    oracle: impl Oracle<WT>,
-    oracle_reduced: impl Oracle<W>,
+    oracle: impl Oracle<[Inst<WT>], State<WT>>,
+    oracle_reduced: impl Oracle<[Inst<W>], State<W>>,
     reducer: Reducer<WT, W>,
     // The length of the original program.
     // In the future, this could be max_cost.
@@ -227,9 +213,9 @@ fn synthesize<WT: Word, W: Word>(
     println!("Checking empty program");
     match globals.oracle_reduced.check_program(&[]) {
         Ok(()) => return vec![], // Turns out it's actually the empty program 🤷
-        Err(counter_example) => {
-            globals.inputs.push(counter_example.0.clone());
-            globals.outputs.push(counter_example.1.clone());
+        Err((inp, out)) => {
+            globals.inputs.push(inp);
+            globals.outputs.push(out);
         }
     }
     loop {
@@ -282,7 +268,12 @@ enum ConnectAndRefineResult<W: Word> {
 }
 
 /// WT - word for the target program. WS - word for the synthesis process.
-struct Globals<WT: Word, WS: Word, OT: Oracle<WT>, OS: Oracle<WS>> {
+struct Globals<
+    WT: Word,
+    WS: Word,
+    OT: Oracle<[Inst<WT>], State<WT>>,
+    OS: Oracle<[Inst<WS>], State<WS>>,
+> {
     oracle: OT,
     /// The oracle that checks program in the reduced word size.
     oracle_reduced: OS,
@@ -295,7 +286,12 @@ struct Globals<WT: Word, WS: Word, OT: Oracle<WT>, OS: Oracle<WS>> {
 }
 
 fn connect_and_refine<WT: Word, WS: Word>(
-    globals: &mut Globals<WT, WS, impl Oracle<WT>, impl Oracle<WS>>,
+    globals: &mut Globals<
+        WT,
+        WS,
+        impl Oracle<[Inst<WT>], State<WT>>,
+        impl Oracle<[Inst<WS>], State<WS>>,
+    >,
     forward_graph: &mut Graph<WS>,
     backward_graph: &mut Graph<WS>,
     inst: Inst<WS>,
@@ -311,7 +307,6 @@ fn connect_and_refine<WT: Word, WS: Word>(
                 // First, make a buffer to hold the program.
                 let mut program =
                     Vec::with_capacity(globals.forward_length + 1 + globals.backward_length);
-                let mut counter_examples = FxHashSet::default();
                 let ret = prefixes.try_for_each_ref(&mut |prefix| {
                     debug_assert_eq!(prefix.len(), globals.forward_length);
                     postfixes.try_for_each_ref(&mut |postfix| {
@@ -334,18 +329,17 @@ fn connect_and_refine<WT: Word, WS: Word>(
                                     Err(_) => Continue(()),
                                 },
                             ),
-                            Err(counter_example) => {
-                                if !counter_examples.contains(counter_example) {
+                            Err((inp, out)) => {
+                                if !has_counter_example_been_seen(globals, &inp, &out) {
                                     println!("Oracle found counter example.");
-                                    println!("  Input: {:?}", &counter_example.0);
-                                    println!("  Expected output: {:?}", &counter_example.1);
+                                    println!("  Input: {:?}", &inp);
+                                    println!("  Expected output: {:?}", &out);
                                     println!("  For program:");
                                     for inst in &program {
                                         println!("    {inst}");
                                     }
-                                    counter_examples.insert(counter_example.clone());
-                                    globals.inputs.push(counter_example.0.clone());
-                                    globals.outputs.push(counter_example.1.clone());
+                                    globals.inputs.push(inp);
+                                    globals.outputs.push(out);
                                     counter_example_added = true;
                                 }
                                 Continue(())
@@ -507,6 +501,25 @@ fn build_forwards_or_backwards<W: Word>(
         // }
         // graph.insert_all(&my_outputs, programs);
     });
+}
+
+/// Checks if the given counter-example has already been seen, by searching the input-output pairs
+/// in the global context.
+fn has_counter_example_been_seen<WT: Word, WS: Word>(
+    globals: &mut Globals<
+        WT,
+        WS,
+        impl Oracle<[Inst<WT>], State<WT>>,
+        impl Oracle<[Inst<WS>], State<WS>>,
+    >,
+    inp: &State<WS>,
+    out: &State<WS>,
+) -> bool {
+    globals
+        .inputs
+        .iter()
+        .zip(&globals.outputs)
+        .any(|(i, o)| i == inp && o == out)
 }
 
 /// Print information that shows us growth and memory usage of the graphs.

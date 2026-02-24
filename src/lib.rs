@@ -14,6 +14,9 @@ mod enumerate;
 // TODO:
 // /// Representation of the state of the program execution.
 // mod state;
+/// Responsible for things which find counter examples when checking programs for equivalence to
+/// the original.
+mod oracle;
 /// This module collects registers that we consider for synthesis.
 mod collect_registers;
 /// Main loop where the big picture stuff happens.
@@ -21,16 +24,16 @@ mod main_loop;
 
 // Here is a diagram of the dependency structure between some of the main modules:
 //
-//                              +-----------+
-//                     +------> | main_loop | <---------------+
-//                    /         +-----------+                  \
-//                   /           ^  ^  ^  ^                     \
-//                  /           /   |   \  \                     \
-//                 /           /    \    \  +--------------+      \
-//                /           /      \    \                 \      \
-//          +-------+  +----------+   \    \  +-----------+  |  +-------+
-//          | graph |  | programs |    \    +-| enumerate |  |  | state |
-//          +-------+  +----------+     \     +-----------+  |  +-------+
+//                              +-----------+ <--------------------------+
+//                     +------> | main_loop |                             \
+//                    /         +-----------+ <----------------+           \
+//                   /           ^  ^  ^  ^                     \           \
+//                  /           /   |   \  \                     \           \
+//                 /           /    \    \  +--------------+      \           \
+//                /           /      \    \                 \      \           \
+//          +-------+  +----------+   \    \  +-----------+  |  +-------+  +--------+
+//          | graph |  | programs |    \    +-| enumerate |  |  | state |  | Oracle |
+//          +-------+  +----------+     \     +-----------+  |  +-------+  +--------+
 //                                      |                    |      ^
 //                                   +-----+                 |      |
 //                                   | isa |                 |      |
