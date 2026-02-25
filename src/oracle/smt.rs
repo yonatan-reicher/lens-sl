@@ -125,30 +125,11 @@ pub trait Inst: Sized {
 mod tests {
     use super::super::CounterExample;
     use super::*;
+    use crate::smtlib_utils::int_term_to_i128;
     use smtlib::{
         Int, Sorted,
         terms::{Const, IntoWithStorage, STerm, StaticSorted},
     };
-
-    /// Extract a concrete i64 from a model-evaluated `Int` term.
-    /// Handles plain numerals (positive) and `(- n)` (negative).
-    fn int_term_to_i64(int: Int<'_>) -> i64 {
-        use smtlib::lowlevel::ast::{Identifier, QualIdentifier, SpecConstant, Term};
-        match STerm::from(int).term() {
-            Term::SpecConstant(SpecConstant::Numeral(n)) => n.into_u128().unwrap() as i64,
-            Term::Application(QualIdentifier::Identifier(Identifier::Simple(sym)), args)
-                if sym.0 == "-" && args.len() == 1 =>
-            {
-                match args[0] {
-                    Term::SpecConstant(SpecConstant::Numeral(n)) => {
-                        -(n.into_u128().unwrap() as i64)
-                    }
-                    _ => panic!("unexpected negation argument in model: {:?}", args[0]),
-                }
-            }
-            term => panic!("unexpected integer term in model: {:?}", term),
-        }
-    }
 
     const N: usize = 10;
 
@@ -214,7 +195,7 @@ mod tests {
         ) -> Self::State {
             std::array::from_fn(|i| {
                 let int = model.eval(s.vars[i]).expect("variable not found in model");
-                int_term_to_i64(int)
+                int_term_to_i128(int) as i64
             })
         }
     }
