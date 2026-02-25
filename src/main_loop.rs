@@ -1,11 +1,15 @@
 //! The main loop for synthesis and optimization.
 //! Here we have basically the code that you would see in the actual paper that describes Lens.
 
+use smtlib::Sorted;
+use smtlib::terms::IntoWithStorage;
+use crate::smtlib_utils::bool_term_to_bool;
+
 use crate::collect_registers::{self, Collector};
 use crate::enumerate::{EnumerationInfo, Enumerator};
 use crate::graph;
 use crate::isa::{self, Flags, Inst, Register, StateVars, SymbolicState, extend_program_for_each};
-use crate::oracle::{self, Oracle, TestCasesOracle, SmtOracle};
+use crate::oracle::{self, Oracle, SmtOracle};
 use crate::programs;
 use crate::reduce_bit_width::Reducer;
 use crate::word::prelude::*;
@@ -130,23 +134,46 @@ impl<W: Word> oracle::smt::Inst for Inst<W> {
     }
 
     fn state_neq<'st>(
-        st: &'st smtlib::Storage,
+        _st: &'st smtlib::Storage,
         s1: Self::SymbolicState<'st>,
         s2: Self::SymbolicState<'st>,
     ) -> smtlib::Bool<'st> {
-        todo!()
+        !s1.eq(s2)
     }
 
-    fn step<'st>(&self, st: &'st smtlib::Storage, s: Self::SymbolicState<'st>) -> Self::SymbolicState<'st> {
-        todo!()
+    fn step<'st>(
+        &self,
+        _st: &'st smtlib::Storage,
+        mut s: Self::SymbolicState<'st>,
+    ) -> Self::SymbolicState<'st> {
+        self.run_symbolic(&mut s);
+        s
     }
 
     fn extract_from_model<'st>(
-        st: &'st smtlib::Storage,
-        model: &smtlib::Model,
-        s: Self::StateVars<'st>,
-    ) -> Self::State {
-        todo!()
+        _st: &'st smtlib::Storage,
+        model: &smtlib::Model<'st>,
+        s: StateVars<'st, W>,
+    ) -> State<W> {
+        let mut state = State::default();
+        for (i, var) in s.registers.iter().enumerate() {
+            let name = var.name();
+            let reg = Register(i as u8);
+            let val = model
+                .eval(*var)
+                .unwrap_or_else(|| panic!("Failed to evaluate variable '{name}' in model {model}."))
+                .try_into()
+                .unwrap()
+                .as_();
+            isa::State::set_register(&mut state, reg, val);
+        }
+        let z = bool_term_to_bool(model.eval(s.flags.z).unwrap());
+        let n = bool_term_to_bool(model.eval(s.flags.n).unwrap());
+        let c = bool_term_to_bool(model.eval(s.flags.c).unwrap());
+        let v = bool_term_to_bool(model.eval(s.flags.v).unwrap());
+        let flags = Flags::new(z, n, c, v);
+        isa::State::set_flags(&mut state, flags);
+        state
     }
 }
 
@@ -205,16 +232,8 @@ pub fn optimize<WT: Word, WS: Word>(
     //     test_cases: test_cases_reduced,
     // };
 
-    let oracle = unsafe {
-        let mut oracle = std::mem::MaybeUninit::uninit();
-        SmtOracle::init(&mut oracle, &program);
-        oracle.assume_init()
-    };
-    let oracle_reduced = unsafe {
-        let mut oracle = std::mem::MaybeUninit::uninit();
-        SmtOracle::init(&mut oracle, &reduced_program);
-        oracle.assume_init()
-    };
+    let oracle = SmtOracle::new(program);
+    let oracle_reduced = SmtOracle::new(&reduced_program);
 
     synthesize::<WT, WS>(
         &registers,

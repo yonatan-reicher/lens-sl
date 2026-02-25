@@ -1,5 +1,5 @@
 use smtlib::{
-    Int,
+    Bool, Int,
     lowlevel::ast::{Identifier, QualIdentifier, SpecConstant, Term},
     terms::STerm,
 };
@@ -27,6 +27,17 @@ fn term_to_i128(term: &Term) -> i128 {
 pub fn int_term_to_i128(int: Int<'_>) -> i128 {
     let sterm = STerm::from(int);
     term_to_i128(sterm.term())
+}
+
+pub fn bool_term_to_bool(b: Bool<'_>) -> bool {
+    match STerm::from(b).term() {
+        Term::Identifier(QualIdentifier::Identifier(Identifier::Simple(sym))) => match sym.0 {
+            "true" => true,
+            "false" => false,
+            s => panic!("unexpected boolean identifier in model: {s}"),
+        },
+        term => panic!("unexpected boolean term in model: {:?}", term),
+    }
 }
 
 #[cfg(test)]
@@ -63,5 +74,21 @@ mod tests {
         ]);
         let int = Int::from(STerm::new(&st, t));
         int_term_to_i128(int);
+    }
+
+    #[property_test]
+    fn test_bool_term_to_bool_always_returns_same(b: bool) {
+        let st = Storage::new();
+        let bool_term: Bool = b.into_with_storage(&st);
+        assert_eq!(bool_term_to_bool(bool_term), b);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_bool_term_to_bool_crashes_on_application() {
+        let st = Storage::new();
+        let a: Bool = true.into_with_storage(&st);
+        let b: Bool = false.into_with_storage(&st);
+        bool_term_to_bool(a & b);
     }
 }
