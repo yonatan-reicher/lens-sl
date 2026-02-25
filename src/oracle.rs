@@ -7,3 +7,6 @@ pub trait Oracle<P, S> where P: ?Sized {
 
 pub mod test_cases;
 pub mod smt;
+
+pub use test_cases::TestCasesOracle;
+pub use smt::SmtOracle;

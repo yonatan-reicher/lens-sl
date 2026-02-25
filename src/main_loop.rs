@@ -4,8 +4,8 @@
 use crate::collect_registers::{self, Collector};
 use crate::enumerate::{EnumerationInfo, Enumerator};
 use crate::graph;
-use crate::isa::{self, Flags, Inst, Register, extend_program_for_each};
-use crate::oracle::{self, Oracle, test_cases::TestCasesOracle};
+use crate::isa::{self, Flags, Inst, Register, StateVars, SymbolicState, extend_program_for_each};
+use crate::oracle::{self, Oracle, TestCasesOracle, SmtOracle};
 use crate::programs;
 use crate::reduce_bit_width::Reducer;
 use crate::word::prelude::*;
@@ -118,6 +118,38 @@ impl<W: Word> oracle::test_cases::Program<State<W>> for [Inst<W>] {
     }
 }
 
+impl<W: Word> oracle::smt::Inst for Inst<W> {
+    type State = State<W>;
+
+    type StateVars<'st> = StateVars<'st, W>;
+
+    type SymbolicState<'st> = SymbolicState<'st, W>;
+
+    fn new_state_vars<'st>(st: &'st smtlib::Storage, name: &str) -> Self::StateVars<'st> {
+        todo!()
+    \}
+
+    fn state_neq<'st>(
+        st: &'st smtlib::Storage,
+        s1: Self::SymbolicState<'st>,
+        s2: Self::SymbolicState<'st>,
+    ) -> smtlib::Bool<'st> {
+        todo!()
+    \}
+
+    fn step<'st>(&self, st: &'st smtlib::Storage, s: Self::SymbolicState<'st>) -> Self::SymbolicState<'st> {
+        todo!()
+    \}
+
+    fn extract_from_model<'st>(
+        st: &'st smtlib::Storage,
+        model: &smtlib::Model,
+        s: Self::StateVars<'st>,
+    ) -> Self::State {
+        todo!()
+    \}
+}
+
 // ====================================== Implementation ==========================================
 
 // This is the main function that gets exposed.
@@ -168,9 +200,15 @@ pub fn optimize<WT: Word, WS: Word>(
     let Collector { registers } = collector;
     let immediates: Vec<WS::Unsigned> = reducer.immediates().collect();
 
-    let oracle = TestCasesOracle { test_cases };
-    let oracle_reduced = TestCasesOracle {
-        test_cases: test_cases_reduced,
+    // let oracle = TestCasesOracle { test_cases };
+    // let oracle_reduced = TestCasesOracle {
+    //     test_cases: test_cases_reduced,
+    // };
+
+    let oracle = unsafe {
+        let oracle = std::mem::MaybeUninit::uninit();
+        SmtOracle::init(&mut oracle, &program);
+        oracle.assume_init()
     };
 
     synthesize::<WT, WS>(

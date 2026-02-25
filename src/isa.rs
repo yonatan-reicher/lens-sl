@@ -263,6 +263,26 @@ pub struct SymbolicFlags<'st> {
     pub v: Bool<'st>,
 }
 
+impl<'st, W: Word> From<StateVars<'st, W>> for SymbolicState<'st, W> {
+    fn from(value: StateVars<'st, W>) -> Self {
+        Self {
+            registers: value.registers.map(Into::into).collect(),
+            flags: value.flags.into()
+        }
+    }
+}
+
+impl<'st> From<FlagVars<'st>> for SymbolicFlags<'st> {
+    fn from(value: FlagVars<'st>) -> Self {
+        Self {
+            z: value.z.into(),
+            n: value.n.into(),
+            c: value.c.into(),
+            v: value.v.into(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum AddOrSub {
     Add,
@@ -429,6 +449,10 @@ fn run_instruction_symbolic<W: Word>(inst: &Inst<W>, state: &mut SymbolicState<'
 impl<W: Word> Inst<W> {
     pub fn run<S: State<W>>(&self, state: &mut S) {
         run_instruction(self, state)
+    }
+
+    pub fn run_symbolic(&self, state: &mut SymbolicState<'_, W>) {
+        run_instruction_symbolic(self, state)
     }
 
     fn to_string_impl(self) -> String {
