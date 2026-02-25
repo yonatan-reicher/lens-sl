@@ -1,11 +1,12 @@
 use std::fmt::{Debug, Display};
 use std::hash::Hash;
-use std::ops::Add;
+use std::ops::{Add, BitAnd, Neg};
 
 use arbitrary_int::traits::{Integer, SignedInteger, UnsignedInteger};
 use arbitrary_int::{i4, u4};
 
-use smtlib::BitVec;
+use smtlib::terms::{IntoWithStorage, StaticSorted};
+use smtlib::{BitVec, Storage};
 
 pub trait Word:
     Sized + Clone + Copy + Debug + Default + PartialEq + Eq + PartialOrd + Ord + Hash
@@ -14,10 +15,16 @@ pub trait Word:
     type Unsigned: Sized + Debug + Default + Display + Hash + UnsignedInteger + WordOps;
 
     type SymbolicBitVec<'st>:
-        Add<Self::SymbolicBitVec<'st>>
+        Add<Output = Self::SymbolicBitVec<'st>>
+        + BitAnd<Output = Self::SymbolicBitVec<'st>>
         + Clone
         + Debug
+        + StaticSorted<'st>
+        + Neg<Output = Self::SymbolicBitVec<'st>>
+        // + Sub<Output = Self::SymbolicBitVec<'st>>
         + 'st;
+
+    fn new_bit_vec<'st>(st: &'st Storage, value: Self::Unsigned) -> Self::SymbolicBitVec<'st>;
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -26,6 +33,10 @@ impl Word for Word64 {
     type Unsigned = u64;
     type Signed = i64;
     type SymbolicBitVec<'st> = BitVec<'st, 64>;
+
+    fn new_bit_vec<'st>(st: &'st Storage, value: u64) -> Self::SymbolicBitVec<'st> {
+        (value as i64).into_with_storage(st)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -34,6 +45,10 @@ impl Word for Word8 {
     type Unsigned = u8;
     type Signed = i8;
     type SymbolicBitVec<'st> = BitVec<'st, 8>;
+
+    fn new_bit_vec<'st>(st: &'st Storage, value: u8) -> Self::SymbolicBitVec<'st> {
+        (value as i64).into_with_storage(st)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -42,6 +57,10 @@ impl Word for Word4 {
     type Unsigned = u4;
     type Signed = i4;
     type SymbolicBitVec<'st> = BitVec<'st, 4>;
+
+    fn new_bit_vec<'st>(st: &'st Storage, value: u4) -> Self::SymbolicBitVec<'st> {
+        value.as_::<i64>().into_with_storage(st)
+    }
 }
 
 pub trait WordOps: Sized {
