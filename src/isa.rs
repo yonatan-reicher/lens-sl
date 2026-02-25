@@ -394,76 +394,29 @@ fn run_instruction<W: Word, S: State<W>>(inst: &Inst<W>, state: &mut S) {
 fn run_instruction_symbolic<W: Word>(inst: &Inst<W>, state: &mut SymbolicState<'_, W>) {
     /// Get a register value.
     macro_rules! r {
-        ($i:literal) => {{
-            debug_assert!($i < 3);
-            debug_assert!(inst.op_code.arg_types()[$i] == ArgType::Reg);
-            let r = Register(inst.args[$i].as_());
-            state.registers[r]
-        }};
-    }
-    /// Set a register value.
-    macro_rules! set {
-        (r![$i:literal u] <- $value:expr) => {{
-            debug_assert!($i < 3);
-            debug_assert!(inst.op_code.arg_types()[$i] == ArgType::Reg);
-            let r = Register(inst.args[$i].as_());
-            state.set_register(r, $value)
-        }};
-        (r![$i:literal i] <- $value:expr) => {{
-            set!(r![$i u] <- $value.as_())
-        }};
+        ($i:literal) => {
+            state.registers[{
+                debug_assert!($i < 3);
+                debug_assert!(inst.op_code.arg_types()[$i] == ArgType::Reg);
+                let r = Register(inst.args[$i].as_());
+                r.0 as usize
+            }]
+        };
     }
     /// Get an immediate value.
     macro_rules! imm {
-        ($i:literal u) => { inst.args[$i] };
-        ($i:literal i) => {{
-            let i: W::Signed = imm![$i u].as_();
-            i
-        }};
+        ($i:literal) => { W::new_bit_vec(state.registers[0].st(), inst.args[$i]) };
     }
-
-    fn add_or_sub<'st, W: Word>(
-        kind: AddOrSub,
-        state: SymbolicState<W>,
-        left: W::SymbolicBitVec<'st>,
-        right: W::SymbolicBitVec<'st>,
-    ) -> W::SymbolicBitVec<'st> {
-        todo!()
-    }   
 
     use OpCode::*;
     match inst.op_code {
         Nop => (),
-        Add =>
-            state.registers[
-            add_or_sub(
-            state,
-            r![1],
-            r![2],
-            Register(inst.args[0].as_()),
-            AddOrSub::Add,
-        ),
-        // AddI => run_addition_or_subtraction(
-        //     state,
-        //     r![1 u],
-        //     imm![2 u],
-        //     Register(inst.args[0].as_()),
-        //     AddOrSub::Add,
-        // ),
-        // Sub => run_addition_or_subtraction(
-        //     state,
-        //     r![1 u],
-        //     r![2 u],
-        //     Register(inst.args[0].as_()),
-        //     AddOrSub::Sub,
-        // ),
-        // SubI => run_addition_or_subtraction(
-        //     state,
-        //     r![1 u],
-        //     imm![2 u],
-        //     Register(inst.args[0].as_()),
-        //     AddOrSub::Sub,
-        // ),
+        Add => r![0] = r![1].clone() + r![2].clone(),
+        AddI => r![0] = r![1].clone() + imm![2],
+        Sub => r![0] = r![1].clone() + -r![2].clone(),
+        SubI => r![0] = r![1].clone() + -imm![2],
+        And => r![0] = r![1].clone() & r![2].clone(),
+        _ => todo!(),
         // And => set!(r![0 u] <- r![1 u] & r![2 u]),
         // Eor => set!(r![0 u] <- r![1 u] ^ r![2 u]),
         // Mov => set!(r![0 u] <- r![1 u]),
