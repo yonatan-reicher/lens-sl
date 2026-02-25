@@ -1,14 +1,23 @@
 use std::fmt::{Debug, Display};
 use std::hash::Hash;
+use std::ops::Add;
 
 use arbitrary_int::traits::{Integer, SignedInteger, UnsignedInteger};
 use arbitrary_int::{i4, u4};
+
+use smtlib::BitVec;
 
 pub trait Word:
     Sized + Clone + Copy + Debug + Default + PartialEq + Eq + PartialOrd + Ord + Hash
 {
     type Signed: Sized + Debug + Default + Display + Hash + SignedInteger + WordOps;
     type Unsigned: Sized + Debug + Default + Display + Hash + UnsignedInteger + WordOps;
+
+    type SymbolicBitVec<'st>:
+        Add<Self::SymbolicBitVec<'st>>
+        + Clone
+        + Debug
+        + 'st;
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -16,6 +25,7 @@ pub struct Word64;
 impl Word for Word64 {
     type Unsigned = u64;
     type Signed = i64;
+    type SymbolicBitVec<'st> = BitVec<'st, 64>;
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -23,6 +33,7 @@ pub struct Word8;
 impl Word for Word8 {
     type Unsigned = u8;
     type Signed = i8;
+    type SymbolicBitVec<'st> = BitVec<'st, 8>;
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -30,6 +41,7 @@ pub struct Word4;
 impl Word for Word4 {
     type Unsigned = u4;
     type Signed = i4;
+    type SymbolicBitVec<'st> = BitVec<'st, 4>;
 }
 
 pub trait WordOps: Sized {

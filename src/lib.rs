@@ -51,6 +51,8 @@ mod all_permutations;
 /// TODO: Remove this probably.
 mod shortest_path;
 mod iter_slice_or_single;
+/// Helpers for using the `smtlib` crate.
+mod smtlib_utils;
 
 // Let's expose just the necessary items.
 
