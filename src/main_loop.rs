@@ -225,7 +225,7 @@ pub fn optimize<WT: Word, WS: Word>(
     collector.program(program);
     collector.test_cases(&test_cases);
     let Collector { registers } = collector;
-    let immediates: Vec<WS::Unsigned> = reducer.immediates().collect();
+    let immediates: Vec<WS::Unsigned> = reducer.immediates().chain([0.as_()]).collect();
 
     // let oracle = TestCasesOracle { test_cases };
     // let oracle_reduced = TestCasesOracle {
