@@ -4,27 +4,23 @@ use std::fmt::Debug;
 use std::marker::PhantomPinned;
 use std::mem::MaybeUninit;
 use std::ptr;
+use std::pin::Pin;
 
 pub struct SmtOracle<'st, I: Inst> {
-    st: Storage,
+    st: Box<Storage>,
     solver: Solver<'st, Cvc5Binary>,
     initial_state: I::StateVars<'st>,
     expected_final_state: I::SymbolicState<'st>,
-    // Mark this type as being !Unpin, that is to say, you cannot move this struct.
-    _pin: PhantomPinned,
-    // When adding more fields, make sure to update the `init` function.
 }
 
 impl<'st, I: Inst> SmtOracle<'st, I> {
-    fn storage(&self) -> &'st Storage {
-        // SAFETY: This struct is pinned (`PhantomPinned`), so `self.st` will never move.
-        // `'st` is the lifetime tied to `self.st`, so extending the borrow to `'st` is sound.
-        unsafe { &*((&self.st) as *const Storage) }
+    fn st(&self) -> &'st Storage {
+        self.st
     }
 
-    pub unsafe fn init(out: &mut MaybeUninit<Self>, target_program: &[I]) {
+    pub unsafe fn init<'a>(out: &'a mut MaybeUninit<Self>, target_program: &[I]) -> Pin<&'a mut Self> {
+        let ptr = out.as_mut_ptr();
         unsafe {
-            let ptr = out.as_mut_ptr();
             // Need to use pointer writes, so that destructors aren't called on uninitialized
             // memory.
             ptr::write(&mut (*ptr).st, Storage::new());
@@ -35,6 +31,10 @@ impl<'st, I: Inst> SmtOracle<'st, I> {
             ptr::write(&mut (*ptr).initial_state, initial_state);
             ptr::write(&mut (*ptr).expected_final_state, expected_final_state);
             ptr::write(&mut (*ptr)._pin, PhantomPinned);
+            // SAFETY: We have a mutable reference to the uninitialized memory, and it's consumed
+            // by this function. That means that this value is inaccessible for as long as the
+            // returned reference exists.
+            Pin::new_unchecked(&mut *ptr)
         }
     }
 }
@@ -127,11 +127,12 @@ pub trait Inst: Sized {
 #[cfg(test)]
 mod tests {
     use super::super::CounterExample;
+    use std::pin::pin;
     use super::*;
     use crate::smtlib_utils::int_term_to_i128;
     use smtlib::{
         Int, Sorted,
-        terms::{Const, IntoWithStorage, STerm, StaticSorted},
+        terms::{Const, IntoWithStorage, StaticSorted},
     };
 
     const N: usize = 10;
@@ -204,12 +205,9 @@ mod tests {
     }
 
     fn test_equivalence(p1: &[I], p2: &[I]) -> Result<(), CounterExample<[i64; N]>> {
-        let mut oracle = unsafe {
-            let mut oracle = MaybeUninit::uninit();
-            SmtOracle::init(&mut oracle, p1);
-            oracle.assume_init()
-        };
-        oracle.check_program(p2)
+        let mut oracle = MaybeUninit::uninit();
+        let oracle = unsafe { SmtOracle::<I>::init(&mut oracle, p1) };
+        unsafe { oracle.get_unchecked_mut().check_program(p2) }
     }
 
     #[test]
@@ -226,4 +224,13 @@ mod tests {
         let p2 = &[Add(0, 1), Add(0, 1), Add(2, 1), Add(2, 1)];
         assert!(test_equivalence(p1, p2).is_err());
     }
+
+    // #[test]
+    // fn smt_oracle_cannot_be_moved() {
+    //     let mut oracle = MaybeUninit::uninit();
+    //     let oracle1 = unsafe { SmtOracle::<I>::init(&mut oracle, &[]) }
+
+    //     let _v = vec![oracle];
+    //     let _v = vec![oracle1];
+    // }
 }

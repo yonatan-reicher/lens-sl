@@ -9,7 +9,7 @@ use smtlib::terms::{IntoWithStorage, StaticSorted};
 use smtlib::{BitVec, Storage};
 
 pub trait Word:
-    Sized + Clone + Copy + Debug + Default + PartialEq + Eq + PartialOrd + Ord + Hash
+    Sized + Clone + Copy + Debug + Default + PartialEq + Eq + PartialOrd + Ord + Hash + 'static
 {
     type Signed: Sized + Debug + Default + Display + Hash + SignedInteger + WordOps;
     type Unsigned: Sized + Debug + Default + Display + Hash + UnsignedInteger + WordOps;
@@ -19,6 +19,7 @@ pub trait Word:
         + BitAnd<Output = Self::SymbolicBitVec<'st>>
         + Clone
         + Debug
+        + From<smtlib::terms::Const<'st, Self::SymbolicBitVec<'st>>>
         + StaticSorted<'st>
         + Neg<Output = Self::SymbolicBitVec<'st>>
         // + Sub<Output = Self::SymbolicBitVec<'st>>

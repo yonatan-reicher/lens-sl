@@ -1,11 +1,9 @@
 use crate::all_permutations::Iter as PermutationIter;
 use crate::iter_slice_or_single::Iter as SliceOrSingle;
 use arbitrary_int::traits::Integer;
+use smtlib::{Bool, Storage, prelude::*, terms::Const};
 use std::fmt::Debug;
 use std::ops::ControlFlow;
-use smtlib::{
-    Bool, prelude::*, terms::Const
-};
 
 use crate::{
     reduce_bit_width::{ImmediateInfo, Reducer},
@@ -241,6 +239,28 @@ pub struct StateVars<'st, W: Word> {
     pub flags: FlagVars<'st>,
 }
 
+impl<'st, W: Word> StateVars<'st, W> {
+    pub fn new(st: &'st Storage, name: &str) -> Self {
+        Self {
+            registers: std::array::from_fn(|i| {
+                W::SymbolicBitVec::new_const(st, &format!("{}_r{}", name, i))
+            }),
+            flags: FlagVars::new(st, name),
+        }
+    }
+}
+
+impl<'st> FlagVars<'st> {
+    pub fn new(st: &'st Storage, name: &str) -> Self {
+        Self {
+            z: Bool::new_const(st, &format!("{}_z", name)),
+            n: Bool::new_const(st, &format!("{}_n", name)),
+            c: Bool::new_const(st, &format!("{}_c", name)),
+            v: Bool::new_const(st, &format!("{}_v", name)),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct FlagVars<'st> {
     pub z: Const<'st, Bool<'st>>,
@@ -266,8 +286,8 @@ pub struct SymbolicFlags<'st> {
 impl<'st, W: Word> From<StateVars<'st, W>> for SymbolicState<'st, W> {
     fn from(value: StateVars<'st, W>) -> Self {
         Self {
-            registers: value.registers.map(Into::into).collect(),
-            flags: value.flags.into()
+            registers: value.registers.map(Into::into),
+            flags: value.flags.into(),
         }
     }
 }
@@ -425,7 +445,9 @@ fn run_instruction_symbolic<W: Word>(inst: &Inst<W>, state: &mut SymbolicState<'
     }
     /// Get an immediate value.
     macro_rules! imm {
-        ($i:literal) => { W::new_bit_vec(state.registers[0].st(), inst.args[$i]) };
+        ($i:literal) => {
+            W::new_bit_vec(state.registers[0].st(), inst.args[$i])
+        };
     }
 
     use OpCode::*;

@@ -28,7 +28,7 @@ use std::rc::Rc;
         None => "None".to_string(),
     }
 )]
-struct State<W: Word> {
+pub struct State<W: Word> {
     /// This vector is always sorted by register.
     /// Registers that are not present are not "live".
     pub registers: Vec<(Register, W::Unsigned)>,
@@ -126,8 +126,8 @@ impl<W: Word> oracle::smt::Inst for Inst<W> {
     type SymbolicState<'st> = SymbolicState<'st, W>;
 
     fn new_state_vars<'st>(st: &'st smtlib::Storage, name: &str) -> Self::StateVars<'st> {
-        todo!()
-    \}
+        StateVars::new(st, name)
+    }
 
     fn state_neq<'st>(
         st: &'st smtlib::Storage,
@@ -135,11 +135,11 @@ impl<W: Word> oracle::smt::Inst for Inst<W> {
         s2: Self::SymbolicState<'st>,
     ) -> smtlib::Bool<'st> {
         todo!()
-    \}
+    }
 
     fn step<'st>(&self, st: &'st smtlib::Storage, s: Self::SymbolicState<'st>) -> Self::SymbolicState<'st> {
         todo!()
-    \}
+    }
 
     fn extract_from_model<'st>(
         st: &'st smtlib::Storage,
@@ -147,7 +147,7 @@ impl<W: Word> oracle::smt::Inst for Inst<W> {
         s: Self::StateVars<'st>,
     ) -> Self::State {
         todo!()
-    \}
+    }
 }
 
 // ====================================== Implementation ==========================================
@@ -206,8 +206,13 @@ pub fn optimize<WT: Word, WS: Word>(
     // };
 
     let oracle = unsafe {
-        let oracle = std::mem::MaybeUninit::uninit();
+        let mut oracle = std::mem::MaybeUninit::uninit();
         SmtOracle::init(&mut oracle, &program);
+        oracle.assume_init()
+    };
+    let oracle_reduced = unsafe {
+        let mut oracle = std::mem::MaybeUninit::uninit();
+        SmtOracle::init(&mut oracle, &reduced_program);
         oracle.assume_init()
     };
 
