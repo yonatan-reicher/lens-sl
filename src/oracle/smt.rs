@@ -7,15 +7,28 @@ use std::ptr;
 use std::pin::Pin;
 
 pub struct SmtOracle<'st, I: Inst> {
-    st: Box<Storage>,
+    st: Pin<Box<Storage>>,
     solver: Solver<'st, Cvc5Binary>,
     initial_state: I::StateVars<'st>,
     expected_final_state: I::SymbolicState<'st>,
 }
 
 impl<'st, I: Inst> SmtOracle<'st, I> {
-    fn st(&self) -> &'st Storage {
-        self.st
+    pub fn st(&'st self) -> &'st Storage {
+        &self.st
+    }
+
+    pub fn new(target_program: &[I]) -> Self {
+        let st = Box::pin(Storage::new());
+        let initial_state = I::new_state_vars(&st, "init");
+        let expected_final_state = I::run(target_program, &st, initial_state.clone().into());
+        let solver = new_solver(&st);
+        Self {
+            st,
+            initial_state,
+            expected_final_state,
+            solver,
+        }
     }
 
     pub unsafe fn init<'a>(out: &'a mut MaybeUninit<Self>, target_program: &[I]) -> Pin<&'a mut Self> {
