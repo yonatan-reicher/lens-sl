@@ -1,6 +1,6 @@
 use std::fmt::{Debug, Display};
 use std::hash::Hash;
-use std::ops::{Add, BitAnd, Neg};
+use std::ops::*;
 
 use arbitrary_int::traits::{Integer, SignedInteger, UnsignedInteger};
 use arbitrary_int::{i4, u4};
@@ -11,18 +11,28 @@ use smtlib::{BitVec, Storage};
 pub trait Word:
     Sized + Clone + Copy + Debug + Default + PartialEq + Eq + PartialOrd + Ord + Hash + 'static
 {
-    type Signed: Sized + Debug + Default + Display + Hash + SignedInteger + WordOps;
-    type Unsigned: Sized + Debug + Default + Display + Hash + UnsignedInteger + WordOps;
+    type Signed: Sized + Debug + Default + Display + Hash + SignedInteger + WordOps + 'static;
+    type Unsigned: Sized + Debug + Default + Display + Hash + UnsignedInteger + WordOps + 'static;
 
-    type SymbolicBitVec<'st>:
-        Add<Output = Self::SymbolicBitVec<'st>>
+    type SymbolicBitVec<'st>: Add<Output = Self::SymbolicBitVec<'st>>
         + BitAnd<Output = Self::SymbolicBitVec<'st>>
+        + BitOr<Output = Self::SymbolicBitVec<'st>>
+        + BitXor<Output = Self::SymbolicBitVec<'st>>
         + Clone
+        + Copy
         + Debug
+        + Div<Output = Self::SymbolicBitVec<'st>>
         + From<smtlib::terms::Const<'st, Self::SymbolicBitVec<'st>>>
-        + StaticSorted<'st>
+        + IntoWithStorage<'st, Self::SymbolicBitVec<'st>>
+        + Mul<Output = Self::SymbolicBitVec<'st>>
         + Neg<Output = Self::SymbolicBitVec<'st>>
-        // + Sub<Output = Self::SymbolicBitVec<'st>>
+        + Not<Output = Self::SymbolicBitVec<'st>>
+        + Rem<Output = Self::SymbolicBitVec<'st>>
+        + Shl<Output = Self::SymbolicBitVec<'st>>
+        + Shr<Output = Self::SymbolicBitVec<'st>>
+        + StaticSorted<'st, Inner = Self::SymbolicBitVec<'st>>
+        + TryInto<i64, Error: Debug>
+        // + Sub<Output = Self::SymbolicBitVec<'st>> // For some reason, this is unimplemented.
         + 'st;
 
     fn new_bit_vec<'st>(st: &'st Storage, value: Self::Unsigned) -> Self::SymbolicBitVec<'st>;

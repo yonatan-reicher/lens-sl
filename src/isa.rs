@@ -1,7 +1,11 @@
 use crate::all_permutations::Iter as PermutationIter;
 use crate::iter_slice_or_single::Iter as SliceOrSingle;
 use arbitrary_int::traits::Integer;
-use smtlib::{Bool, Storage, prelude::*, terms::Const};
+use smtlib::{
+    Bool, Storage,
+    prelude::*,
+    terms::{Const, IntoWithStorage},
+};
 use std::fmt::Debug;
 use std::ops::ControlFlow;
 
@@ -205,6 +209,18 @@ bitflags::bitflags! {
     }
 }
 
+impl Flags {
+    #[rustfmt::skip]
+    pub fn new(z: bool, n: bool, c: bool, v: bool) -> Self {
+        let mut flags = Flags::empty();
+        if z { flags |= Flags::Z; }
+        if n { flags |= Flags::N; }
+        if c { flags |= Flags::C; }
+        if v { flags |= Flags::V; }
+        flags
+    }
+}
+
 #[cfg(test)]
 impl proptest::arbitrary::Arbitrary for Flags {
     type Parameters = ();
@@ -300,6 +316,23 @@ impl<'st> From<FlagVars<'st>> for SymbolicFlags<'st> {
             c: value.c.into(),
             v: value.v.into(),
         }
+    }
+}
+
+impl<'st, W: Word> SymbolicState<'st, W> {
+    pub fn eq(&self, other: Self) -> Bool<'st> {
+        let regs = self.registers.iter().zip(other.registers);
+        let regs_eq = regs
+            .map(|(ra, rb)| ra._eq(rb))
+            .reduce(|b1, b2| b1 & b2)
+            .unwrap();
+        regs_eq & self.flags.eq(other.flags)
+    }
+}
+
+impl<'st> SymbolicFlags<'st> {
+    pub fn eq(&self, other: Self) -> Bool<'st> {
+        self.z._eq(other.z) & self.n._eq(other.n) & self.c._eq(other.c) & self.v._eq(other.v)
     }
 }
 
@@ -453,18 +486,16 @@ fn run_instruction_symbolic<W: Word>(inst: &Inst<W>, state: &mut SymbolicState<'
     use OpCode::*;
     match inst.op_code {
         Nop => (),
-        Add => r![0] = r![1].clone() + r![2].clone(),
-        AddI => r![0] = r![1].clone() + imm![2],
-        Sub => r![0] = r![1].clone() + -r![2].clone(),
-        SubI => r![0] = r![1].clone() + -imm![2],
-        And => r![0] = r![1].clone() & r![2].clone(),
-        _ => todo!(),
-        // And => set!(r![0 u] <- r![1 u] & r![2 u]),
-        // Eor => set!(r![0 u] <- r![1 u] ^ r![2 u]),
-        // Mov => set!(r![0 u] <- r![1 u]),
-        // MovI => set!(r![0 u] <- imm![1 u]),
-        // Mul => set!(r![0 i] <- r![1 i].overflowing_mul(r![2 i]).0),
-        // Orr => set!(r![0 u] <- r![1 u] | r![2 u]),
+        Add => r![0] = r![1] + r![2],
+        AddI => r![0] = r![1] + imm![2],
+        Sub => r![0] = r![1] + -r![2],
+        SubI => r![0] = r![1] + -imm![2],
+        And => r![0] = r![1] & r![2],
+        Eor => r![0] = r![1] ^ r![2],
+        Mov => r![0] = r![1],
+        MovI => r![0] = imm![1],
+        Mul => r![0] = r![1] * r![2],
+        Orr => r![0] = r![1] | r![2],
     }
 }
 

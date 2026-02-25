@@ -1,9 +1,6 @@
 use super::Oracle;
 use smtlib::{Bool, Model, Solver, Storage, backend::cvc5_binary::Cvc5Binary};
 use std::fmt::Debug;
-use std::marker::PhantomPinned;
-use std::mem::MaybeUninit;
-use std::ptr;
 use std::pin::Pin;
 
 pub struct SmtOracle<'st, I: Inst> {
@@ -14,40 +11,21 @@ pub struct SmtOracle<'st, I: Inst> {
 }
 
 impl<'st, I: Inst> SmtOracle<'st, I> {
-    pub fn st(&'st self) -> &'st Storage {
-        &self.st
+    pub fn storage(&self) -> &'st Storage {
+        unsafe { &*(self.st.as_ref().get_ref() as *const Storage) }
     }
 
     pub fn new(target_program: &[I]) -> Self {
         let st = Box::pin(Storage::new());
-        let initial_state = I::new_state_vars(&st, "init");
-        let expected_final_state = I::run(target_program, &st, initial_state.clone().into());
-        let solver = new_solver(&st);
+        let st_ref: &'st Storage = unsafe { &*(st.as_ref().get_ref() as *const Storage) };
+        let initial_state = I::new_state_vars(st_ref, "init");
+        let expected_final_state = I::run(target_program, st_ref, initial_state.clone().into());
+        let solver = new_solver(st_ref);
         Self {
             st,
             initial_state,
             expected_final_state,
             solver,
-        }
-    }
-
-    pub unsafe fn init<'a>(out: &'a mut MaybeUninit<Self>, target_program: &[I]) -> Pin<&'a mut Self> {
-        let ptr = out.as_mut_ptr();
-        unsafe {
-            // Need to use pointer writes, so that destructors aren't called on uninitialized
-            // memory.
-            ptr::write(&mut (*ptr).st, Storage::new());
-            let st = &(*ptr).st;
-            let initial_state = I::new_state_vars(st, "init");
-            let expected_final_state = I::run(target_program, st, initial_state.clone().into());
-            ptr::write(&mut (*ptr).solver, new_solver(st));
-            ptr::write(&mut (*ptr).initial_state, initial_state);
-            ptr::write(&mut (*ptr).expected_final_state, expected_final_state);
-            ptr::write(&mut (*ptr)._pin, PhantomPinned);
-            // SAFETY: We have a mutable reference to the uninitialized memory, and it's consumed
-            // by this function. That means that this value is inaccessible for as long as the
-            // returned reference exists.
-            Pin::new_unchecked(&mut *ptr)
         }
     }
 }
@@ -92,14 +70,13 @@ impl<'st, I: Inst> Oracle<[I], I::State> for SmtOracle<'st, I> {
 
 fn new_solver<'st>(st: &'st Storage) -> Solver<'st, Cvc5Binary> {
     let cvc5 = Cvc5Binary::new("cvc5")
-        .or_else(|_| {
-            Cvc5Binary::new("./cvc5")
-        })
+        .or_else(|_| Cvc5Binary::new("./cvc5"))
         .expect("failed to initialize cvc5 - binary 'cvc5' not found on path");
     let mut solver = Solver::new(st, cvc5).expect("failed to initialize solver");
     solver
         .set_logic(smtlib::Logic::Custom("ALL".into()))
         .expect("failed to set logic");
+    // solver.set_timeout(1000).expect("failed to set solver timeout");
     solver
 }
 
@@ -122,7 +99,7 @@ pub trait Inst: Sized {
 
     fn extract_from_model<'st>(
         st: &'st Storage,
-        model: &Model,
+        model: &Model<'st>,
         s: Self::StateVars<'st>,
     ) -> Self::State;
 
@@ -140,13 +117,13 @@ pub trait Inst: Sized {
 #[cfg(test)]
 mod tests {
     use super::super::CounterExample;
-    use std::pin::pin;
     use super::*;
     use crate::smtlib_utils::int_term_to_i128;
     use smtlib::{
         Int, Sorted,
         terms::{Const, IntoWithStorage, StaticSorted},
     };
+    use std::pin::pin;
 
     const N: usize = 10;
 
@@ -218,9 +195,8 @@ mod tests {
     }
 
     fn test_equivalence(p1: &[I], p2: &[I]) -> Result<(), CounterExample<[i64; N]>> {
-        let mut oracle = MaybeUninit::uninit();
-        let oracle = unsafe { SmtOracle::<I>::init(&mut oracle, p1) };
-        unsafe { oracle.get_unchecked_mut().check_program(p2) }
+        let mut oracle = SmtOracle::new(p1);
+        oracle.check_program(p2)
     }
 
     #[test]
