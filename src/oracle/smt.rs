@@ -79,6 +79,9 @@ impl<'st, I: Inst> Oracle<[I], I::State> for SmtOracle<'st, I> {
 
 fn new_solver<'st>(st: &'st Storage) -> Solver<'st, Cvc5Binary> {
     let cvc5 = Cvc5Binary::new("cvc5")
+        .or_else(|_| {
+            Cvc5Binary::new("./cvc5")
+        })
         .expect("failed to initialize cvc5 - binary 'cvc5' not found on path");
     let mut solver = Solver::new(st, cvc5).expect("failed to initialize solver");
     solver
