@@ -347,6 +347,11 @@ struct Globals<
     extender: Reducer<WT, WS>,
 }
 
+enum ProgramOrRetry<W: Word> {
+    Program(Program<W>),
+    Retry,
+}
+
 fn connect_and_refine<WT: Word, WS: Word>(
     globals: &mut Globals<
         WT,
@@ -387,7 +392,9 @@ fn connect_and_refine<WT: Word, WS: Word>(
                                     .oracle
                                     .check_program(extended_program)
                                 {
-                                    Ok(()) => Break(extended_program.to_vec()),
+                                    Ok(()) => {
+                                        Break(ProgramOrRetry::Program(extended_program.to_vec()))
+                                    }
                                     Err(_) => Continue(()),
                                 },
                             ),
@@ -403,6 +410,7 @@ fn connect_and_refine<WT: Word, WS: Word>(
                                     globals.inputs.push(inp);
                                     globals.outputs.push(out);
                                     counter_example_added = true;
+                                    return Break(ProgramOrRetry::Retry);
                                 }
                                 Continue(())
                             }
@@ -411,6 +419,14 @@ fn connect_and_refine<WT: Word, WS: Word>(
                 });
                 if let Break(extended_program) = ret {
                     return ConnectAndRefineResult::Found(extended_program);
+                match ret {
+                    Break(ProgramOrRetry::Program(prog)) => {
+                        return ConnectAndRefineResult::Found(prog);
+                    }
+                    Break(ProgramOrRetry::Retry) => {
+                        return connect_and_refine(globals, forward_graph, backward_graph, inst, k);
+                    }
+                    Continue(()) => (),
                 }
             }
             _ => {
