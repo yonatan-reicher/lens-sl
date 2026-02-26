@@ -1,18 +1,16 @@
 use crate::all_permutations::Iter as PermutationIter;
 use crate::iter_slice_or_single::Iter as SliceOrSingle;
-use arbitrary_int::traits::Integer;
-use smtlib::{
-    Bool, Storage,
-    prelude::*,
-    terms::Const,
-};
+use crate::reduce_bit_width::{ImmediateInfo, Reducer};
+use crate::word::prelude::*;
+
 use std::fmt::Debug;
 use std::ops::ControlFlow;
 
-use crate::{
-    reduce_bit_width::{ImmediateInfo, Reducer},
-    word::{Word, WordOps},
-};
+use arbitrary_int::traits::Integer;
+
+use smtlib::prelude::*;
+use smtlib::terms::Const;
+use smtlib::{Bool, Storage};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(test, derive(proptest_derive::Arbitrary))]
@@ -634,7 +632,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::word::prelude::*;
     use std::collections::HashSet;
 
     #[test]
