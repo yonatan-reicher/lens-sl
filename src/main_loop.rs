@@ -1,15 +1,14 @@
 //! The main loop for synthesis and optimization.
 //! Here we have basically the code that you would see in the actual paper that describes Lens.
 
-use crate::collect_registers::{self, Collector};
+use crate::collect_registers::{Collector};
 use crate::enumerate::{EnumerationInfo, Enumerator};
 use crate::graph;
-use crate::isa::{
-    self, Flags, Inst, Register, State as _, StateVars, SymbolicState, extend_program_for_each,
-};
+use crate::isa::{Flags, Inst, Register, extend_program_for_each};
 use crate::oracle::{self, Oracle, SmtOracle};
 use crate::programs;
 use crate::reduce_bit_width::Reducer;
+use crate::state::{SearchState, SmtState, State as _, StateVars};
 use crate::word::prelude::*;
 
 use std::ops::ControlFlow::{Break, Continue};
@@ -22,91 +21,7 @@ use smtlib::Sorted;
 
 // =========================================== State ==============================================
 
-/// The state of the machine at a given point in time.
-#[derive(Clone, Debug, Default, derive_more::Display, PartialEq, Eq, Hash)]
-#[display(
-    "Registers: {{{}}}, Flags: {}",
-    registers
-        .iter()
-        .map(|(r, v)| format!("{r:?}: {v}"))
-        .collect::<Vec<_>>()
-        .join(", "),
-    match &flags {
-        Some(f) => format!("{f:?}"),
-        None => "None".to_string(),
-    }
-)]
-pub struct State<W: Word> {
-    /// This vector is always sorted by register.
-    /// Registers that are not present are not "live".
-    pub registers: Vec<(Register, W::Unsigned)>,
-    /// The value of the flags register. If None, flags is not "live".
-    pub flags: Option<Flags>,
-}
-
-impl<W: Word> State<W> {
-    /// Copies this state to another state object. Used to avoid clones, that in a loop, can
-    /// allocate more.
-    #[inline]
-    fn clone_to(&self, other: &mut Self) {
-        other.registers.clear();
-        other.registers.extend(&self.registers);
-        other.flags = self.flags;
-    }
-
-    fn reduce<WSmall: Word>(&self, reducer: &mut Reducer<W, WSmall>) -> State<WSmall> {
-        State {
-            registers: self
-                .registers
-                .iter()
-                .map(|(r, v)| (*r, reducer.reduce(*v, &Default::default())))
-                .collect(),
-            flags: self.flags,
-        }
-    }
-}
-
-impl<W: Word> isa::State<W> for State<W> {
-    fn get_register(&self, reg: Register) -> W::Unsigned {
-        for (r, v) in &self.registers {
-            if *r == reg {
-                return *v;
-            }
-        }
-        panic!("Register {reg:?} not found in state.");
-    }
-
-    fn set_register(&mut self, reg: Register, value: W::Unsigned) {
-        for (r, v) in &mut self.registers {
-            if *r == reg {
-                *v = value;
-                return;
-            }
-        }
-        self.registers.push((reg, value));
-        self.registers.sort_by_key(|(r, _)| *r);
-    }
-
-    fn get_flags(&self) -> Flags {
-        self.flags.expect("Flags not set in state.")
-    }
-
-    fn set_flags(&mut self, flags: Flags) {
-        self.flags = Some(flags);
-    }
-}
-
-impl<W: Word> collect_registers::State<W> for State<W> {
-    fn registers(&self) -> impl Iterator<Item = (Register, W::Unsigned)> {
-        self.registers.iter().cloned()
-    }
-}
-
-impl<W: Word> oracle::test_cases::State for State<W> {
-    fn clone_to(&self, output: &mut Self) {
-        self.clone_to(output);
-    }
-}
+type State<W> = SearchState<W>;
 
 // =========================================== Graph ==============================================
 
@@ -131,7 +46,7 @@ impl<W: Word> oracle::smt::Inst for Inst<W> {
 
     type StateVars<'st> = StateVars<'st, W>;
 
-    type SymbolicState<'st> = SymbolicState<'st, W>;
+    type SymbolicState<'st> = SmtState<'st, W>;
 
     fn new_state_vars<'st>(st: &'st smtlib::Storage, name: &str) -> Self::StateVars<'st> {
         StateVars::new(st, name)
@@ -184,7 +99,7 @@ impl<W: Word> oracle::smt::Inst for Inst<W> {
         let c = load_bool(s.flags.c);
         let v = load_bool(s.flags.v);
         let flags = Flags::new(z, n, c, v);
-        state.set_flags(flags);
+        state.flags = Some(flags);
         state
     }
 }

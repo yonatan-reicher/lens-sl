@@ -11,9 +11,8 @@ mod reduce_bit_width;
 mod isa;
 /// Enumerating all instructions and whatever.
 mod enumerate;
-// TODO:
-// /// Representation of the state of the program execution.
-// mod state;
+/// Representation of the state of the program execution.
+mod state;
 /// Responsible for things which find counter examples when checking programs for equivalence to
 /// the original.
 mod oracle;
@@ -56,6 +55,7 @@ mod smtlib_utils;
 
 // Let's expose just the necessary items.
 
-pub use isa::{CondCode, Flags, Inst, OpCode, Register, State};
+pub use isa::{CondCode, Flags, Inst, OpCode, Register};
+pub use state::State;
 pub use main_loop::optimize;
 pub use word::{Word, Word4, Word8, Word64};

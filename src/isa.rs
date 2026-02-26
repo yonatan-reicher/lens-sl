@@ -1,16 +1,12 @@
 use crate::all_permutations::Iter as PermutationIter;
 use crate::iter_slice_or_single::Iter as SliceOrSingle;
 use crate::reduce_bit_width::{ImmediateInfo, Reducer};
+use crate::state::{SmtState, State};
 use crate::word::prelude::*;
 
-use std::fmt::Debug;
 use std::ops::ControlFlow;
 
 use arbitrary_int::traits::Integer;
-
-use smtlib::prelude::*;
-use smtlib::terms::Const;
-use smtlib::{Bool, Storage};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(test, derive(proptest_derive::Arbitrary))]
@@ -240,260 +236,90 @@ impl proptest::arbitrary::Arbitrary for Flags {
     }
 }
 
-pub trait State<W: Word> {
-    fn get_register(&self, reg: Register) -> W::Unsigned;
-    fn set_register(&mut self, reg: Register, value: W::Unsigned);
-    fn get_flags(&self) -> Flags;
-    fn set_flags(&mut self, flags: Flags);
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct StateVars<'st, W: Word> {
-    pub registers: [Const<'st, W::SymbolicBitVec<'st>>; Register::COUNT as usize],
-    pub flags: FlagVars<'st>,
-}
-
-impl<'st, W: Word> StateVars<'st, W> {
-    pub fn new(st: &'st Storage, name: &str) -> Self {
-        Self {
-            registers: std::array::from_fn(|i| {
-                W::SymbolicBitVec::new_const(st, &format!("{}_r{}", name, i))
-            }),
-            flags: FlagVars::new(st, name),
-        }
-    }
-}
-
-impl<'st> FlagVars<'st> {
-    pub fn new(st: &'st Storage, name: &str) -> Self {
-        Self {
-            z: Bool::new_const(st, &format!("{}_z", name)),
-            n: Bool::new_const(st, &format!("{}_n", name)),
-            c: Bool::new_const(st, &format!("{}_c", name)),
-            v: Bool::new_const(st, &format!("{}_v", name)),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct FlagVars<'st> {
-    pub z: Const<'st, Bool<'st>>,
-    pub n: Const<'st, Bool<'st>>,
-    pub c: Const<'st, Bool<'st>>,
-    pub v: Const<'st, Bool<'st>>,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct SymbolicState<'st, W: Word> {
-    pub registers: [W::SymbolicBitVec<'st>; Register::COUNT as usize],
-    pub flags: SymbolicFlags<'st>,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct SymbolicFlags<'st> {
-    pub z: Bool<'st>,
-    pub n: Bool<'st>,
-    pub c: Bool<'st>,
-    pub v: Bool<'st>,
-}
-
-impl<'st, W: Word> From<StateVars<'st, W>> for SymbolicState<'st, W> {
-    fn from(value: StateVars<'st, W>) -> Self {
-        Self {
-            registers: value.registers.map(Into::into),
-            flags: value.flags.into(),
-        }
-    }
-}
-
-impl<'st> From<FlagVars<'st>> for SymbolicFlags<'st> {
-    fn from(value: FlagVars<'st>) -> Self {
-        Self {
-            z: value.z.into(),
-            n: value.n.into(),
-            c: value.c.into(),
-            v: value.v.into(),
-        }
-    }
-}
-
-impl<'st, W: Word> SymbolicState<'st, W> {
-    pub fn eq(&self, other: Self) -> Bool<'st> {
-        let regs = self.registers.iter().zip(other.registers);
-        let regs_eq = regs
-            .map(|(ra, rb)| ra._eq(rb))
-            .reduce(|b1, b2| b1 & b2)
-            .unwrap();
-        regs_eq & self.flags.eq(other.flags)
-    }
-}
-
-impl<'st> SymbolicFlags<'st> {
-    pub fn eq(&self, other: Self) -> Bool<'st> {
-        self.z._eq(other.z) & self.n._eq(other.n) & self.c._eq(other.c) & self.v._eq(other.v)
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum AddOrSub {
-    Add,
-    Sub,
-}
-
-fn run_addition_or_subtraction<W: Word, S: State<W>>(
-    state: &mut S,
-    left: W::Unsigned,
-    right: W::Unsigned,
-    result_register: Register,
-    kind: AddOrSub,
-) {
-    let (res, signed_overflow, unsigned_overflow) = match kind {
-        AddOrSub::Add => {
-            let signed_left: W::Signed = left.as_();
-            let signed_right: W::Signed = right.as_();
-            let (res, unsigend_overflow) = left.overflowing_add(right);
-            let (res2, signed_overflow) = signed_left.overflowing_add(signed_right);
-            debug_assert_eq!(Integer::as_::<W::Signed>(res), res2);
-            (res, signed_overflow, unsigend_overflow)
-        }
-        AddOrSub::Sub => {
-            let signed_left: W::Signed = left.as_();
-            let signed_right: W::Signed = right.as_();
-            let (res, unsigend_overflow) = left.overflowing_sub(right);
-            let (res2, signed_overflow) = signed_left.overflowing_sub(signed_right);
-            debug_assert_eq!(Integer::as_::<W::Signed>(res), res2);
-            (res, signed_overflow, unsigend_overflow)
-        }
-    };
-    let res_signed: W::Signed = res.as_();
-    state.set_register(result_register, res);
-    // Set flags.
-    let mut flags = Flags::empty();
-    if res.is_zero() {
-        flags |= Flags::Z;
-    }
-    if res_signed > 0.as_() {
-        flags |= Flags::N;
-    }
-    if unsigned_overflow && kind == AddOrSub::Add {
-        flags |= Flags::C;
-    }
-    if !unsigned_overflow && kind == AddOrSub::Sub {
-        flags |= Flags::C;
-    }
-    if signed_overflow {
-        flags |= Flags::V;
-    }
-    state.set_flags(flags);
-}
-
+#[allow(dead_code)]
 fn run_instruction<W: Word, S: State<W>>(inst: &Inst<W>, state: &mut S) {
-    /// Get a register value.
-    macro_rules! r {
-        ($i:literal u) => {{
-            debug_assert!($i < 3);
-            debug_assert!(inst.op_code.arg_types()[$i] == ArgType::Reg);
-            let r = Register(inst.args[$i].as_());
-            state.get_register(r)
-        }};
-        ($i:literal i) => {{
-            let r: W::Signed = r![$i u].as_();
-            r
-        }};
-    }
-    /// Set a register value.
-    macro_rules! set {
-        (r![$i:literal u] <- $value:expr) => {{
-            debug_assert!($i < 3);
-            debug_assert!(inst.op_code.arg_types()[$i] == ArgType::Reg);
-            let r = Register(inst.args[$i].as_());
-            state.set_register(r, $value)
-        }};
-        (r![$i:literal i] <- $value:expr) => {{
-            set!(r![$i u] <- $value.as_())
-        }};
-    }
-    /// Get an immediate value.
-    macro_rules! imm {
-        ($i:literal u) => { inst.args[$i] };
-        ($i:literal i) => {{
-            let i: W::Signed = imm![$i u].as_();
-            i
-        }};
-    }
-
     use OpCode::*;
-    match inst.op_code {
-        Nop => (),
-        Add => run_addition_or_subtraction(
-            state,
-            r![1 u],
-            r![2 u],
-            Register(inst.args[0].as_()),
-            AddOrSub::Add,
-        ),
-        AddI => run_addition_or_subtraction(
-            state,
-            r![1 u],
-            imm![2 u],
-            Register(inst.args[0].as_()),
-            AddOrSub::Add,
-        ),
-        Sub => run_addition_or_subtraction(
-            state,
-            r![1 u],
-            r![2 u],
-            Register(inst.args[0].as_()),
-            AddOrSub::Sub,
-        ),
-        SubI => run_addition_or_subtraction(
-            state,
-            r![1 u],
-            imm![2 u],
-            Register(inst.args[0].as_()),
-            AddOrSub::Sub,
-        ),
-        And => set!(r![0 u] <- r![1 u] & r![2 u]),
-        Eor => set!(r![0 u] <- r![1 u] ^ r![2 u]),
-        Mov => set!(r![0 u] <- r![1 u]),
-        MovI => set!(r![0 u] <- imm![1 u]),
-        Mul => set!(r![0 i] <- r![1 i].overflowing_mul(r![2 i]).0),
-        Orr => set!(r![0 u] <- r![1 u] | r![2 u]),
-    }
-}
 
-fn run_instruction_symbolic<W: Word>(inst: &Inst<W>, state: &mut SymbolicState<'_, W>) {
-    /// Get a register value.
+    let cond = state.cond_holds(inst.cond_code);
+
     macro_rules! r {
+        ($i:literal) => {{
+            debug_assert!($i < 3);
+            debug_assert!(inst.op_code.arg_types()[$i] == ArgType::Reg);
+            state.get_register(Register(inst.args[$i].as_()))
+        }};
+    }
+    macro_rules! imm {
         ($i:literal) => {
-            state.registers[{
-                debug_assert!($i < 3);
-                debug_assert!(inst.op_code.arg_types()[$i] == ArgType::Reg);
-                let r = Register(inst.args[$i].as_());
-                r.0 as usize
-            }]
+            state.from_word(inst.args[$i])
         };
     }
-    /// Get an immediate value.
-    macro_rules! imm {
+    macro_rules! dst {
         ($i:literal) => {
-            W::new_bit_vec(state.registers[0].st(), inst.args[$i])
+            Register(inst.args[$i].as_())
         };
     }
 
-    use OpCode::*;
     match inst.op_code {
-        Nop => (),
-        Add => r![0] = r![1] + r![2],
-        AddI => r![0] = r![1] + imm![2],
-        Sub => r![0] = r![1] + -r![2],
-        SubI => r![0] = r![1] + -imm![2],
-        And => r![0] = r![1] & r![2],
-        Eor => r![0] = r![1] ^ r![2],
-        Mov => r![0] = r![1],
-        MovI => r![0] = imm![1],
-        Mul => r![0] = r![1] * r![2],
-        Orr => r![0] = r![1] | r![2],
+        Nop => return,
+        Add | AddI | Sub | SubI => {
+            let left = r![1];
+            let right = match inst.op_code {
+                Add | Sub => r![2],
+                _ => imm![2],
+            };
+            let (new_val, new_c, new_v) = match inst.op_code {
+                Add | AddI => (
+                    S::num_add(left, right),
+                    S::add_carry(left, right),
+                    S::add_signed_overflow(left, right),
+                ),
+                _ => (
+                    S::num_sub(left, right),
+                    S::sub_carry(left, right),
+                    S::sub_signed_overflow(left, right),
+                ),
+            };
+            let new_z = S::is_zero(new_val);
+            let new_n = S::is_negative(new_val);
+
+            let old = state.get_register(dst![0]);
+            state.set_register(dst![0], S::select_num(cond, new_val, old));
+
+            let (old_z, old_n, old_c, old_v) = state.get_flags_raw();
+            state.set_flags_raw((
+                S::select_bool(cond, new_z, old_z),
+                S::select_bool(cond, new_n, old_n),
+                S::select_bool(cond, new_c, old_c),
+                S::select_bool(cond, new_v, old_v),
+            ));
+        }
+        And | Eor | Orr | Mul | Mov | MovI => {
+            let new_val = match inst.op_code {
+                And => r![1] & r![2],
+                Eor => r![1] ^ r![2],
+                Orr => r![1] | r![2],
+                Mul => S::num_mul(r![1], r![2]),
+                Mov => r![1],
+                MovI => imm![1],
+                _ => unreachable!(),
+            };
+            let new_z = S::is_zero(new_val);
+            let new_n = S::is_negative(new_val);
+            let new_c = state.bool_lit(false);
+            let new_v = state.bool_lit(false);
+
+            let old = state.get_register(dst![0]);
+            state.set_register(dst![0], S::select_num(cond, new_val, old));
+
+            let (old_z, old_n, old_c, old_v) = state.get_flags_raw();
+            state.set_flags_raw((
+                S::select_bool(cond, new_z, old_z),
+                S::select_bool(cond, new_n, old_n),
+                S::select_bool(cond, new_c, old_c),
+                S::select_bool(cond, new_v, old_v),
+            ));
+        }
     }
 }
 
@@ -502,8 +328,8 @@ impl<W: Word> Inst<W> {
         run_instruction(self, state)
     }
 
-    pub fn run_symbolic(&self, state: &mut SymbolicState<'_, W>) {
-        run_instruction_symbolic(self, state)
+    pub fn run_symbolic(&self, state: &mut SmtState<'_, W>) {
+        run_instruction(self, state)
     }
 
     fn to_string_impl(self) -> String {
@@ -632,7 +458,139 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::SearchState;
     use std::collections::HashSet;
+
+    // ── Helpers for execution tests ───────────────────────────────────────
+
+    type S = SearchState<Word64>;
+
+    fn state(regs: &[(u8, u64)], z: bool, n: bool, c: bool, v: bool) -> S {
+        S {
+            registers: regs.iter().map(|&(r, v)| (Register(r), v)).collect(),
+            flags: Some(Flags::new(z, n, c, v)),
+        }
+    }
+
+    fn r(s: &S, reg: u8) -> u64 {
+        s.get_register(Register(reg))
+    }
+
+    /// Returns `(Z, N, C, V)`.
+    fn f(s: &S) -> (bool, bool, bool, bool) {
+        s.get_flags_raw()
+    }
+
+    // ── Flag tests ────────────────────────────────────────────────────────
+
+    /// N flag should be set when the result is negative (MSB = 1).
+    #[test]
+    fn n_flag_set_on_negative_result() {
+        // 0 - 1 = u64::MAX, which is negative as i64.
+        let mut s = state(&[(0, 0), (1, 1)], false, false, false, false);
+        inst!(Sub, 0, 0, 1).run(&mut s); // r0 = r0 - r1 = 0 - 1
+        let (z, n, _c, _v) = f(&s);
+        assert!(!z, "Z should be clear (result is non-zero)");
+        assert!(n, "N should be set (result is negative)");
+    }
+
+    /// N flag should be clear when the result is positive.
+    #[test]
+    fn n_flag_clear_on_positive_result() {
+        let mut s = state(&[(0, 5), (1, 3)], false, false, false, false);
+        inst!(Sub, 0, 0, 1).run(&mut s); // r0 = 5 - 3 = 2
+        let (_z, n, _c, _v) = f(&s);
+        assert!(!n, "N should be clear (result is positive)");
+    }
+
+    /// Z flag should be set on a zero result.
+    #[test]
+    fn z_flag_set_on_zero_result() {
+        let mut s = state(&[(0, 7), (1, 7)], false, false, false, false);
+        inst!(Sub, 0, 0, 1).run(&mut s); // r0 = 7 - 7 = 0
+        assert!(f(&s).0, "Z should be set");
+    }
+
+    /// C (carry) flag set on unsigned addition overflow.
+    #[test]
+    fn carry_flag_on_unsigned_add_overflow() {
+        let mut s = state(&[(0, u64::MAX), (1, 1)], false, false, false, false);
+        inst!(Add, 0, 0, 1).run(&mut s); // u64::MAX + 1 wraps to 0
+        let (z, _n, c, v) = f(&s);
+        assert!(z, "Z should be set (result is 0)");
+        assert!(c, "C should be set (unsigned overflow)");
+        assert!(
+            !v,
+            "V should be clear (signed: -1 + 1 = 0, no signed overflow)"
+        );
+    }
+
+    /// V (overflow) flag set on signed addition overflow.
+    #[test]
+    fn overflow_flag_on_signed_add_overflow() {
+        // i64::MAX + 1 overflows signed, but does NOT overflow unsigned.
+        let mut s = state(&[(0, i64::MAX as u64), (1, 1)], false, false, false, false);
+        inst!(Add, 0, 0, 1).run(&mut s);
+        let (_z, _n, c, v) = f(&s);
+        assert!(!c, "C should be clear (no unsigned overflow)");
+        assert!(v, "V should be set (signed overflow)");
+    }
+
+    /// Logical instruction (And) sets Z and N, and clears C and V.
+    #[test]
+    fn logical_instruction_sets_z_n_clears_c_v() {
+        // Start with C=true, V=true to verify they get cleared.
+        let mut s = state(&[(0, 5), (1, 0)], false, false, true, true);
+        inst!(And, 0, 0, 1).run(&mut s); // r0 = 5 & 0 = 0
+        let (z, n, c, v) = f(&s);
+        assert!(z, "Z should be set (result is 0)");
+        assert!(!n, "N should be clear");
+        assert!(!c, "C should be cleared by logical instruction");
+        assert!(!v, "V should be cleared by logical instruction");
+    }
+
+    // ── Condition-code tests ──────────────────────────────────────────────
+
+    /// When the condition is not met, the instruction is a no-op.
+    #[test]
+    fn condition_code_skips_when_not_met() {
+        // Eq requires Z=1; Z=0 here, so the instruction should not execute.
+        let mut s = state(&[(0, 5)], false, false, false, false); // Z=0
+        inst!(AddI Eq, 0, 0, 1).run(&mut s);
+        assert_eq!(r(&s, 0), 5, "r0 should be unchanged");
+    }
+
+    /// When the condition is met, the instruction executes.
+    #[test]
+    fn condition_code_executes_when_met() {
+        // Eq requires Z=1.
+        let mut s = state(&[(0, 5)], true, false, false, false); // Z=1
+        inst!(AddI Eq, 0, 0, 1).run(&mut s);
+        assert_eq!(r(&s, 0), 6, "r0 should be incremented");
+    }
+
+    /// When the condition is not met, the flags are preserved.
+    #[test]
+    fn condition_code_preserves_flags_when_skipped() {
+        // Ne requires Z=0; Z=1 here, so the instruction should not execute.
+        let mut s = state(&[(0, 1), (1, 1)], true, true, false, false); // Z=1, N=1
+        inst!(Add Ne, 0, 0, 1).run(&mut s);
+        assert_eq!(
+            f(&s),
+            (true, true, false, false),
+            "flags should be unchanged"
+        );
+    }
+
+    /// Cs (carry set) condition code: executes when C=1.
+    #[test]
+    fn cs_condition_code() {
+        let mut s = state(&[(0, 0)], false, false, true, false); // C=1
+        inst!(AddI Cs, 0, 0, 10).run(&mut s);
+        assert_eq!(r(&s, 0), 10);
+    }
+
+    // ── Extend test (pre-existing) ────────────────────────────────────────
 
     #[test]
     fn basic_extend_test() {
