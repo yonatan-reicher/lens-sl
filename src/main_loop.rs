@@ -417,8 +417,6 @@ fn connect_and_refine<WT: Word, WS: Word>(
                         }
                     })
                 });
-                if let Break(extended_program) = ret {
-                    return ConnectAndRefineResult::Found(extended_program);
                 match ret {
                     Break(ProgramOrRetry::Program(prog)) => {
                         return ConnectAndRefineResult::Found(prog);
