@@ -3,7 +3,6 @@ use lens_sl::{Register, Word4, Word64, inst, optimize};
 // These are ignored because they take a long time.
 
 #[test]
-#[ignore]
 fn bad_case() {
     let p = optimize::<Word64, Word4>(
         &[
@@ -28,7 +27,6 @@ fn bad_case() {
 }
 
 #[test]
-#[ignore]
 fn bad_case_2() {
     let p = optimize::<Word64, Word4>(
         &[
@@ -40,5 +38,12 @@ fn bad_case_2() {
         ],
         &[&[(Register(0), 0), (Register(1), 0)]],
     );
-    assert_eq!(p, None);
+    assert_eq!(
+        p,
+        Some(vec![
+            inst!(AddI, 0, 0, 5),
+            inst!(AddI Eq, 1, 0, 1),
+            inst!(Orr, 0, 1, 0),
+        ])
+    );
 }
