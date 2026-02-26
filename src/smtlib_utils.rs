@@ -1,43 +1,70 @@
-use smtlib::{
-    Bool, Int,
-    lowlevel::ast::{Identifier, QualIdentifier, SpecConstant, Term},
-    terms::STerm,
-};
+use smtlib::lowlevel::ast::{Identifier, QualIdentifier, SpecConstant, Term};
+use smtlib::lowlevel::lexicon::Binary;
+use smtlib::terms::STerm;
+use smtlib::{BitVec, Bool, Int};
 
-fn spec_constant_to_u128(spec: &SpecConstant) -> u128 {
+fn binary_to_u128<'st>(b: Binary<'st>) -> u128 {
+    let s = b.0;
+    debug_assert!(s.starts_with("#b"));
+    u128::from_str_radix(&s[2..], 2).expect("Binary literals should be valid binary numbers")
+}
+
+fn spec_constant_to_u128(spec: &SpecConstant) -> Option<u128> {
     match spec {
-        SpecConstant::Numeral(n) => n.into_u128().unwrap(),
-        _ => panic!("unexpected non-numeral constant: {}", spec),
+        SpecConstant::Numeral(n) => Some(n.into_u128().unwrap()),
+        SpecConstant::Binary(b) => Some(binary_to_u128(*b)),
+        _ => None,
     }
 }
 
-fn term_to_i128(term: &Term) -> i128 {
+fn spec_constant_to_bool(spec: &SpecConstant) -> Option<bool> {
+    match spec {
+        SpecConstant::String("true") => Some(true),
+        SpecConstant::String("false") => Some(false),
+        _ => None,
+    }
+}
+
+fn term_to_i128(term: &Term) -> Option<i128> {
     match term {
-        Term::SpecConstant(sc) => spec_constant_to_u128(sc) as i128,
+        Term::SpecConstant(sc) => Some(spec_constant_to_u128(sc)? as i128),
+        // For some reason, some binary numbers appear as identifiers
+        Term::Identifier(QualIdentifier::Identifier(Identifier::Simple(sym)))
+            if sym.0.starts_with("#b") =>
+        {
+            Some(binary_to_u128(Binary(sym.0)) as i128)
+        }
         Term::Application(QualIdentifier::Identifier(Identifier::Simple(sym)), [arg])
             if sym.0 == "-" =>
         {
-            let arg = term_to_i128(arg);
-            -arg
+            let arg = term_to_i128(arg)?;
+            Some(-arg)
         }
-        _ => panic!("cannot turn term to i128: {}", term),
+        _ => None,
     }
 }
 
-pub fn int_term_to_i128(int: Int<'_>) -> i128 {
+fn term_to_bool(term: &Term) -> Option<bool> {
+    match term {
+        Term::SpecConstant(sc) => spec_constant_to_bool(sc),
+        _ => None,
+    }
+}
+
+#[allow(dead_code)]
+pub fn int_term_to_i128(int: Int<'_>) -> Option<i128> {
     let sterm = STerm::from(int);
     term_to_i128(sterm.term())
 }
 
-pub fn bool_term_to_bool(b: Bool<'_>) -> bool {
-    match STerm::from(b).term() {
-        Term::Identifier(QualIdentifier::Identifier(Identifier::Simple(sym))) => match sym.0 {
-            "true" => true,
-            "false" => false,
-            s => panic!("unexpected boolean identifier in model: {s}"),
-        },
-        term => panic!("unexpected boolean term in model: {:?}", term),
-    }
+pub fn bool_term_to_bool(b: Bool<'_>) -> Option<bool> {
+    let sterm = STerm::from(b);
+    term_to_bool(sterm.term())
+}
+
+pub fn bit_vec_term_to_i128<const M: usize>(int: BitVec<'_, M>) -> Option<i128> {
+    let sterm = STerm::from(int);
+    term_to_i128(sterm.term())
 }
 
 #[cfg(test)]
@@ -52,7 +79,7 @@ mod tests {
     fn test_int_term_to_i128_always_returns_same(i: i64) {
         let st = Storage::new();
         let int: Int = i.into_with_storage(&st);
-        assert_eq!(int_term_to_i128(int) as i64, i);
+        assert_eq!(int_term_to_i128(int).unwrap() as i64, i);
     }
 
     #[test]
@@ -68,10 +95,13 @@ mod tests {
     #[should_panic]
     fn test_int_term_to_i128_cannot_handle_application() {
         let st = Storage::new();
-        let t = Term::Application(QualIdentifier::Identifier(Identifier::Simple(Symbol("+"))), &[
-            STerm::from(Int::new_const(&st, "x")).term(),
-            STerm::from(Int::new_const(&st, "y")).term(),
-        ]);
+        let t = Term::Application(
+            QualIdentifier::Identifier(Identifier::Simple(Symbol("+"))),
+            &[
+                STerm::from(Int::new_const(&st, "x")).term(),
+                STerm::from(Int::new_const(&st, "y")).term(),
+            ],
+        );
         let int = Int::from(STerm::new(&st, t));
         int_term_to_i128(int);
     }
@@ -80,7 +110,7 @@ mod tests {
     fn test_bool_term_to_bool_always_returns_same(b: bool) {
         let st = Storage::new();
         let bool_term: Bool = b.into_with_storage(&st);
-        assert_eq!(bool_term_to_bool(bool_term), b);
+        assert_eq!(bool_term_to_bool(bool_term), Some(b));
     }
 
     #[test]
