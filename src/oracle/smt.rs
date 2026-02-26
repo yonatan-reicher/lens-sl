@@ -1,60 +1,56 @@
 use super::Oracle;
-use smtlib::{Bool, Model, Solver, Storage, backend::cvc5_binary::Cvc5Binary};
+
 use std::fmt::Debug;
 use std::pin::Pin;
 
+use smtlib::backend::cvc5_binary::Cvc5Binary;
+use smtlib::{Bool, Model, Solver, Storage};
+
 pub struct SmtOracle<'st, I: Inst> {
-    st: Pin<Box<Storage>>,
+    _st: Pin<Box<Storage>>,
     solver: Solver<'st, Cvc5Binary>,
     initial_state: I::StateVars<'st>,
     expected_final_state: I::SymbolicState<'st>,
+    target_program: Vec<I>,
 }
 
 impl<'st, I: Inst> SmtOracle<'st, I> {
-    pub fn storage(&self) -> &'st Storage {
-        unsafe { &*(self.st.as_ref().get_ref() as *const Storage) }
-    }
-
-    pub fn new(target_program: &[I]) -> Self {
+    pub fn new(target_program: Vec<I>) -> Self {
         let st = Box::pin(Storage::new());
         let st_ref: &'st Storage = unsafe { &*(st.as_ref().get_ref() as *const Storage) };
         let initial_state = I::new_state_vars(st_ref, "init");
-        let expected_final_state = I::run(target_program, st_ref, initial_state.clone().into());
+        let mut expected_final_state = initial_state.clone().into();
+        I::run_symbolic(&target_program, &mut expected_final_state);
         let solver = new_solver(st_ref);
         Self {
-            st,
+            _st: st,
             initial_state,
             expected_final_state,
             solver,
+            target_program,
         }
     }
 }
 
 impl<'st, I: Inst> Oracle<[I], I::State> for SmtOracle<'st, I> {
     fn check_program(&mut self, program: &[I]) -> Result<(), super::CounterExample<I::State>> {
-        let st = self.storage();
         // Clone these before borrowing self.solver mutably via scope.
         let initial_state = self.initial_state.clone();
         let expected_output = self.expected_final_state.clone();
         let result = self
             .solver
             .scope(|solver| {
-                let output = I::run(program, st, initial_state.clone().into());
-                // Introduce named output constants so we can extract them from the model.
-                let output_vars = I::new_state_vars(st, "output");
-                // Assert: output_vars == candidate program's output.
-                solver.assert(!I::state_neq(
-                    st,
-                    output_vars.clone().into(),
-                    output.clone(),
-                ))?;
+                let mut output = initial_state.clone().into();
+                I::run_symbolic(program, &mut output);
                 // Assert: candidate output != target output (look for a counter-example).
-                solver.assert(I::state_neq(st, output, expected_output))?;
+                let f = I::state_neq(output, expected_output);
+                solver.assert(f)?;
                 match solver.check_sat_with_model()? {
                     smtlib::SatResultWithModel::Unsat => Ok(None),
                     smtlib::SatResultWithModel::Sat(model) => {
-                        let input = I::extract_from_model(st, &model, initial_state);
-                        let output = I::extract_from_model(st, &model, output_vars);
+                        let input = I::extract_from_model(&model, initial_state);
+                        let mut output = input.clone();
+                        I::run(&self.target_program, &mut output);
                         Ok(Some((input, output)))
                     }
                     smtlib::SatResultWithModel::Unknown => panic!("solver returned unknown"),
@@ -81,7 +77,7 @@ fn new_solver<'st>(st: &'st Storage) -> Solver<'st, Cvc5Binary> {
 }
 
 pub trait Inst: Sized {
-    type State: Debug;
+    type State: Clone + Debug;
     /// A representation of the state as SMT constants.
     type StateVars<'st>: Clone + Debug + Into<Self::SymbolicState<'st>> + 'st;
     /// A symbolic representation of the state.
@@ -89,28 +85,22 @@ pub trait Inst: Sized {
 
     fn new_state_vars<'st>(st: &'st Storage, name: &str) -> Self::StateVars<'st>;
 
-    fn state_neq<'st>(
-        st: &'st Storage,
-        s1: Self::SymbolicState<'st>,
-        s2: Self::SymbolicState<'st>,
-    ) -> Bool<'st>;
+    fn state_neq<'st>(s1: Self::SymbolicState<'st>, s2: Self::SymbolicState<'st>) -> Bool<'st>;
 
-    fn step<'st>(&self, st: &'st Storage, s: Self::SymbolicState<'st>) -> Self::SymbolicState<'st>;
+    fn step_symbolic<'st>(&self, s: &mut Self::SymbolicState<'st>);
 
-    fn extract_from_model<'st>(
-        st: &'st Storage,
-        model: &Model<'st>,
-        s: Self::StateVars<'st>,
-    ) -> Self::State;
+    fn step(&self, s: &mut Self::State);
+
+    fn extract_from_model<'st>(model: &Model<'st>, s: Self::StateVars<'st>) -> Self::State;
 
     // -- default implementations --
 
-    fn run<'st>(
-        program: &[Self],
-        st: &'st Storage,
-        s: Self::SymbolicState<'st>,
-    ) -> Self::SymbolicState<'st> {
-        program.iter().fold(s, |s, inst| inst.step(st, s))
+    fn run_symbolic<'st>(program: &[Self], s: &mut Self::SymbolicState<'st>) {
+        program.iter().for_each(|inst| inst.step_symbolic(s))
+    }
+
+    fn run(program: &[Self], s: &mut Self::State) {
+        program.iter().for_each(|inst| inst.step(s))
     }
 }
 
@@ -123,12 +113,12 @@ mod tests {
         Int, Sorted,
         terms::{Const, IntoWithStorage, StaticSorted},
     };
-    use std::pin::pin;
 
     const N: usize = 10;
 
     type Var = usize;
 
+    #[derive(Clone, Debug)]
     enum I {
         Add(Var, Var),
     }
@@ -156,11 +146,8 @@ mod tests {
             StateVars { vars }
         }
 
-        fn state_neq<'st>(
-            st: &'st Storage,
-            s1: Self::SymbolicState<'st>,
-            s2: Self::SymbolicState<'st>,
-        ) -> Bool<'st> {
+        fn state_neq<'st>(s1: Self::SymbolicState<'st>, s2: Self::SymbolicState<'st>) -> Bool<'st> {
+            let st = s1[0].st();
             let mut eq = false.into_with_storage(st);
             for i in 0..N {
                 eq |= s1[i]._neq(s2[i]);
@@ -168,34 +155,31 @@ mod tests {
             eq
         }
 
-        fn step<'st>(
-            &self,
-            _st: &'st Storage,
-            s: Self::SymbolicState<'st>,
-        ) -> Self::SymbolicState<'st> {
+        fn step_symbolic<'st>(&self, s: &mut Self::SymbolicState<'st>) {
             match self {
                 I::Add(x, y) => {
-                    let mut new_state = s;
-                    new_state[*x] += new_state[*y];
-                    new_state
+                    s[*x] += s[*y];
                 }
             }
         }
 
-        fn extract_from_model<'st>(
-            _st: &'st Storage,
-            model: &Model,
-            s: Self::StateVars<'st>,
-        ) -> Self::State {
+        fn step(&self, s: &mut Self::State) {
+            match self {
+                I::Add(x, y) => s[*x] += s[*y],
+            }
+        }
+
+        fn extract_from_model<'st>(model: &Model, s: Self::StateVars<'st>) -> Self::State {
             std::array::from_fn(|i| {
                 let int = model.eval(s.vars[i]).expect("variable not found in model");
-                int_term_to_i128(int) as i64
+                int_term_to_i128(int).unwrap() as i64
             })
         }
     }
 
+    #[allow(clippy::result_large_err)]
     fn test_equivalence(p1: &[I], p2: &[I]) -> Result<(), CounterExample<[i64; N]>> {
-        let mut oracle = SmtOracle::new(p1);
+        let mut oracle = SmtOracle::new(p1.to_vec());
         oracle.check_program(p2)
     }
 
