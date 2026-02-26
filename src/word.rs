@@ -6,8 +6,8 @@ use arbitrary_int::traits::{Integer, SignedInteger, UnsignedInteger};
 use arbitrary_int::{i4, u4};
 
 use crate::smtlib_utils::bit_vec_term_to_i128;
-use smtlib::terms::{IntoWithStorage, StaticSorted};
-use smtlib::{BitVec, Storage};
+use smtlib::terms::{Dynamic, IntoWithStorage, STerm, StaticSorted};
+use smtlib::{BitVec, Bool, Storage};
 
 pub trait Word:
     Sized + Clone + Copy + Debug + Default + PartialEq + Eq + PartialOrd + Ord + Hash + 'static
@@ -34,6 +34,7 @@ pub trait Word:
         + StaticSorted<'st, Inner = Self::SymbolicBitVec<'st>>
         // + TryInto<i64, Error: Debug> // This TryInto implementation is currently broken, so we use our own.
         // + Sub<Output = Self::SymbolicBitVec<'st>> // For some reason, this is unimplemented.
+        + SymbolicOps<'st>
         + 'st;
 
     fn new_bit_vec<'st>(st: &'st Storage, value: Self::Unsigned) -> Self::SymbolicBitVec<'st>;
@@ -120,6 +121,34 @@ define_word_ops!(u8);
 define_word_ops!(i8);
 define_word_ops!(u64);
 define_word_ops!(i64);
+
+/// Additional SMT operations needed for symbolic execution.
+pub trait SymbolicOps<'st>: Sized + Copy {
+    fn bvslt(self, other: Self) -> Bool<'st>;
+    fn bvult(self, other: Self) -> Bool<'st>;
+    fn bvuge(self, other: Self) -> Bool<'st>;
+    /// If-then-else: returns `t` when `cond` is true, `e` otherwise.
+    fn select(cond: Bool<'st>, t: Self, e: Self) -> Self;
+}
+
+impl<'st, const M: usize> SymbolicOps<'st> for BitVec<'st, M> {
+    fn bvslt(self, other: Self) -> Bool<'st> {
+        BitVec::bvslt(self, other)
+    }
+    fn bvult(self, other: Self) -> Bool<'st> {
+        BitVec::bvult(self, other)
+    }
+    fn bvuge(self, other: Self) -> Bool<'st> {
+        BitVec::bvuge(self, other)
+    }
+    fn select(cond: Bool<'st>, t: Self, e: Self) -> Self {
+        let t_dyn: Dynamic<'st> = t.into();
+        let e_dyn: Dynamic<'st> = e.into();
+        let result: Dynamic<'st> = cond.ite(t_dyn, e_dyn);
+        let sterm: STerm<'st> = result.into();
+        sterm.into()
+    }
+}
 
 pub mod prelude {
     #[allow(unused_imports)]
