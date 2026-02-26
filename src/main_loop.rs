@@ -4,7 +4,9 @@
 use crate::collect_registers::{self, Collector};
 use crate::enumerate::{EnumerationInfo, Enumerator};
 use crate::graph;
-use crate::isa::{self, Flags, Inst, Register, StateVars, SymbolicState, extend_program_for_each};
+use crate::isa::{
+    self, Flags, Inst, Register, State as _, StateVars, SymbolicState, extend_program_for_each,
+};
 use crate::oracle::{self, Oracle, SmtOracle};
 use crate::programs;
 use crate::reduce_bit_width::Reducer;
@@ -151,7 +153,9 @@ impl<W: Word> oracle::smt::Inst for Inst<W> {
     }
 
     fn extract_from_model<'st>(model: &smtlib::Model<'st>, s: StateVars<'st, W>) -> State<W> {
+        // The state to return at the end.
         let st = s.registers[0].st();
+        // == Registers ==
         let mut state = State::default();
         for (i, var) in s.registers.iter().enumerate() {
             let reg = Register(i as u8);
@@ -166,26 +170,21 @@ impl<W: Word> oracle::smt::Inst for Inst<W> {
                     )
                 })
                 .as_();
-            isa::State::set_register(&mut state, reg, val);
+            state.set_register(reg, val);
         }
-        let z = model
-            .eval(s.flags.z)
-            .and_then(|b| bool_term_to_bool(b))
-            .unwrap_or(false);
-        let n = model
-            .eval(s.flags.n)
-            .and_then(|b| bool_term_to_bool(b))
-            .unwrap_or(false);
-        let c = model
-            .eval(s.flags.c)
-            .and_then(|b| bool_term_to_bool(b))
-            .unwrap_or(false);
-        let v = model
-            .eval(s.flags.v)
-            .and_then(|b| bool_term_to_bool(b))
-            .unwrap_or(false);
+        // == Flags ==
+        let load_bool = |b| {
+            model
+                .eval(b)
+                .and_then(|b| bool_term_to_bool(b))
+                .unwrap_or(false /* Arbitrary default, result did not matter */)
+        };
+        let z = load_bool(s.flags.z);
+        let n = load_bool(s.flags.n);
+        let c = load_bool(s.flags.c);
+        let v = load_bool(s.flags.v);
         let flags = Flags::new(z, n, c, v);
-        isa::State::set_flags(&mut state, flags);
+        state.set_flags(flags);
         state
     }
 }
