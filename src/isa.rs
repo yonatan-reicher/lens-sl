@@ -1,13 +1,16 @@
 use crate::all_permutations::Iter as PermutationIter;
 use crate::iter_slice_or_single::Iter as SliceOrSingle;
-use arbitrary_int::traits::Integer;
+use crate::reduce_bit_width::{ImmediateInfo, Reducer};
+use crate::word::prelude::*;
+
 use std::fmt::Debug;
 use std::ops::ControlFlow;
 
-use crate::{
-    reduce_bit_width::{ImmediateInfo, Reducer},
-    word::{Word, WordOps},
-};
+use arbitrary_int::traits::Integer;
+
+use smtlib::prelude::*;
+use smtlib::terms::Const;
+use smtlib::{Bool, Storage};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(test, derive(proptest_derive::Arbitrary))]
@@ -204,6 +207,18 @@ bitflags::bitflags! {
     }
 }
 
+impl Flags {
+    #[rustfmt::skip]
+    pub fn new(z: bool, n: bool, c: bool, v: bool) -> Self {
+        let mut flags = Flags::empty();
+        if z { flags |= Flags::Z; }
+        if n { flags |= Flags::N; }
+        if c { flags |= Flags::C; }
+        if v { flags |= Flags::V; }
+        flags
+    }
+}
+
 #[cfg(test)]
 impl proptest::arbitrary::Arbitrary for Flags {
     type Parameters = ();
@@ -230,6 +245,93 @@ pub trait State<W: Word> {
     fn set_register(&mut self, reg: Register, value: W::Unsigned);
     fn get_flags(&self) -> Flags;
     fn set_flags(&mut self, flags: Flags);
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct StateVars<'st, W: Word> {
+    pub registers: [Const<'st, W::SymbolicBitVec<'st>>; Register::COUNT as usize],
+    pub flags: FlagVars<'st>,
+}
+
+impl<'st, W: Word> StateVars<'st, W> {
+    pub fn new(st: &'st Storage, name: &str) -> Self {
+        Self {
+            registers: std::array::from_fn(|i| {
+                W::SymbolicBitVec::new_const(st, &format!("{}_r{}", name, i))
+            }),
+            flags: FlagVars::new(st, name),
+        }
+    }
+}
+
+impl<'st> FlagVars<'st> {
+    pub fn new(st: &'st Storage, name: &str) -> Self {
+        Self {
+            z: Bool::new_const(st, &format!("{}_z", name)),
+            n: Bool::new_const(st, &format!("{}_n", name)),
+            c: Bool::new_const(st, &format!("{}_c", name)),
+            v: Bool::new_const(st, &format!("{}_v", name)),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct FlagVars<'st> {
+    pub z: Const<'st, Bool<'st>>,
+    pub n: Const<'st, Bool<'st>>,
+    pub c: Const<'st, Bool<'st>>,
+    pub v: Const<'st, Bool<'st>>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct SymbolicState<'st, W: Word> {
+    pub registers: [W::SymbolicBitVec<'st>; Register::COUNT as usize],
+    pub flags: SymbolicFlags<'st>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct SymbolicFlags<'st> {
+    pub z: Bool<'st>,
+    pub n: Bool<'st>,
+    pub c: Bool<'st>,
+    pub v: Bool<'st>,
+}
+
+impl<'st, W: Word> From<StateVars<'st, W>> for SymbolicState<'st, W> {
+    fn from(value: StateVars<'st, W>) -> Self {
+        Self {
+            registers: value.registers.map(Into::into),
+            flags: value.flags.into(),
+        }
+    }
+}
+
+impl<'st> From<FlagVars<'st>> for SymbolicFlags<'st> {
+    fn from(value: FlagVars<'st>) -> Self {
+        Self {
+            z: value.z.into(),
+            n: value.n.into(),
+            c: value.c.into(),
+            v: value.v.into(),
+        }
+    }
+}
+
+impl<'st, W: Word> SymbolicState<'st, W> {
+    pub fn eq(&self, other: Self) -> Bool<'st> {
+        let regs = self.registers.iter().zip(other.registers);
+        let regs_eq = regs
+            .map(|(ra, rb)| ra._eq(rb))
+            .reduce(|b1, b2| b1 & b2)
+            .unwrap();
+        regs_eq & self.flags.eq(other.flags)
+    }
+}
+
+impl<'st> SymbolicFlags<'st> {
+    pub fn eq(&self, other: Self) -> Bool<'st> {
+        self.z._eq(other.z) & self.n._eq(other.n) & self.c._eq(other.c) & self.v._eq(other.v)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -360,9 +462,48 @@ fn run_instruction<W: Word, S: State<W>>(inst: &Inst<W>, state: &mut S) {
     }
 }
 
+fn run_instruction_symbolic<W: Word>(inst: &Inst<W>, state: &mut SymbolicState<'_, W>) {
+    /// Get a register value.
+    macro_rules! r {
+        ($i:literal) => {
+            state.registers[{
+                debug_assert!($i < 3);
+                debug_assert!(inst.op_code.arg_types()[$i] == ArgType::Reg);
+                let r = Register(inst.args[$i].as_());
+                r.0 as usize
+            }]
+        };
+    }
+    /// Get an immediate value.
+    macro_rules! imm {
+        ($i:literal) => {
+            W::new_bit_vec(state.registers[0].st(), inst.args[$i])
+        };
+    }
+
+    use OpCode::*;
+    match inst.op_code {
+        Nop => (),
+        Add => r![0] = r![1] + r![2],
+        AddI => r![0] = r![1] + imm![2],
+        Sub => r![0] = r![1] + -r![2],
+        SubI => r![0] = r![1] + -imm![2],
+        And => r![0] = r![1] & r![2],
+        Eor => r![0] = r![1] ^ r![2],
+        Mov => r![0] = r![1],
+        MovI => r![0] = imm![1],
+        Mul => r![0] = r![1] * r![2],
+        Orr => r![0] = r![1] | r![2],
+    }
+}
+
 impl<W: Word> Inst<W> {
     pub fn run<S: State<W>>(&self, state: &mut S) {
         run_instruction(self, state)
+    }
+
+    pub fn run_symbolic(&self, state: &mut SymbolicState<'_, W>) {
+        run_instruction_symbolic(self, state)
     }
 
     fn to_string_impl(self) -> String {
@@ -491,7 +632,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::word::prelude::*;
     use std::collections::HashSet;
 
     #[test]

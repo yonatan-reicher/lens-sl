@@ -5,9 +5,10 @@
 loop {
     let x = ps
         | sort-by mem --reverse
-        | where name == "lens-sl"
-        | get mem;
-    let msg = if $x == [] { echo "0B" } else { $x | get 0 }
-    print -n $"Memory Usage: ($msg)        \r"
+        | where name in [lens-sl, cvc5]
+        | group-by name
+        | update cells { reject name ppid virtual }
+    clear
+    $x | table --expand | print
     sleep 0.2sec
 }

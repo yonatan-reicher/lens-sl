@@ -21,6 +21,10 @@ fn main() {
             &[(Register(0), 92), (Register(1), 11)],
         ],
     );
+    let Some(p) = p else {
+        println!("No equivalent program found");
+        return;
+    };
     println!("Optimized program:");
     for inst in p {
         println!("{inst}");

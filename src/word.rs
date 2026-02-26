@@ -1,14 +1,44 @@
 use std::fmt::{Debug, Display};
 use std::hash::Hash;
+use std::ops::*;
 
 use arbitrary_int::traits::{Integer, SignedInteger, UnsignedInteger};
 use arbitrary_int::{i4, u4};
 
+use crate::smtlib_utils::bit_vec_term_to_i128;
+use smtlib::terms::{IntoWithStorage, StaticSorted};
+use smtlib::{BitVec, Storage};
+
 pub trait Word:
-    Sized + Clone + Copy + Debug + Default + PartialEq + Eq + PartialOrd + Ord + Hash
+    Sized + Clone + Copy + Debug + Default + PartialEq + Eq + PartialOrd + Ord + Hash + 'static
 {
-    type Signed: Sized + Debug + Default + Display + Hash + SignedInteger + WordOps;
-    type Unsigned: Sized + Debug + Default + Display + Hash + UnsignedInteger + WordOps;
+    type Signed: Sized + Debug + Default + Display + Hash + SignedInteger + WordOps + 'static;
+    type Unsigned: Sized + Debug + Default + Display + Hash + UnsignedInteger + WordOps + 'static;
+
+    type SymbolicBitVec<'st>: Add<Output = Self::SymbolicBitVec<'st>>
+        + BitAnd<Output = Self::SymbolicBitVec<'st>>
+        + BitOr<Output = Self::SymbolicBitVec<'st>>
+        + BitXor<Output = Self::SymbolicBitVec<'st>>
+        + Clone
+        + Copy
+        + Debug
+        + Div<Output = Self::SymbolicBitVec<'st>>
+        + From<smtlib::terms::Const<'st, Self::SymbolicBitVec<'st>>>
+        + IntoWithStorage<'st, Self::SymbolicBitVec<'st>>
+        + Mul<Output = Self::SymbolicBitVec<'st>>
+        + Neg<Output = Self::SymbolicBitVec<'st>>
+        + Not<Output = Self::SymbolicBitVec<'st>>
+        + Rem<Output = Self::SymbolicBitVec<'st>>
+        + Shl<Output = Self::SymbolicBitVec<'st>>
+        + Shr<Output = Self::SymbolicBitVec<'st>>
+        + StaticSorted<'st, Inner = Self::SymbolicBitVec<'st>>
+        // + TryInto<i64, Error: Debug> // This TryInto implementation is currently broken, so we use our own.
+        // + Sub<Output = Self::SymbolicBitVec<'st>> // For some reason, this is unimplemented.
+        + 'st;
+
+    fn new_bit_vec<'st>(st: &'st Storage, value: Self::Unsigned) -> Self::SymbolicBitVec<'st>;
+
+    fn bit_vec_try_into(value: Self::SymbolicBitVec<'_>) -> Option<Self::Unsigned>;
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -16,6 +46,15 @@ pub struct Word64;
 impl Word for Word64 {
     type Unsigned = u64;
     type Signed = i64;
+    type SymbolicBitVec<'st> = BitVec<'st, 64>;
+
+    fn new_bit_vec<'st>(st: &'st Storage, value: u64) -> Self::SymbolicBitVec<'st> {
+        (value as i64).into_with_storage(st)
+    }
+
+    fn bit_vec_try_into(value: Self::SymbolicBitVec<'_>) -> Option<Self::Unsigned> {
+        bit_vec_term_to_i128(value).map(|i| i as _)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -23,6 +62,15 @@ pub struct Word8;
 impl Word for Word8 {
     type Unsigned = u8;
     type Signed = i8;
+    type SymbolicBitVec<'st> = BitVec<'st, 8>;
+
+    fn new_bit_vec<'st>(st: &'st Storage, value: u8) -> Self::SymbolicBitVec<'st> {
+        (value as i64).into_with_storage(st)
+    }
+
+    fn bit_vec_try_into(value: Self::SymbolicBitVec<'_>) -> Option<Self::Unsigned> {
+        bit_vec_term_to_i128(value).map(|i| i as _)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -30,6 +78,15 @@ pub struct Word4;
 impl Word for Word4 {
     type Unsigned = u4;
     type Signed = i4;
+    type SymbolicBitVec<'st> = BitVec<'st, 4>;
+
+    fn new_bit_vec<'st>(st: &'st Storage, value: u4) -> Self::SymbolicBitVec<'st> {
+        value.as_::<i64>().into_with_storage(st)
+    }
+
+    fn bit_vec_try_into(value: Self::SymbolicBitVec<'_>) -> Option<Self::Unsigned> {
+        bit_vec_term_to_i128(value).map(|i| i.as_())
+    }
 }
 
 pub trait WordOps: Sized {
@@ -66,7 +123,7 @@ define_word_ops!(i64);
 
 pub mod prelude {
     #[allow(unused_imports)]
-    pub use super::{Word, Word4, Word8, Word64};
+    pub use super::{Word, Word4, Word8, Word64, WordOps};
     pub use arbitrary_int::prelude::*;
 }
 

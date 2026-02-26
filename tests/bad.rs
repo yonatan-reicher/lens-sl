@@ -1,8 +1,9 @@
 use lens_sl::{Register, Word4, Word64, inst, optimize};
 
-/// This test currently crashes.
+// These are ignored because they take a long time.
+
 #[test]
-#[ignore] // Ignored because it takes a long time.
+#[ignore]
 fn bad_case() {
     let p = optimize::<Word64, Word4>(
         &[
@@ -23,14 +24,11 @@ fn bad_case() {
             &[(Register(0), 1), (Register(3), 0)],
         ],
     );
-    println!("Optimized program:");
-    for inst in p {
-        println!("{inst}");
-    }
+    assert_eq!(p, None);
 }
 
-/// This test currently crashes.
 #[test]
+#[ignore]
 fn bad_case_2() {
     let p = optimize::<Word64, Word4>(
         &[
@@ -42,8 +40,5 @@ fn bad_case_2() {
         ],
         &[&[(Register(0), 0), (Register(1), 0)]],
     );
-    println!("Optimized program:");
-    for inst in p {
-        println!("{inst}");
-    }
+    assert_eq!(p, None);
 }

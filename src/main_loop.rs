@@ -4,13 +4,21 @@
 use crate::collect_registers::{self, Collector};
 use crate::enumerate::{EnumerationInfo, Enumerator};
 use crate::graph;
-use crate::isa::{self, Flags, Inst, Register, extend_program_for_each};
+use crate::isa::{
+    self, Flags, Inst, Register, State as _, StateVars, SymbolicState, extend_program_for_each,
+};
+use crate::oracle::{self, Oracle, SmtOracle};
 use crate::programs;
 use crate::reduce_bit_width::Reducer;
 use crate::word::prelude::*;
-use rustc_hash::FxHashSet;
+
 use std::ops::ControlFlow::{Break, Continue};
 use std::rc::Rc;
+
+use functionality::Pipe;
+
+use crate::smtlib_utils::bool_term_to_bool;
+use smtlib::Sorted;
 
 // =========================================== State ==============================================
 
@@ -28,7 +36,7 @@ use std::rc::Rc;
         None => "None".to_string(),
     }
 )]
-struct State<W: Word> {
+pub struct State<W: Word> {
     /// This vector is always sorted by register.
     /// Registers that are not present are not "live".
     pub registers: Vec<(Register, W::Unsigned)>,
@@ -94,6 +102,12 @@ impl<W: Word> collect_registers::State<W> for State<W> {
     }
 }
 
+impl<W: Word> oracle::test_cases::State for State<W> {
+    fn clone_to(&self, output: &mut Self) {
+        self.clone_to(output);
+    }
+}
+
 // =========================================== Graph ==============================================
 
 type Program<W> = programs::Program<Inst<W>>;
@@ -104,31 +118,74 @@ type Graph<W> = graph::Graph<State<W>, Programs<W>>;
 
 // ========================================== Oracle ==============================================
 
-type CounterExample<W> = (State<W>, State<W>);
-
-/// In the future, we will have a solver implement this trait.
-trait Oracle<W: Word> {
-    fn check_program(&mut self, program: &[Inst<W>]) -> Result<(), &CounterExample<W>>;
-}
-
-struct TestCasesOracle<W: Word> {
-    test_cases: Vec<CounterExample<W>>,
-}
-
-impl<W: Word> Oracle<W> for TestCasesOracle<W> {
-    fn check_program(&mut self, program: &[Inst<W>]) -> Result<(), &CounterExample<W>> {
-        // Maybe we could not check test cases again, but it's probably not really slowing us down.
-        let mut output = State::default();
-        for test @ (input, expected_output) in self.test_cases.iter() {
-            input.clone_to(&mut output);
-            for inst in program {
-                inst.run(&mut output);
-            }
-            if &output != expected_output {
-                return Err(test);
-            }
+impl<W: Word> oracle::test_cases::Program<State<W>> for [Inst<W>] {
+    fn run(&self, state: &mut State<W>) {
+        for inst in self {
+            inst.run(state);
         }
-        Ok(())
+    }
+}
+
+impl<W: Word> oracle::smt::Inst for Inst<W> {
+    type State = State<W>;
+
+    type StateVars<'st> = StateVars<'st, W>;
+
+    type SymbolicState<'st> = SymbolicState<'st, W>;
+
+    fn new_state_vars<'st>(st: &'st smtlib::Storage, name: &str) -> Self::StateVars<'st> {
+        StateVars::new(st, name)
+    }
+
+    fn state_neq<'st>(
+        s1: Self::SymbolicState<'st>,
+        s2: Self::SymbolicState<'st>,
+    ) -> smtlib::Bool<'st> {
+        !s1.eq(s2)
+    }
+
+    fn step_symbolic<'st>(&self, s: &mut Self::SymbolicState<'st>) {
+        self.run_symbolic(s);
+    }
+
+    fn step<'st>(&self, s: &mut Self::State) {
+        self.run(s);
+    }
+
+    fn extract_from_model<'st>(model: &smtlib::Model<'st>, s: StateVars<'st, W>) -> State<W> {
+        // The state to return at the end.
+        let st = s.registers[0].st();
+        // == Registers ==
+        let mut state = State::default();
+        for (i, var) in s.registers.iter().enumerate() {
+            let reg = Register(i as u8);
+            let val = model
+                .eval(*var)
+                .unwrap_or_else(|| W::new_bit_vec(st, 0.as_()))
+                .pipe(W::bit_vec_try_into)
+                //.try_into()
+                .unwrap_or_else(|| {
+                    panic!(
+                        "Failed to convert variable '{var:?}' to the right type in model {model}."
+                    )
+                })
+                .as_();
+            state.set_register(reg, val);
+        }
+        // == Flags ==
+        let load_bool = |b| {
+            model
+                .eval(b)
+                .and_then(|b| bool_term_to_bool(b))
+                .unwrap_or(false /* Arbitrary default, result did not matter */)
+        };
+        let z = load_bool(s.flags.z);
+        let n = load_bool(s.flags.n);
+        let c = load_bool(s.flags.c);
+        let v = load_bool(s.flags.v);
+        let flags = Flags::new(z, n, c, v);
+        state.set_flags(flags);
+        state
     }
 }
 
@@ -140,7 +197,7 @@ impl<W: Word> Oracle<W> for TestCasesOracle<W> {
 pub fn optimize<WT: Word, WS: Word>(
     program: &[Inst<WT>],
     inputs: &[&[(Register, WT::Unsigned)]], // TODO: Return a program in Program<WT> instead...
-) -> Program<WT> {
+) -> Option<Program<WT>> {
     let mut reducer = Reducer::<WT, WS>::default();
     let mut reduced_program = Vec::with_capacity(program.len());
     for inst in program {
@@ -163,7 +220,7 @@ pub fn optimize<WT: Word, WS: Word>(
             (input, output)
         })
         .collect();
-    let test_cases_reduced: Vec<(State<WS>, State<WS>)> = test_cases
+    let _test_cases_reduced: Vec<(State<WS>, State<WS>)> = test_cases
         .iter()
         .map(|(input, _output)| {
             let input = input.reduce(&mut reducer.clone());
@@ -180,12 +237,15 @@ pub fn optimize<WT: Word, WS: Word>(
     collector.program(program);
     collector.test_cases(&test_cases);
     let Collector { registers } = collector;
-    let immediates: Vec<WS::Unsigned> = reducer.immediates().collect();
+    let immediates: Vec<WS::Unsigned> = reducer.immediates().chain([0.as_()]).collect();
 
-    let oracle = TestCasesOracle { test_cases };
-    let oracle_reduced = TestCasesOracle {
-        test_cases: test_cases_reduced,
-    };
+    // let oracle = TestCasesOracle { test_cases };
+    // let oracle_reduced = TestCasesOracle {
+    //     test_cases: test_cases_reduced,
+    // };
+
+    let oracle = SmtOracle::new(program.to_vec());
+    let oracle_reduced = SmtOracle::new(reduced_program);
 
     synthesize::<WT, WS>(
         &registers,
@@ -200,13 +260,13 @@ pub fn optimize<WT: Word, WS: Word>(
 fn synthesize<WT: Word, W: Word>(
     registers: &[Register],
     immediates: &[W::Unsigned],
-    oracle: impl Oracle<WT>,
-    oracle_reduced: impl Oracle<W>,
+    oracle: impl Oracle<[Inst<WT>], State<WT>>,
+    oracle_reduced: impl Oracle<[Inst<W>], State<W>>,
     reducer: Reducer<WT, W>,
     // The length of the original program.
     // In the future, this could be max_cost.
     original_length: usize,
-) -> Program<WT> {
+) -> Option<Program<WT>> {
     // The forward and backward graphs start while having the empty program.
     let mut forward_graph = Graph::Leaf(Programs::program(vec![]));
     let mut backward_graph = Graph::Leaf(Programs::program(vec![]));
@@ -226,10 +286,10 @@ fn synthesize<WT: Word, W: Word>(
     // Generate a first input
     println!("Checking empty program");
     match globals.oracle_reduced.check_program(&[]) {
-        Ok(()) => return vec![], // Turns out it's actually the empty program 🤷
-        Err(counter_example) => {
-            globals.inputs.push(counter_example.0.clone());
-            globals.outputs.push(counter_example.1.clone());
+        Ok(()) => return Some(vec![]), // Turns out it's actually the empty program 🤷
+        Err((inp, out)) => {
+            globals.inputs.push(inp);
+            globals.outputs.push(out);
         }
     }
     loop {
@@ -251,13 +311,13 @@ fn synthesize<WT: Word, W: Word>(
             match res {
                 ConnectAndRefineResult::Found(prog) => {
                     println!("Found program of length {}", prog.len());
-                    return prog;
+                    return Some(prog);
                 }
                 ConnectAndRefineResult::Continue => {}
             }
         }
         if globals.forward_length + globals.backward_length + 1 == original_length - 1 {
-            panic!("could not find a program better than the original one.");
+            return None;
         }
         // println!("Forward Graph: \n{}", forward_graph.pretty_print());
         // println!("Backward Graph: \n{}", backward_graph.pretty_print());
@@ -282,7 +342,12 @@ enum ConnectAndRefineResult<W: Word> {
 }
 
 /// WT - word for the target program. WS - word for the synthesis process.
-struct Globals<WT: Word, WS: Word, OT: Oracle<WT>, OS: Oracle<WS>> {
+struct Globals<
+    WT: Word,
+    WS: Word,
+    OT: Oracle<[Inst<WT>], State<WT>>,
+    OS: Oracle<[Inst<WS>], State<WS>>,
+> {
     oracle: OT,
     /// The oracle that checks program in the reduced word size.
     oracle_reduced: OS,
@@ -294,8 +359,18 @@ struct Globals<WT: Word, WS: Word, OT: Oracle<WT>, OS: Oracle<WS>> {
     extender: Reducer<WT, WS>,
 }
 
+enum ProgramOrRetry<W: Word> {
+    Program(Program<W>),
+    Retry,
+}
+
 fn connect_and_refine<WT: Word, WS: Word>(
-    globals: &mut Globals<WT, WS, impl Oracle<WT>, impl Oracle<WS>>,
+    globals: &mut Globals<
+        WT,
+        WS,
+        impl Oracle<[Inst<WT>], State<WT>>,
+        impl Oracle<[Inst<WS>], State<WS>>,
+    >,
     forward_graph: &mut Graph<WS>,
     backward_graph: &mut Graph<WS>,
     inst: Inst<WS>,
@@ -306,12 +381,15 @@ fn connect_and_refine<WT: Word, WS: Word>(
         let mut counter_example_added = false;
         match (&forward_graph, &backward_graph) {
             (Graph::Leaf(prefixes), Graph::Leaf(postfixes)) => {
+                println!(
+                    "Found leaf graphs at index {k}. Trying to connect them. {}",
+                    prefixes.len() * postfixes.len()
+                );
                 // We found a class of candidate programs.
                 // Try each one. If one works, return it. If none work, adds all counter-examples.
                 // First, make a buffer to hold the program.
                 let mut program =
                     Vec::with_capacity(globals.forward_length + 1 + globals.backward_length);
-                let mut counter_examples = FxHashSet::default();
                 let ret = prefixes.try_for_each_ref(&mut |prefix| {
                     debug_assert_eq!(prefix.len(), globals.forward_length);
                     postfixes.try_for_each_ref(&mut |postfix| {
@@ -330,31 +408,40 @@ fn connect_and_refine<WT: Word, WS: Word>(
                                     .oracle
                                     .check_program(extended_program)
                                 {
-                                    Ok(()) => Break(extended_program.to_vec()),
+                                    Ok(()) => {
+                                        Break(ProgramOrRetry::Program(extended_program.to_vec()))
+                                    }
                                     Err(_) => Continue(()),
                                 },
                             ),
-                            Err(counter_example) => {
-                                if !counter_examples.contains(counter_example) {
-                                    println!("Oracle found counter example.");
-                                    println!("  Input: {:?}", &counter_example.0);
-                                    println!("  Expected output: {:?}", &counter_example.1);
-                                    println!("  For program:");
-                                    for inst in &program {
-                                        println!("    {inst}");
-                                    }
-                                    counter_examples.insert(counter_example.clone());
-                                    globals.inputs.push(counter_example.0.clone());
-                                    globals.outputs.push(counter_example.1.clone());
-                                    counter_example_added = true;
+                            Err((inp, out)) => {
+                                debug_assert!(
+                                    !has_counter_example_been_seen(globals, &inp, &out),
+                                    "Counter-example from reduced oracle should not have been seen before."
+                                );
+                                println!("Oracle found counter example.");
+                                println!("  Input: {:?}", &inp);
+                                println!("  Expected output: {:?}", &out);
+                                println!("  For program:");
+                                for inst in &program {
+                                    println!("    {inst}");
                                 }
-                                Continue(())
+                                globals.inputs.push(inp);
+                                globals.outputs.push(out);
+                                counter_example_added = true;
+                                Break(ProgramOrRetry::Retry)
                             }
                         }
                     })
                 });
-                if let Break(extended_program) = ret {
-                    return ConnectAndRefineResult::Found(extended_program);
+                match ret {
+                    Break(ProgramOrRetry::Program(prog)) => {
+                        return ConnectAndRefineResult::Found(prog);
+                    }
+                    Break(ProgramOrRetry::Retry) => {
+                        return connect_and_refine(globals, forward_graph, backward_graph, inst, k);
+                    }
+                    Continue(()) => (),
                 }
             }
             _ => {
@@ -478,7 +565,10 @@ fn build_forwards_or_backwards<W: Word>(
     initial_states: &[State<W>],
     step: impl Fn(&Program<W>, &mut State<W>),
 ) {
-    assert!(!initial_states.is_empty(), "Must give initial states to build the graph from.");
+    assert!(
+        !initial_states.is_empty(),
+        "Must give initial states to build the graph from."
+    );
     // Rebuild the graph.
     // TODO: We can probably avoid completely rebuilding by just removing and adding programs on
     // the same data-structure. This would reduce allocations, but you need to mark which programs
@@ -507,6 +597,25 @@ fn build_forwards_or_backwards<W: Word>(
         // }
         // graph.insert_all(&my_outputs, programs);
     });
+}
+
+/// Checks if the given counter-example has already been seen, by searching the input-output pairs
+/// in the global context.
+fn has_counter_example_been_seen<WT: Word, WS: Word>(
+    globals: &mut Globals<
+        WT,
+        WS,
+        impl Oracle<[Inst<WT>], State<WT>>,
+        impl Oracle<[Inst<WS>], State<WS>>,
+    >,
+    inp: &State<WS>,
+    out: &State<WS>,
+) -> bool {
+    globals
+        .inputs
+        .iter()
+        .zip(&globals.outputs)
+        .any(|(i, o)| i == inp && o == out)
 }
 
 /// Print information that shows us growth and memory usage of the graphs.
