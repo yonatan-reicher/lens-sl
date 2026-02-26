@@ -1,5 +1,5 @@
 use smtlib::lowlevel::ast::{Identifier, QualIdentifier, SpecConstant, Term};
-use smtlib::lowlevel::lexicon::Binary;
+use smtlib::lowlevel::lexicon::{Binary, Symbol};
 use smtlib::terms::STerm;
 use smtlib::{BitVec, Bool, Int};
 
@@ -13,14 +13,6 @@ fn spec_constant_to_u128(spec: &SpecConstant) -> Option<u128> {
     match spec {
         SpecConstant::Numeral(n) => Some(n.into_u128().unwrap()),
         SpecConstant::Binary(b) => Some(binary_to_u128(*b)),
-        _ => None,
-    }
-}
-
-fn spec_constant_to_bool(spec: &SpecConstant) -> Option<bool> {
-    match spec {
-        SpecConstant::String("true") => Some(true),
-        SpecConstant::String("false") => Some(false),
         _ => None,
     }
 }
@@ -46,7 +38,8 @@ fn term_to_i128(term: &Term) -> Option<i128> {
 
 fn term_to_bool(term: &Term) -> Option<bool> {
     match term {
-        Term::SpecConstant(sc) => spec_constant_to_bool(sc),
+        Term::Identifier(QualIdentifier::Identifier(Identifier::Simple(Symbol("true")))) => Some(true),
+        Term::Identifier(QualIdentifier::Identifier(Identifier::Simple(Symbol("false")))) => Some(false),
         _ => None,
     }
 }
@@ -70,7 +63,7 @@ pub fn bit_vec_term_to_i128<const M: usize>(int: BitVec<'_, M>) -> Option<i128> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use proptest::property_test;
+    use proptest::{prop_assert_eq, property_test};
     use smtlib::{Real, Storage, lowlevel::lexicon::Symbol, prelude::*, terms::IntoWithStorage};
 
     #[property_test]
@@ -79,20 +72,18 @@ mod tests {
     fn test_int_term_to_i128_always_returns_same(i: i64) {
         let st = Storage::new();
         let int: Int = i.into_with_storage(&st);
-        assert_eq!(int_term_to_i128(int).unwrap() as i64, i);
+        prop_assert_eq!(int_term_to_i128(int).unwrap() as i64, i);
     }
 
     #[test]
-    #[should_panic]
     fn test_int_term_to_i128_crashes_on_bad_input() {
         let st = Storage::new();
         let real: Real = 6942.into_with_storage(&st);
         let int = Int::from(STerm::from(real));
-        int_term_to_i128(int);
+        assert_eq!(int_term_to_i128(int), None);
     }
 
     #[test]
-    #[should_panic]
     fn test_int_term_to_i128_cannot_handle_application() {
         let st = Storage::new();
         let t = Term::Application(
@@ -103,22 +94,22 @@ mod tests {
             ],
         );
         let int = Int::from(STerm::new(&st, t));
-        int_term_to_i128(int);
+        assert_eq!(int_term_to_i128(int), None);
     }
 
     #[property_test]
     fn test_bool_term_to_bool_always_returns_same(b: bool) {
         let st = Storage::new();
         let bool_term: Bool = b.into_with_storage(&st);
-        assert_eq!(bool_term_to_bool(bool_term), Some(b));
+        dbg!(bool_term);
+        prop_assert_eq!(bool_term_to_bool(bool_term), Some(b));
     }
 
     #[test]
-    #[should_panic]
     fn test_bool_term_to_bool_crashes_on_application() {
         let st = Storage::new();
         let a: Bool = true.into_with_storage(&st);
         let b: Bool = false.into_with_storage(&st);
-        bool_term_to_bool(a & b);
+        assert_eq!(bool_term_to_bool(a & b), None);
     }
 }
