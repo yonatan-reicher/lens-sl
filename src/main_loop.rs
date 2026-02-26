@@ -1,10 +1,6 @@
 //! The main loop for synthesis and optimization.
 //! Here we have basically the code that you would see in the actual paper that describes Lens.
 
-use smtlib::Sorted;
-use smtlib::terms::IntoWithStorage;
-use crate::smtlib_utils::bool_term_to_bool;
-
 use crate::collect_registers::{self, Collector};
 use crate::enumerate::{EnumerationInfo, Enumerator};
 use crate::graph;
@@ -13,8 +9,14 @@ use crate::oracle::{self, Oracle, SmtOracle};
 use crate::programs;
 use crate::reduce_bit_width::Reducer;
 use crate::word::prelude::*;
+
 use std::ops::ControlFlow::{Break, Continue};
 use std::rc::Rc;
+
+use functionality::Pipe;
+
+use crate::smtlib_utils::bool_term_to_bool;
+use smtlib::Sorted;
 
 // =========================================== State ==============================================
 
