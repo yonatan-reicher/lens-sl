@@ -5,6 +5,7 @@ use std::ops::*;
 use arbitrary_int::traits::{Integer, SignedInteger, UnsignedInteger};
 use arbitrary_int::{i4, u4};
 
+use crate::smtlib_utils::bit_vec_term_to_i128;
 use smtlib::terms::{IntoWithStorage, StaticSorted};
 use smtlib::{BitVec, Storage};
 
@@ -31,11 +32,13 @@ pub trait Word:
         + Shl<Output = Self::SymbolicBitVec<'st>>
         + Shr<Output = Self::SymbolicBitVec<'st>>
         + StaticSorted<'st, Inner = Self::SymbolicBitVec<'st>>
-        + TryInto<i64, Error: Debug>
+        // + TryInto<i64, Error: Debug> // This TryInto implementation is currently broken, so we use our own.
         // + Sub<Output = Self::SymbolicBitVec<'st>> // For some reason, this is unimplemented.
         + 'st;
 
     fn new_bit_vec<'st>(st: &'st Storage, value: Self::Unsigned) -> Self::SymbolicBitVec<'st>;
+
+    fn bit_vec_try_into(value: Self::SymbolicBitVec<'_>) -> Option<Self::Unsigned>;
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -47,6 +50,10 @@ impl Word for Word64 {
 
     fn new_bit_vec<'st>(st: &'st Storage, value: u64) -> Self::SymbolicBitVec<'st> {
         (value as i64).into_with_storage(st)
+    }
+
+    fn bit_vec_try_into(value: Self::SymbolicBitVec<'_>) -> Option<Self::Unsigned> {
+        bit_vec_term_to_i128(value).map(|i| i as _)
     }
 }
 
@@ -60,6 +67,10 @@ impl Word for Word8 {
     fn new_bit_vec<'st>(st: &'st Storage, value: u8) -> Self::SymbolicBitVec<'st> {
         (value as i64).into_with_storage(st)
     }
+
+    fn bit_vec_try_into(value: Self::SymbolicBitVec<'_>) -> Option<Self::Unsigned> {
+        bit_vec_term_to_i128(value).map(|i| i as _)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -71,6 +82,10 @@ impl Word for Word4 {
 
     fn new_bit_vec<'st>(st: &'st Storage, value: u4) -> Self::SymbolicBitVec<'st> {
         value.as_::<i64>().into_with_storage(st)
+    }
+
+    fn bit_vec_try_into(value: Self::SymbolicBitVec<'_>) -> Option<Self::Unsigned> {
+        bit_vec_term_to_i128(value).map(|i| i.as_())
     }
 }
 
