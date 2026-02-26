@@ -136,43 +136,54 @@ impl<W: Word> oracle::smt::Inst for Inst<W> {
     }
 
     fn state_neq<'st>(
-        _st: &'st smtlib::Storage,
         s1: Self::SymbolicState<'st>,
         s2: Self::SymbolicState<'st>,
     ) -> smtlib::Bool<'st> {
         !s1.eq(s2)
     }
 
-    fn step<'st>(
-        &self,
-        _st: &'st smtlib::Storage,
-        mut s: Self::SymbolicState<'st>,
-    ) -> Self::SymbolicState<'st> {
-        self.run_symbolic(&mut s);
-        s
+    fn step_symbolic<'st>(&self, s: &mut Self::SymbolicState<'st>) {
+        self.run_symbolic(s);
     }
 
-    fn extract_from_model<'st>(
-        _st: &'st smtlib::Storage,
-        model: &smtlib::Model<'st>,
-        s: StateVars<'st, W>,
-    ) -> State<W> {
+    fn step<'st>(&self, s: &mut Self::State) {
+        self.run(s);
+    }
+
+    fn extract_from_model<'st>(model: &smtlib::Model<'st>, s: StateVars<'st, W>) -> State<W> {
+        let st = s.registers[0].st();
         let mut state = State::default();
         for (i, var) in s.registers.iter().enumerate() {
-            let name = var.name();
             let reg = Register(i as u8);
             let val = model
                 .eval(*var)
-                .unwrap_or_else(|| panic!("Failed to evaluate variable '{name}' in model {model}."))
-                .try_into()
-                .unwrap()
+                .unwrap_or_else(|| W::new_bit_vec(st, 0.as_()))
+                .pipe(W::bit_vec_try_into)
+                //.try_into()
+                .unwrap_or_else(|| {
+                    panic!(
+                        "Failed to convert variable '{var:?}' to the right type in model {model}."
+                    )
+                })
                 .as_();
             isa::State::set_register(&mut state, reg, val);
         }
-        let z = bool_term_to_bool(model.eval(s.flags.z).unwrap());
-        let n = bool_term_to_bool(model.eval(s.flags.n).unwrap());
-        let c = bool_term_to_bool(model.eval(s.flags.c).unwrap());
-        let v = bool_term_to_bool(model.eval(s.flags.v).unwrap());
+        let z = model
+            .eval(s.flags.z)
+            .and_then(|b| bool_term_to_bool(b))
+            .unwrap_or(false);
+        let n = model
+            .eval(s.flags.n)
+            .and_then(|b| bool_term_to_bool(b))
+            .unwrap_or(false);
+        let c = model
+            .eval(s.flags.c)
+            .and_then(|b| bool_term_to_bool(b))
+            .unwrap_or(false);
+        let v = model
+            .eval(s.flags.v)
+            .and_then(|b| bool_term_to_bool(b))
+            .unwrap_or(false);
         let flags = Flags::new(z, n, c, v);
         isa::State::set_flags(&mut state, flags);
         state
@@ -187,7 +198,7 @@ impl<W: Word> oracle::smt::Inst for Inst<W> {
 pub fn optimize<WT: Word, WS: Word>(
     program: &[Inst<WT>],
     inputs: &[&[(Register, WT::Unsigned)]], // TODO: Return a program in Program<WT> instead...
-) -> Program<WT> {
+) -> Option<Program<WT>> {
     let mut reducer = Reducer::<WT, WS>::default();
     let mut reduced_program = Vec::with_capacity(program.len());
     for inst in program {
@@ -210,7 +221,7 @@ pub fn optimize<WT: Word, WS: Word>(
             (input, output)
         })
         .collect();
-    let test_cases_reduced: Vec<(State<WS>, State<WS>)> = test_cases
+    let _test_cases_reduced: Vec<(State<WS>, State<WS>)> = test_cases
         .iter()
         .map(|(input, _output)| {
             let input = input.reduce(&mut reducer.clone());
@@ -234,8 +245,8 @@ pub fn optimize<WT: Word, WS: Word>(
     //     test_cases: test_cases_reduced,
     // };
 
-    let oracle = SmtOracle::new(program);
-    let oracle_reduced = SmtOracle::new(&reduced_program);
+    let oracle = SmtOracle::new(program.to_vec());
+    let oracle_reduced = SmtOracle::new(reduced_program);
 
     synthesize::<WT, WS>(
         &registers,
@@ -256,7 +267,7 @@ fn synthesize<WT: Word, W: Word>(
     // The length of the original program.
     // In the future, this could be max_cost.
     original_length: usize,
-) -> Program<WT> {
+) -> Option<Program<WT>> {
     // The forward and backward graphs start while having the empty program.
     let mut forward_graph = Graph::Leaf(Programs::program(vec![]));
     let mut backward_graph = Graph::Leaf(Programs::program(vec![]));
@@ -276,7 +287,7 @@ fn synthesize<WT: Word, W: Word>(
     // Generate a first input
     println!("Checking empty program");
     match globals.oracle_reduced.check_program(&[]) {
-        Ok(()) => return vec![], // Turns out it's actually the empty program 🤷
+        Ok(()) => return Some(vec![]), // Turns out it's actually the empty program 🤷
         Err((inp, out)) => {
             globals.inputs.push(inp);
             globals.outputs.push(out);
@@ -301,13 +312,13 @@ fn synthesize<WT: Word, W: Word>(
             match res {
                 ConnectAndRefineResult::Found(prog) => {
                     println!("Found program of length {}", prog.len());
-                    return prog;
+                    return Some(prog);
                 }
                 ConnectAndRefineResult::Continue => {}
             }
         }
         if globals.forward_length + globals.backward_length + 1 == original_length - 1 {
-            panic!("could not find a program better than the original one.");
+            return None;
         }
         // println!("Forward Graph: \n{}", forward_graph.pretty_print());
         // println!("Backward Graph: \n{}", backward_graph.pretty_print());
@@ -371,6 +382,10 @@ fn connect_and_refine<WT: Word, WS: Word>(
         let mut counter_example_added = false;
         match (&forward_graph, &backward_graph) {
             (Graph::Leaf(prefixes), Graph::Leaf(postfixes)) => {
+                println!(
+                    "Found leaf graphs at index {k}. Trying to connect them. {}",
+                    prefixes.len() * postfixes.len()
+                );
                 // We found a class of candidate programs.
                 // Try each one. If one works, return it. If none work, adds all counter-examples.
                 // First, make a buffer to hold the program.
@@ -401,20 +416,21 @@ fn connect_and_refine<WT: Word, WS: Word>(
                                 },
                             ),
                             Err((inp, out)) => {
-                                if !has_counter_example_been_seen(globals, &inp, &out) {
-                                    println!("Oracle found counter example.");
-                                    println!("  Input: {:?}", &inp);
-                                    println!("  Expected output: {:?}", &out);
-                                    println!("  For program:");
-                                    for inst in &program {
-                                        println!("    {inst}");
-                                    }
-                                    globals.inputs.push(inp);
-                                    globals.outputs.push(out);
-                                    counter_example_added = true;
-                                    return Break(ProgramOrRetry::Retry);
+                                debug_assert!(
+                                    !has_counter_example_been_seen(globals, &inp, &out),
+                                    "Counter-example from reduced oracle should not have been seen before."
+                                );
+                                println!("Oracle found counter example.");
+                                println!("  Input: {:?}", &inp);
+                                println!("  Expected output: {:?}", &out);
+                                println!("  For program:");
+                                for inst in &program {
+                                    println!("    {inst}");
                                 }
-                                Continue(())
+                                globals.inputs.push(inp);
+                                globals.outputs.push(out);
+                                counter_example_added = true;
+                                Break(ProgramOrRetry::Retry)
                             }
                         }
                     })
