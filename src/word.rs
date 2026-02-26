@@ -123,7 +123,7 @@ define_word_ops!(i64);
 
 pub mod prelude {
     #[allow(unused_imports)]
-    pub use super::{Word, Word4, Word8, Word64};
+    pub use super::{Word, Word4, Word8, Word64, WordOps};
     pub use arbitrary_int::prelude::*;
 }
 
