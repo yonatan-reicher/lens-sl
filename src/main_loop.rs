@@ -294,6 +294,11 @@ struct Globals<WT: Word, WS: Word, OT: Oracle<WT>, OS: Oracle<WS>> {
     extender: Reducer<WT, WS>,
 }
 
+enum ProgramOrRetry<W: Word> {
+    Program(Program<W>),
+    Retry,
+}
+
 fn connect_and_refine<WT: Word, WS: Word>(
     globals: &mut Globals<WT, WS, impl Oracle<WT>, impl Oracle<WS>>,
     forward_graph: &mut Graph<WS>,
@@ -330,7 +335,9 @@ fn connect_and_refine<WT: Word, WS: Word>(
                                     .oracle
                                     .check_program(extended_program)
                                 {
-                                    Ok(()) => Break(extended_program.to_vec()),
+                                    Ok(()) => {
+                                        Break(ProgramOrRetry::Program(extended_program.to_vec()))
+                                    }
                                     Err(_) => Continue(()),
                                 },
                             ),
@@ -347,6 +354,7 @@ fn connect_and_refine<WT: Word, WS: Word>(
                                     globals.inputs.push(counter_example.0.clone());
                                     globals.outputs.push(counter_example.1.clone());
                                     counter_example_added = true;
+                                    return Break(ProgramOrRetry::Retry);
                                 }
                                 Continue(())
                             }
@@ -355,6 +363,14 @@ fn connect_and_refine<WT: Word, WS: Word>(
                 });
                 if let Break(extended_program) = ret {
                     return ConnectAndRefineResult::Found(extended_program);
+                match ret {
+                    Break(ProgramOrRetry::Program(prog)) => {
+                        return ConnectAndRefineResult::Found(prog);
+                    }
+                    Break(ProgramOrRetry::Retry) => {
+                        return connect_and_refine(globals, forward_graph, backward_graph, inst, k);
+                    }
+                    Continue(()) => (),
                 }
             }
             _ => {
