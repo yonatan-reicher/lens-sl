@@ -4,7 +4,7 @@ use arbitrary_int::traits::Integer;
 use smtlib::{
     Bool, Storage,
     prelude::*,
-    terms::{Const, IntoWithStorage},
+    terms::Const,
 };
 use std::fmt::Debug;
 use std::ops::ControlFlow;
