@@ -5,7 +5,8 @@ use crate::collect_registers::{self, Collector};
 use crate::enumerate::{EnumerationInfo, Enumerator};
 use crate::graph;
 use crate::isa::{
-    self, Flags, FlagsBitField, Inst, Register, State as _, StateVars, SymbolicState, extend_program_for_each
+    self, Flags, FlagsBitField, Inst, Register, State as _, StateVars, SymbolicState,
+    extend_program_for_each,
 };
 use crate::oracle::{self, Oracle, SmtOracle};
 use crate::programs;
@@ -180,12 +181,15 @@ impl<W: Word> oracle::smt::Inst for Inst<W> {
                 .and_then(|b| bool_term_to_bool(b))
                 .unwrap_or(false /* Arbitrary default, result did not matter */)
         };
-        state.set_flags(Flags {
-            z: load_bool(s.flags.z),
-            n: load_bool(s.flags.n),
-            c: load_bool(s.flags.c),
-            v: load_bool(s.flags.v),
-        }.into());
+        state.set_flags(
+            Flags {
+                z: load_bool(s.flags.z),
+                n: load_bool(s.flags.n),
+                c: load_bool(s.flags.c),
+                v: load_bool(s.flags.v),
+            }
+            .into(),
+        );
         state
     }
 }
