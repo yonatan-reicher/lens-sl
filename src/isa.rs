@@ -257,7 +257,7 @@ impl<'st, W: Word> StateVars<'st, W> {
     pub fn new(st: &'st Storage, name: &str) -> Self {
         Self {
             registers: std::array::from_fn(|i| {
-                W::SymbolicBitVec::new_const(st, &format!("{}_r{}", name, i))
+                W::SymbolicBitVec::new_const(st, &format!("{name}_r{i}"))
             }),
             flags: FlagVars::new(st, name),
         }
@@ -267,10 +267,10 @@ impl<'st, W: Word> StateVars<'st, W> {
 impl<'st> FlagVars<'st> {
     pub fn new(st: &'st Storage, name: &str) -> Self {
         Self {
-            z: Bool::new_const(st, &format!("{}_z", name)),
-            n: Bool::new_const(st, &format!("{}_n", name)),
-            c: Bool::new_const(st, &format!("{}_c", name)),
-            v: Bool::new_const(st, &format!("{}_v", name)),
+            z: Bool::new_const(st, &format!("{name}_z")),
+            n: Bool::new_const(st, &format!("{name}_n")),
+            c: Bool::new_const(st, &format!("{name}_c")),
+            v: Bool::new_const(st, &format!("{name}_v")),
         }
     }
 }
@@ -636,7 +636,7 @@ mod tests {
 
     #[test]
     fn basic_extend_test() {
-        let program: [Inst<Word64>; _] = [inst!(AddI, 0, 1, 1242), inst!(Sub, 2, 0, 1)];
+        let program: [Inst<Word64>; 2] = [inst!(AddI, 0, 1, 1242), inst!(Sub, 2, 0, 1)];
         let mut reducer = Reducer::<Word64, Word4>::default();
         // Add another constant that clashes with 1242 when reduced.
         reducer.reduce(1242 + 16, &ImmediateInfo { is_shift: false });
