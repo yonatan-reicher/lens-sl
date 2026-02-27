@@ -461,6 +461,11 @@ fn run_instruction<W: Word, S: State<W>>(inst: &Inst<W>, state: &mut S) {
         }};
     }
 
+    // Skip the instruction if it is skipped by the flags.
+    if !inst.cond_code.check(state.get_flags().into()) {
+        return;
+    }
+
     use OpCode::*;
     match inst.op_code {
         Nop => (),
@@ -513,6 +518,15 @@ fn run_instruction_symbolic<W: Word>(inst: &Inst<W>, state: &mut SymbolicState<'
             }]
         };
     }
+    /// Set a register value. Also checks the condition code.
+    macro_rules! set {
+        (r![$i:literal] <- $e:expr) => {
+            r![$i] = inst
+                .cond_code
+                .check(state.flags.into())
+                .if_then_else($e, r![$i])
+        };
+    }
     /// Get an immediate value.
     macro_rules! imm {
         ($i:literal) => {
@@ -523,16 +537,16 @@ fn run_instruction_symbolic<W: Word>(inst: &Inst<W>, state: &mut SymbolicState<'
     use OpCode::*;
     match inst.op_code {
         Nop => (),
-        Add => r![0] = r![1] + r![2],
-        AddI => r![0] = r![1] + imm![2],
-        Sub => r![0] = r![1] + -r![2],
-        SubI => r![0] = r![1] + -imm![2],
-        And => r![0] = r![1] & r![2],
-        Eor => r![0] = r![1] ^ r![2],
-        Mov => r![0] = r![1],
-        MovI => r![0] = imm![1],
-        Mul => r![0] = r![1] * r![2],
-        Orr => r![0] = r![1] | r![2],
+        Add => set! { r![0] <- r![1] + r![2] },
+        AddI => set! { r![0] <- r![1] + imm![2] },
+        Sub => set! { r![0] <- r![1] + -r![2] },
+        SubI => set! { r![0] <- r![1] + -imm![2] },
+        And => set! { r![0] <- r![1] & r![2] },
+        Eor => set! { r![0] <- r![1] ^ r![2] },
+        Mov => set! { r![0] <- r![1] },
+        MovI => set! { r![0] <- imm![1] },
+        Mul => set! { r![0] <- r![1] * r![2] },
+        Orr => set! { r![0] <- r![1] | r![2] },
     }
 }
 
