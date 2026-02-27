@@ -19,11 +19,11 @@ impl State<W> for S {
     fn set_register(&mut self, r: Register, x: u64) {
         self.registers[r.0 as usize] = x;
     }
-    fn get_flags(&self) -> Flags {
-        self.flags
+    fn get_flags(&self) -> FlagsBitField {
+        self.flags.into()
     }
-    fn set_flags(&mut self, f: Flags) {
-        self.flags = f;
+    fn set_flags(&mut self, f: FlagsBitField) {
+        self.flags = f.into();
     }
 }
 
@@ -49,7 +49,7 @@ fn main() {
             /* r8  = */ 0, /* r9  = */ 0, /* r10 = */ 0, /* r11 = */ 0,
             /* r12 = */ 0, /* r13 = */ 0, /* r14 = */ 0, /* r15 = */ 0,
         ],
-        flags: Flags::empty(),
+        flags: Flags::default(),
     };
     println!("Initial state: {initial_state}");
     let mut state = initial_state;

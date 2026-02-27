@@ -5,7 +5,7 @@ use crate::collect_registers::{self, Collector};
 use crate::enumerate::{EnumerationInfo, Enumerator};
 use crate::graph;
 use crate::isa::{
-    self, Flags, Inst, Register, State as _, StateVars, SymbolicState, extend_program_for_each,
+    self, Flags, FlagsBitField, Inst, Register, State as _, StateVars, SymbolicState, extend_program_for_each
 };
 use crate::oracle::{self, Oracle, SmtOracle};
 use crate::programs;
@@ -41,7 +41,7 @@ pub struct State<W: Word> {
     /// Registers that are not present are not "live".
     pub registers: Vec<(Register, W::Unsigned)>,
     /// The value of the flags register. If None, flags is not "live".
-    pub flags: Option<Flags>,
+    pub flags: Option<FlagsBitField>,
 }
 
 impl<W: Word> State<W> {
@@ -87,11 +87,11 @@ impl<W: Word> isa::State<W> for State<W> {
         self.registers.sort_by_key(|(r, _)| *r);
     }
 
-    fn get_flags(&self) -> Flags {
+    fn get_flags(&self) -> FlagsBitField {
         self.flags.expect("Flags not set in state.")
     }
 
-    fn set_flags(&mut self, flags: Flags) {
+    fn set_flags(&mut self, flags: FlagsBitField) {
         self.flags = Some(flags);
     }
 }
@@ -179,12 +179,12 @@ impl<W: Word> oracle::smt::Inst for Inst<W> {
                 .and_then(|b| bool_term_to_bool(b))
                 .unwrap_or(false /* Arbitrary default, result did not matter */)
         };
-        let z = load_bool(s.flags.z);
-        let n = load_bool(s.flags.n);
-        let c = load_bool(s.flags.c);
-        let v = load_bool(s.flags.v);
-        let flags = Flags::new(z, n, c, v);
-        state.set_flags(flags);
+        state.set_flags(Flags {
+            z: load_bool(s.flags.z),
+            n: load_bool(s.flags.n),
+            c: load_bool(s.flags.c),
+            v: load_bool(s.flags.v),
+        }.into());
         state
     }
 }

@@ -1,4 +1,5 @@
 use crate::all_permutations::Iter as PermutationIter;
+use crate::bool::prelude::*;
 use crate::iter_slice_or_single::Iter as SliceOrSingle;
 use crate::reduce_bit_width::{ImmediateInfo, Reducer};
 use crate::word::prelude::*;
@@ -8,9 +9,9 @@ use std::ops::ControlFlow;
 
 use arbitrary_int::traits::Integer;
 
+use smtlib::Storage;
 use smtlib::prelude::*;
 use smtlib::terms::Const;
-use smtlib::{Bool, Storage};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(test, derive(proptest_derive::Arbitrary))]
@@ -64,6 +65,45 @@ pub enum CondCode {
     Le,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Flags<B = bool> {
+    pub z: B,
+    pub n: B,
+    pub c: B,
+    pub v: B,
+}
+
+impl<'st, B: Copy + Into<SmtBool<'st>>> BoolEq<SmtBool<'st>> for Flags<B> {
+    fn eq(&self, other: &Self) -> SmtBool<'st> {
+        self.z.into().eq(&other.z.into())
+        & self.n.into().eq(&other.n.into())
+        & self.c.into().eq(&other.c.into())
+        & self.v.into().eq(&other.v.into())
+    }
+}
+
+impl<'st> From<Flags<bool>> for Flags<SmtBool<'st>> {
+    fn from(Flags { z, n, c, v }: Flags<bool>) -> Self {
+        Self {
+            z: Bool::from_bool(z),
+            n: Bool::from_bool(n),
+            c: Bool::from_bool(c),
+            v: Bool::from_bool(v),
+        }
+    }
+}
+
+impl<'st> From<Flags<Const<'st, SmtBool<'st>>>> for Flags<SmtBool<'st>> {
+    fn from(Flags { z, n, c, v }: Flags<Const<'st, SmtBool<'st>>>) -> Self {
+        Self {
+            z: z.into(),
+            n: n.into(),
+            c: c.into(),
+            v: v.into(),
+        }
+    }
+}
+
 impl CondCode {
     pub const COUNT: u8 = 6;
 
@@ -84,6 +124,27 @@ impl CondCode {
             CondCode::Lt => "lt",
             CondCode::Gt => "gt",
             CondCode::Le => "le",
+        }
+    }
+
+    pub fn check<B: Bool>(self, flags: Flags<B>) -> B {
+        let Flags { z, n, c, v } = flags;
+        match self {
+            CondCode::Al => Bool::r#true(),
+            CondCode::Eq => z,
+            CondCode::Ne => !z,
+            CondCode::Cs => c,
+            CondCode::Cc => !c,
+            CondCode::Mi => n,
+            CondCode::Pl => !n,
+            CondCode::Vs => v,
+            CondCode::Vc => !v,
+            CondCode::Hi => c & !z,
+            CondCode::Ls => !c | z,
+            CondCode::Ge => n.eq(&v),
+            CondCode::Lt => n.neq(&v),
+            CondCode::Gt => !z & n.eq(&v),
+            CondCode::Le => z | n.neq(&v),
         }
     }
 }
@@ -195,7 +256,7 @@ impl<W: Word> Clone for Inst<W> {
 
 bitflags::bitflags! {
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-    pub struct Flags: u8 {
+    pub struct FlagsBitField: u8 {
         /// Zero - is the result zero? Disregard overflow and carry.
         const Z = 0b0001;
         /// Negative - is the Msb set? Disregard overflow and carry.
@@ -207,20 +268,31 @@ bitflags::bitflags! {
     }
 }
 
-impl Flags {
+impl From<Flags> for FlagsBitField {
     #[rustfmt::skip]
-    pub fn new(z: bool, n: bool, c: bool, v: bool) -> Self {
-        let mut flags = Flags::empty();
-        if z { flags |= Flags::Z; }
-        if n { flags |= Flags::N; }
-        if c { flags |= Flags::C; }
-        if v { flags |= Flags::V; }
+    fn from(Flags { z, n, c, v } : Flags) -> Self {
+        let mut flags = FlagsBitField::empty();
+        if z { flags |= FlagsBitField::Z; }
+        if n { flags |= FlagsBitField::N; }
+        if c { flags |= FlagsBitField::C; }
+        if v { flags |= FlagsBitField::V; }
         flags
     }
 }
 
+impl<B: Bool> From<FlagsBitField> for Flags<B> {
+    fn from(value: FlagsBitField) -> Self {
+        Self {
+            z: B::from_bool(value.contains(FlagsBitField::Z)),
+            n: B::from_bool(value.contains(FlagsBitField::N)),
+            c: B::from_bool(value.contains(FlagsBitField::C)),
+            v: B::from_bool(value.contains(FlagsBitField::V)),
+        }
+    }
+}
+
 #[cfg(test)]
-impl proptest::arbitrary::Arbitrary for Flags {
+impl proptest::arbitrary::Arbitrary for FlagsBitField {
     type Parameters = ();
     type Strategy = proptest::strategy::BoxedStrategy<Self>;
 
@@ -229,11 +301,11 @@ impl proptest::arbitrary::Arbitrary for Flags {
         use proptest::prelude::*;
         (any::<bool>(), any::<bool>(), any::<bool>(), any::<bool>())
             .prop_map(|(z, n, c, v)| {
-                let mut flags = Flags::empty();
-                if z { flags |= Flags::Z; }
-                if n { flags |= Flags::N; }
-                if c { flags |= Flags::C; }
-                if v { flags |= Flags::V; }
+                let mut flags = FlagsBitField::empty();
+                if z { flags |= FlagsBitField::Z; }
+                if n { flags |= FlagsBitField::N; }
+                if c { flags |= FlagsBitField::C; }
+                if v { flags |= FlagsBitField::V; }
                 flags
             })
             .boxed()
@@ -243,14 +315,14 @@ impl proptest::arbitrary::Arbitrary for Flags {
 pub trait State<W: Word> {
     fn get_register(&self, reg: Register) -> W::Unsigned;
     fn set_register(&mut self, reg: Register, value: W::Unsigned);
-    fn get_flags(&self) -> Flags;
-    fn set_flags(&mut self, flags: Flags);
+    fn get_flags(&self) -> FlagsBitField;
+    fn set_flags(&mut self, flags: FlagsBitField);
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct StateVars<'st, W: Word> {
     pub registers: [Const<'st, W::SymbolicBitVec<'st>>; Register::COUNT as usize],
-    pub flags: FlagVars<'st>,
+    pub flags: Flags<Const<'st, SmtBool<'st>>>,
 }
 
 impl<'st, W: Word> StateVars<'st, W> {
@@ -259,42 +331,26 @@ impl<'st, W: Word> StateVars<'st, W> {
             registers: std::array::from_fn(|i| {
                 W::SymbolicBitVec::new_const(st, &format!("{name}_r{i}"))
             }),
-            flags: FlagVars::new(st, name),
+            flags: Flags::new(st, name),
         }
     }
 }
 
-impl<'st> FlagVars<'st> {
+impl<'st> Flags<Const<'st, SmtBool<'st>>> {
     pub fn new(st: &'st Storage, name: &str) -> Self {
         Self {
-            z: Bool::new_const(st, &format!("{name}_z")),
-            n: Bool::new_const(st, &format!("{name}_n")),
-            c: Bool::new_const(st, &format!("{name}_c")),
-            v: Bool::new_const(st, &format!("{name}_v")),
+            z: SmtBool::new_const(st, &format!("{name}_z")),
+            n: SmtBool::new_const(st, &format!("{name}_n")),
+            c: SmtBool::new_const(st, &format!("{name}_c")),
+            v: SmtBool::new_const(st, &format!("{name}_v")),
         }
     }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct FlagVars<'st> {
-    pub z: Const<'st, Bool<'st>>,
-    pub n: Const<'st, Bool<'st>>,
-    pub c: Const<'st, Bool<'st>>,
-    pub v: Const<'st, Bool<'st>>,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct SymbolicState<'st, W: Word> {
     pub registers: [W::SymbolicBitVec<'st>; Register::COUNT as usize],
-    pub flags: SymbolicFlags<'st>,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct SymbolicFlags<'st> {
-    pub z: Bool<'st>,
-    pub n: Bool<'st>,
-    pub c: Bool<'st>,
-    pub v: Bool<'st>,
+    pub flags: Flags<SmtBool<'st>>,
 }
 
 impl<'st, W: Word> From<StateVars<'st, W>> for SymbolicState<'st, W> {
@@ -306,31 +362,14 @@ impl<'st, W: Word> From<StateVars<'st, W>> for SymbolicState<'st, W> {
     }
 }
 
-impl<'st> From<FlagVars<'st>> for SymbolicFlags<'st> {
-    fn from(value: FlagVars<'st>) -> Self {
-        Self {
-            z: value.z.into(),
-            n: value.n.into(),
-            c: value.c.into(),
-            v: value.v.into(),
-        }
-    }
-}
-
 impl<'st, W: Word> SymbolicState<'st, W> {
-    pub fn eq(&self, other: Self) -> Bool<'st> {
+    pub fn eq(&self, other: Self) -> SmtBool<'st> {
         let regs = self.registers.iter().zip(other.registers);
         let regs_eq = regs
             .map(|(ra, rb)| ra._eq(rb))
             .reduce(|b1, b2| b1 & b2)
             .unwrap();
-        regs_eq & self.flags.eq(other.flags)
-    }
-}
-
-impl<'st> SymbolicFlags<'st> {
-    pub fn eq(&self, other: Self) -> Bool<'st> {
-        self.z._eq(other.z) & self.n._eq(other.n) & self.c._eq(other.c) & self.v._eq(other.v)
+        regs_eq & self.flags.eq(&other.flags)
     }
 }
 
@@ -368,21 +407,21 @@ fn run_addition_or_subtraction<W: Word, S: State<W>>(
     let res_signed: W::Signed = res.as_();
     state.set_register(result_register, res);
     // Set flags.
-    let mut flags = Flags::empty();
+    let mut flags = FlagsBitField::empty();
     if res.is_zero() {
-        flags |= Flags::Z;
+        flags |= FlagsBitField::Z;
     }
     if res_signed > 0.as_() {
-        flags |= Flags::N;
+        flags |= FlagsBitField::N;
     }
     if unsigned_overflow && kind == AddOrSub::Add {
-        flags |= Flags::C;
+        flags |= FlagsBitField::C;
     }
     if !unsigned_overflow && kind == AddOrSub::Sub {
-        flags |= Flags::C;
+        flags |= FlagsBitField::C;
     }
     if signed_overflow {
-        flags |= Flags::V;
+        flags |= FlagsBitField::V;
     }
     state.set_flags(flags);
 }
