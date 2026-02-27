@@ -1,9 +1,15 @@
-use smtlib::terms::{Dynamic, STerm, StaticSorted};
-
 use crate::smtlib_utils;
+
+use smtlib::Sorted;
+use smtlib::terms::{Dynamic, IntoWithStorage, STerm, StaticSorted};
+
 use std::ops::*;
 
 pub type SmtBool<'st> = smtlib::Bool<'st>;
+
+// ==========================================================================================
+//                                        Base Bool Trait
+// ==========================================================================================
 
 /// A trait for generalizing over both [bool] and [smtlib::Bool], shorthanded as [SmtBool]
 pub trait Bool:
@@ -13,6 +19,8 @@ pub trait Bool:
     + BitOr<Output = Self>
     + BitXor<Output = Self>
     + Not<Output = Self>
+    + IfThenElse<Self>
+    + BoolEq<Self>
 {
     fn r#true() -> Self;
     fn r#false() -> Self;
@@ -34,6 +42,10 @@ impl<'st> Bool for SmtBool<'st> {
     fn r#true() -> Self { smtlib_utils::static_true() }
     fn r#false() -> Self { smtlib_utils::static_false() }
 }
+
+// ==========================================================================================
+//                                         If Then Else
+// ==========================================================================================
 
 /// A trait for a generic if-then-else for bool [bool] and [smtlib::Bool]
 pub trait IfThenElse<T> {
@@ -57,6 +69,30 @@ where
     }
 }
 
+// ==========================================================================================
+//                                        Boolean Equality
+// ==========================================================================================
+
+#[rustfmt::skip]
+pub trait BoolEq<B: Bool> {
+    fn eq(&self, other: &Self) -> B;
+    fn neq(&self, other: &Self) -> B { !self.eq(other) }
+}
+
+#[rustfmt::skip]
+impl<T: Eq> BoolEq<bool> for T {
+    fn eq(&self, other: &T) -> bool { self == other }
+    fn neq(&self, other: &T) -> bool { self != other }
+}
+
+#[rustfmt::skip]
+impl<'st, T> BoolEq<SmtBool<'st>> for T
+where T: Copy + StaticSorted<'st> + IntoWithStorage<'st, T::Inner>
+{
+    fn eq(&self, other: &T) -> SmtBool<'st> { self._eq(*other) }
+    fn neq(&self, other: &T) -> SmtBool<'st> { self._neq(*other) }
+}
+
 pub mod prelude {
-    pub use super::{Bool, IfThenElse, SmtBool};
+    pub use super::{Bool, BoolEq, IfThenElse, SmtBool};
 }
