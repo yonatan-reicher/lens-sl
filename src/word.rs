@@ -24,6 +24,7 @@ pub trait Word:
         + Debug
         + Div<Output = Self::SymbolicBitVec<'st>>
         + From<smtlib::terms::Const<'st, Self::SymbolicBitVec<'st>>>
+        + Into<smtlib::terms::Dynamic<'st>>
         + IntoWithStorage<'st, Self::SymbolicBitVec<'st>>
         + Mul<Output = Self::SymbolicBitVec<'st>>
         + Neg<Output = Self::SymbolicBitVec<'st>>
