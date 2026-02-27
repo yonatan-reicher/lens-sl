@@ -1,7 +1,7 @@
 use smtlib::lowlevel::ast::{Identifier, QualIdentifier, SpecConstant, Term};
 use smtlib::lowlevel::lexicon::{Binary, Symbol};
 use smtlib::terms::STerm;
-use smtlib::{BitVec, Bool, Int};
+use smtlib::{BitVec, Bool, Int, Storage};
 
 fn binary_to_u128<'st>(b: Binary<'st>) -> u128 {
     let s = b.0;
@@ -38,8 +38,12 @@ fn term_to_i128(term: &Term) -> Option<i128> {
 
 fn term_to_bool(term: &Term) -> Option<bool> {
     match term {
-        Term::Identifier(QualIdentifier::Identifier(Identifier::Simple(Symbol("true")))) => Some(true),
-        Term::Identifier(QualIdentifier::Identifier(Identifier::Simple(Symbol("false")))) => Some(false),
+        Term::Identifier(QualIdentifier::Identifier(Identifier::Simple(Symbol("true")))) => {
+            Some(true)
+        }
+        Term::Identifier(QualIdentifier::Identifier(Identifier::Simple(Symbol("false")))) => {
+            Some(false)
+        }
         _ => None,
     }
 }
@@ -58,6 +62,30 @@ pub fn bool_term_to_bool(b: Bool<'_>) -> Option<bool> {
 pub fn bit_vec_term_to_i128<const M: usize>(int: BitVec<'_, M>) -> Option<i128> {
     let sterm = STerm::from(int);
     term_to_i128(sterm.term())
+}
+
+// === Static Things ===
+
+pub fn static_storage() -> &'static Storage {
+    STATIC_STORAGE.with(|st| {
+        let ptr = st as *const Storage;
+        // SAFETY: this value exists and is never mutated.
+        unsafe { &*ptr }
+    })
+}
+std::thread_local! {
+    static STATIC_STORAGE: Storage = Storage::new();
+}
+
+pub fn static_true() -> Bool<'static> {
+    TRUE.with(|x| *x)
+}
+pub fn static_false() -> Bool<'static> {
+    FALSE.with(|x| *x)
+}
+std::thread_local! {
+    static TRUE: Bool<'static> = Bool::new(static_storage(), true);
+    static FALSE: Bool<'static> = Bool::new(static_storage(), false);
 }
 
 #[cfg(test)]
