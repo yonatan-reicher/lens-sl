@@ -76,9 +76,9 @@ pub struct Flags<B = bool> {
 impl<'st, B: Copy + Into<SmtBool<'st>>> BoolEq<SmtBool<'st>> for Flags<B> {
     fn eq(&self, other: &Self) -> SmtBool<'st> {
         self.z.into().eq(&other.z.into())
-        & self.n.into().eq(&other.n.into())
-        & self.c.into().eq(&other.c.into())
-        & self.v.into().eq(&other.v.into())
+            & self.n.into().eq(&other.n.into())
+            & self.c.into().eq(&other.c.into())
+            & self.v.into().eq(&other.v.into())
     }
 }
 
