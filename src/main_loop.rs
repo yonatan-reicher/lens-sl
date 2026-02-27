@@ -88,7 +88,8 @@ impl<W: Word> isa::State<W> for State<W> {
     }
 
     fn get_flags(&self) -> FlagsBitField {
-        self.flags.expect("Flags not set in state.")
+        // self.flags.expect("Flags not set in state.")
+        self.flags.unwrap_or_default()
     }
 
     fn set_flags(&mut self, flags: FlagsBitField) {
