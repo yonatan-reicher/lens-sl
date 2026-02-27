@@ -1,7 +1,9 @@
 use smtlib::lowlevel::ast::{Identifier, QualIdentifier, SpecConstant, Term};
 use smtlib::lowlevel::lexicon::{Binary, Symbol};
 use smtlib::terms::STerm;
-use smtlib::{BitVec, Bool, Int};
+use smtlib::{BitVec, Bool, Int, Sorted, Storage};
+
+// Some helper functions
 
 fn binary_to_u128<'st>(b: Binary<'st>) -> u128 {
     let s = b.0;
@@ -38,8 +40,12 @@ fn term_to_i128(term: &Term) -> Option<i128> {
 
 fn term_to_bool(term: &Term) -> Option<bool> {
     match term {
-        Term::Identifier(QualIdentifier::Identifier(Identifier::Simple(Symbol("true")))) => Some(true),
-        Term::Identifier(QualIdentifier::Identifier(Identifier::Simple(Symbol("false")))) => Some(false),
+        Term::Identifier(QualIdentifier::Identifier(Identifier::Simple(Symbol("true")))) => {
+            Some(true)
+        }
+        Term::Identifier(QualIdentifier::Identifier(Identifier::Simple(Symbol("false")))) => {
+            Some(false)
+        }
         _ => None,
     }
 }
@@ -59,6 +65,54 @@ pub fn bit_vec_term_to_i128<const M: usize>(int: BitVec<'_, M>) -> Option<i128> 
     let sterm = STerm::from(int);
     term_to_i128(sterm.term())
 }
+
+// static things
+
+std::thread_local! {
+    static STATIC_STORAGE: Storage = Storage::new();
+    static TRUE: Bool<'static> = {
+        let st = static_storage();
+        Bool::new(st, true)
+    };
+    static FALSE: Bool<'static> = {
+        let st = static_storage();
+        Bool::new(st, false)
+    };
+}
+
+pub fn static_storage() -> &'static Storage {
+    STATIC_STORAGE.with(|st| {
+        // This is not enough, because now we have a reference that lasts only for the current
+        // function. Let's extend it.
+        // SAFETY: This is safe because we know it stays there for the rest of the program!
+        unsafe {
+            let ptr = st as *const _;
+            &*ptr
+        }
+    })
+}
+
+pub fn static_true() -> Bool<'static> {
+    TRUE.with(|x| *x)
+}
+
+pub fn static_false() -> Bool<'static> {
+    FALSE.with(|x| *x)
+}
+
+// === Get Storage trait ===
+
+pub trait GetStorage<'st> {
+    fn st(&self) -> &'st Storage;
+}
+
+impl<'st, T: Sorted<'st>> GetStorage<'st> for T {
+    fn st(&self) -> &'st Storage {
+        self.st()
+    }
+}
+
+// === Equality trait ===
 
 #[cfg(test)]
 mod tests {

@@ -1,7 +1,6 @@
 //! Implements enumerating over instructions.
 
 use crate::isa::{ArgType, CondCode, Inst, OpCode, Register};
-use crate::word::prelude::*;
 
 /// Enumerates over the instruction space. Needs an `EnumerationInfo` borrow in
 /// order to actually enumerate. Does not go over all actual instructions, as
@@ -19,11 +18,11 @@ pub struct Enumerator {
 /// Configuration for an Enumerator. This is stored separately as we have
 /// multiple enumerators using the same configuration.
 #[derive(Clone, Copy, derive_more::Debug)]
-pub struct EnumerationInfo<'a, W: Word> {
+pub struct EnumerationInfo<'a, W> {
     /// The registers to use. Must not be empty.
     pub registers: &'a [Register],
     /// The immediates to use. Must not be empty.
-    pub immediates: &'a [W::Unsigned],
+    pub immediates: &'a [W],
 }
 
 fn debug_assert_arg_in_range(arg: usize) {
@@ -33,7 +32,7 @@ fn debug_assert_arg_in_range(arg: usize) {
     );
 }
 
-fn debug_assert_valid_enumeration_info<W: Word>(ei: &EnumerationInfo<W>) {
+fn debug_assert_valid_enumeration_info<W>(ei: &EnumerationInfo<W>) {
     debug_assert!(
         !ei.registers.is_empty(),
         "enumeration info registers mut not be empty! {ei:?}"
@@ -57,7 +56,7 @@ impl Enumerator {
         self.op_code.arg_types()
     }
 
-    fn current_arg<W: Word>(&self, arg: usize, ei: &EnumerationInfo<W>) -> W::Unsigned {
+    fn current_arg<W>(&self, arg: usize, ei: &EnumerationInfo<W>) -> W {
         debug_assert_arg_in_range(arg);
         debug_assert_valid_enumeration_info(ei);
         // Take the index, and index into the correct array.
@@ -71,7 +70,7 @@ impl Enumerator {
 
     /// Returns the length of the array that the given argument index indexes
     /// into.
-    fn arg_len<W: Word>(&self, arg: usize, ei: &EnumerationInfo<W>) -> usize {
+    fn arg_len<W>(&self, arg: usize, ei: &EnumerationInfo<W>) -> usize {
         debug_assert_arg_in_range(arg);
         debug_assert_valid_enumeration_info(ei);
         match self.arg_types()[arg] {
@@ -81,7 +80,7 @@ impl Enumerator {
         }
     }
 
-    pub fn current<W: Word>(&self, ei: &EnumerationInfo<W>) -> Inst<W> {
+    pub fn current<W>(&self, ei: &EnumerationInfo<W>) -> Inst<W> {
         debug_assert_valid_enumeration_info(ei);
         Inst {
             op_code: self.op_code,
@@ -118,7 +117,7 @@ impl Enumerator {
         }
     }
 
-    fn advance_arg<W: Word>(&mut self, arg: usize, ei: &EnumerationInfo<W>) -> Option<()> {
+    fn advance_arg<W>(&mut self, arg: usize, ei: &EnumerationInfo<W>) -> Option<()> {
         debug_assert_arg_in_range(arg);
         debug_assert_valid_enumeration_info(ei);
         let len = self.arg_len(arg, ei);
@@ -130,7 +129,7 @@ impl Enumerator {
         Some(())
     }
 
-    pub fn advance<W: Word>(&mut self, ei: &EnumerationInfo<W>) -> Option<()> {
+    pub fn advance<W>(&mut self, ei: &EnumerationInfo<W>) -> Option<()> {
         debug_assert_valid_enumeration_info(ei);
         if self.advance_arg(0, ei).is_none() {
             self.arg_indices[0] = 0;
@@ -148,7 +147,7 @@ impl Enumerator {
         Some(())
     }
 
-    pub fn into_iter<W: Word>(self, ei: &EnumerationInfo<W>) -> impl Iterator<Item = Inst<W>> {
+    pub fn into_iter<W>(self, ei: &EnumerationInfo<W>) -> impl Iterator<Item = Inst<W>> {
         Iter {
             done: false,
             ei,
@@ -163,13 +162,13 @@ impl Default for Enumerator {
     }
 }
 
-struct Iter<'a, W: Word> {
+struct Iter<'a, W> {
     done: bool,
     ei: &'a EnumerationInfo<'a, W>,
     enumerator: Enumerator,
 }
 
-impl<'a, W: Word> Iterator for Iter<'a, W> {
+impl<'a, W> Iterator for Iter<'a, W> {
     type Item = Inst<W>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -184,12 +183,14 @@ impl<'a, W: Word> Iterator for Iter<'a, W> {
 
 #[cfg(test)]
 mod tests {
+    use crate::bit_vec::ConcreteBitVec;
+
     use super::*;
     use proptest::prelude::*;
     use proptest::property_test;
     use std::collections::HashSet;
 
-    fn to_vec<W: Word>(ei: &EnumerationInfo<W>) -> Vec<Inst<W>> {
+    fn to_vec<W>(ei: &EnumerationInfo<W>) -> Vec<Inst<W>> {
         let mut e = Enumerator::new();
         let mut ret = vec![];
         loop {
@@ -204,9 +205,9 @@ mod tests {
 
     #[test]
     pub fn test_count() {
-        let v = to_vec(&EnumerationInfo::<Word8> {
+        let v = to_vec(&EnumerationInfo::<ConcreteBitVec::<8>> {
             registers: &[Register(2)],
-            immediates: &[42],
+            immediates: &[42.into()],
         });
         assert_eq!(v.len(), OpCode::COUNT as usize * CondCode::COUNT as usize);
     }
@@ -215,12 +216,12 @@ mod tests {
     fn all_registers_and_immediates_appear(
         #[strategy = prop::collection::hash_set(any::<Register>(), 1..15)]
         registers: HashSet<Register>,
-        #[strategy = prop::collection::hash_set(0..100u8, 1..15)]
-        immediates: HashSet<u8>,
+        #[strategy = prop::collection::hash_set(0..100, 1..15)]
+        immediates: HashSet<ConcreteBitVec<8>>,
     ) {
         prop_assume!(!registers.is_empty());
         prop_assume!(!immediates.is_empty());
-        let ei = EnumerationInfo::<Word8> {
+        let ei = EnumerationInfo::<ConcreteBitVec::<8>> {
             registers: &registers.iter().copied().collect::<Box<[_]>>(),
             immediates: &immediates.iter().copied().collect::<Box<[_]>>(),
         };

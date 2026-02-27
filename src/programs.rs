@@ -1,26 +1,41 @@
 //! This module defines the `Programs` type. This type is an efficient representation of programs
 //! that allows fast concatenation of another instruction at the end and saves memory for us.
 
-use std::rc::Rc;
+use std::{fmt::{self, Display, Formatter}, rc::Rc};
+
+use crate::some_traits::{Append, Len};
 
 pub type Program<I> = Vec<I>;
 
 /// See module documentation.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub enum Programs<I> {
     /// A single program.
     Program(Program<I>),
     /// A list of programs.
+    #[default]
     List(Vec<Programs<I>>),
     /// Appends the instruction to the end of each program in the inner `Programs`.
     Concat(Rc<Programs<I>>, I),
 }
 
-impl<I> Programs<I> {
-    pub const fn new() -> Self {
-        Self::List(Vec::new())
+impl<I> Len for Programs<I> {
+    fn len(&self) -> usize {
+        match self {
+            Programs::Program(_) => 1,
+            Programs::List(vec) => vec.len(),
+            Programs::Concat(programs, _) => programs.len(),
+        }
     }
+}
 
+impl<I> Append for Programs<I> {
+    fn append(&mut self, other: Self) {
+        *self = std::mem::take(self).append_take(other)
+    }
+}
+
+impl<I> Programs<I> {
     pub const fn program(program: Program<I>) -> Self {
         Self::Program(program)
     }
@@ -29,24 +44,7 @@ impl<I> Programs<I> {
         Self::Concat(self, inst)
     }
 
-    /// The number of programs stored.
-    pub fn len(&self) -> usize {
-        match self {
-            Self::Program(_) => 1,
-            Self::List(vec) => vec.len(),
-            Self::Concat(inner, _) => inner.len(),
-        }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    pub fn extend(&mut self, other: Self) {
-        *self = std::mem::take(self).extend_take(other);
-    }
-
-    fn extend_take(self, other: Self) -> Self {
+    fn append_take(self, other: Self) -> Self {
         use Programs::{Concat, List, Program};
         match (self, other) {
             (List(mut vec1), List(vec2)) => {
@@ -158,33 +156,14 @@ impl<I> Programs<I> {
     }
 }
 
-impl<I> Default for Programs<I> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl<I: Clone> From<Programs<I>> for Vec<Program<I>> {
     fn from(this: Programs<I>) -> Self {
         this.to_vec()
     }
 }
 
-impl<I: Clone> crate::graph::Programs for Programs<I> {
-    type Program = Program<I>;
-    fn len(&self) -> usize {
-        self.len()
-    }
-    fn extend(&mut self, other: Self) {
-        self.extend(other)
-    }
-    fn is_empty(&self) -> bool {
-        self.is_empty()
-    }
-}
-
-impl<I: std::fmt::Display + Clone> std::fmt::Display for Programs<I> {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl<I: Display + Clone> Display for Programs<I> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         self.for_each_ref(&mut |program| {
             if program.is_empty() {
                 writeln!(f, "· <empty program>").unwrap();

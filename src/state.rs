@@ -1,139 +1,46 @@
-//! Machine-state representation for instruction execution.
-//!
-//! This module defines:
-//!
-//! * [State] — the unified execution trait, generic over a [`Word`] size and
-//!   parameterised by associated types [`State::Num`] and [`State::Bool`] that
-//!   differ between concrete and symbolic execution.
-//! * [`ConcreteState`] / [`SymbolicState`] — marker sub-traits.
-//! * [`SmtState`], [`SymbolicFlags`], [`StateVars`], [`FlagVars`] — the symbolic
-//!   (SMT) state types used by the SMT oracle.
-//! * [`SearchState`] — the concrete state used during bidirectional synthesis
-//!   search.
-
+use crate::bit_vec::{BitVec as BitVecTrait, SmtBitVec as SmtBitVecTrait};
 use crate::collect_registers;
 use crate::isa::{self, Flags, Register};
-use crate::oracle;
 use crate::reduce_bit_width::Reducer;
-use crate::word::{SymbolicOps, prelude::*};
+use crate::smtlib_utils::GetStorage;
+use crate::some_traits::{Bool as BoolTrait, BoolEq, CloneTo};
 
-use std::ops::{BitAnd, BitOr, BitXor, Not};
-
-use arbitrary_int::traits::Integer;
 use smtlib::prelude::*;
 use smtlib::terms::Const;
-use smtlib::{Bool, Storage};
+use smtlib::{Storage, Bool};
 
 // ============================================================================
 //                                 State trait
 // ============================================================================
 
-/// Unified execution trait for both concrete and symbolic machine states.
-///
-/// Generic over a [`Word`] size `W`. Two associated types capture what differs
-/// between execution modes:
-///
-/// * **Concrete mode** (`W::Unsigned` / `bool`): used by the synthesis search
-///   and the test-cases oracle.  Operations are plain Rust arithmetic and logic.
-/// * **Symbolic mode** (`W::SymbolicBitVec<'st>` / `smtlib::Bool<'st>`): used
-///   by the SMT oracle.  Operations lower to SMT bit-vector / boolean terms.
-///
-/// See [`ConcreteState`] and [`SymbolicState`] for the corresponding marker
-/// sub-traits.
-pub trait State<W: Word> {
-    /// Numeric value type.  `W::Unsigned` in concrete mode; `W::SymbolicBitVec<'st>` in
-    /// symbolic mode.  Bitwise `&`, `|`, `^` are available via the operator bounds.
-    type Num: Clone
-        + Copy
-        + BitAnd<Output = Self::Num>
-        + BitOr<Output = Self::Num>
-        + BitXor<Output = Self::Num>;
-    /// Boolean type.  `bool` in concrete mode; `smtlib::Bool<'st>` in symbolic mode.
-    /// Logical `&`, `|`, `^`, `!` are available via the operator bounds.
-    type Bool: Clone
-        + Copy
-        + BitAnd<Output = Self::Bool>
-        + BitOr<Output = Self::Bool>
-        + BitXor<Output = Self::Bool>
-        + Not<Output = Self::Bool>;
+type StateBool<S: State> = <S::BitVec as BitVecTrait>::Bool;
+
+pub trait State: AsRef<<Self::BitVec as BitVecTrait>::FromContext> {
+    type BitVec: BitVecTrait;
 
     // ── Register & flag access ────────────────────────────────────────────
 
-    fn get_register(&self, reg: Register) -> Self::Num;
-    fn set_register(&mut self, reg: Register, val: Self::Num);
+    fn get_register(&self, reg: Register) -> Self::BitVec;
+    fn set_register(&mut self, reg: Register, val: Self::BitVec);
 
     /// Returns the current `(Z, N, C, V)` flags.
     ///
     /// Concrete states return `(bool, bool, bool, bool)`.  Symbolic states return four
     /// independent SMT boolean terms.  Uninitialized flags are treated as all-`false`.
-    fn get_flags_raw(&self) -> (Self::Bool, Self::Bool, Self::Bool, Self::Bool);
+    fn get_flags_raw(&self) -> (StateBool<Self>, StateBool<Self>, StateBool<Self>, StateBool<Self>);
     /// Overwrites all four `(Z, N, C, V)` flags at once.
-    fn set_flags_raw(&mut self, flags: (Self::Bool, Self::Bool, Self::Bool, Self::Bool));
+    fn set_flags_raw(&mut self, flags: (StateBool<Self>, StateBool<Self>, StateBool<Self>, StateBool<Self>));
 
     // ── Lifting concrete values ───────────────────────────────────────────
 
-    /// Creates a boolean constant.  Needs `&self` in symbolic mode to access the
-    /// underlying SMT storage arena.
-    fn bool_lit(&self, b: bool) -> Self::Bool;
-    /// Lifts a concrete immediate (`W::Unsigned`) to `Self::Num`.  Identity in concrete
-    /// mode; creates a bit-vector constant in symbolic mode.
-    fn from_word(&self, val: W::Unsigned) -> Self::Num;
-
-    // ── Arithmetic operations ─────────────────────────────────────────────
-    //
-    // These are required methods rather than `std::ops` operator bounds because:
-    //   • `Add`/`Sub` panic on overflow for concrete unsigned integers in debug mode,
-    //     but we need wrapping semantics throughout.
-    //   • `Sub` is not implemented for SMT bit-vectors; subtraction is `a + (-b)`.
-
-    /// Wrapping addition.
-    fn num_add(a: Self::Num, b: Self::Num) -> Self::Num;
-    /// Wrapping subtraction.
-    fn num_sub(a: Self::Num, b: Self::Num) -> Self::Num;
-    /// Wrapping multiplication (result truncated to the word width).
-    fn num_mul(a: Self::Num, b: Self::Num) -> Self::Num;
-
-    // ── Predicates → Bool ────────────────────────────────────────────────
-
-    /// True when the result is zero.
-    fn is_zero(a: Self::Num) -> Self::Bool;
-    /// True when the MSB is set (value is negative in two's-complement).
-    fn is_negative(a: Self::Num) -> Self::Bool;
-    /// True when unsigned addition `a + b` overflows (carry out).
-    fn add_carry(a: Self::Num, b: Self::Num) -> Self::Bool;
-    /// ARM carry flag for subtraction: `true` when `a >= b` unsigned (no borrow).
-    fn sub_carry(a: Self::Num, b: Self::Num) -> Self::Bool;
-    /// True when signed addition `a + b` overflows.
-    fn add_signed_overflow(a: Self::Num, b: Self::Num) -> Self::Bool;
-    /// True when signed subtraction `a - b` overflows.
-    fn sub_signed_overflow(a: Self::Num, b: Self::Num) -> Self::Bool;
-
-    // ── Boolean equality ─────────────────────────────────────────────────
-    //
-    // This is a required method (not `PartialEq`) because the result must be
-    // `Self::Bool` — an SMT term in symbolic mode — rather than a plain `bool`.
-
-    /// Returns a `Self::Bool` that is true iff `a == b`.
-    fn bool_eq(a: Self::Bool, b: Self::Bool) -> Self::Bool;
-
-    // ── Conditional selection (if-then-else) ─────────────────────────────
-
-    /// Returns `t` when `cond` is true, `e` otherwise.  In symbolic mode this lowers
-    /// to an SMT `ite` term; in concrete mode it is a plain `if`/`else`.
-    fn select_num(cond: Self::Bool, t: Self::Num, e: Self::Num) -> Self::Num;
-    /// Same as `select_num` but for boolean values.
-    fn select_bool(cond: Self::Bool, t: Self::Bool, e: Self::Bool) -> Self::Bool;
-
-    // ── Condition-code evaluation ─────────────────────────────────────────
-
-    /// Returns a `Self::Bool` that is true iff the ARM condition code `cc` holds given
+    /// Returns a `StateBool<Self>` that is true iff the ARM condition code `cc` holds given
     /// the current flag state.  Implemented using the flag accessors and operator bounds
     /// above, so this default should rarely (if ever) need to be overridden.
-    fn cond_holds(&self, cc: isa::CondCode) -> Self::Bool {
+    fn cond_holds(&self, cc: isa::CondCode) -> StateBool<Self> {
         use isa::CondCode::*;
         let (z, n, c, v) = self.get_flags_raw();
         match cc {
-            Al => self.bool_lit(true),
+            Al => StateBool::<Self>::r#true(),
             Eq => z,
             Ne => !z,
             Cs => c,
@@ -144,37 +51,29 @@ pub trait State<W: Word> {
             Vc => !v,
             Hi => c & !z,
             Ls => !c | z,
-            Ge => Self::bool_eq(n, v),
+            Ge => n.eq(&v),
             Lt => n ^ v,
-            Gt => !z & Self::bool_eq(n, v),
+            Gt => !z & n.eq(&v),
             Le => z | (n ^ v),
         }
     }
 }
-
-/// Marker sub-trait for concrete (non-symbolic) machine states.
-#[allow(dead_code)]
-pub trait ConcreteState<W: Word>: State<W> {}
-
-/// Marker sub-trait for symbolic (SMT) machine states.
-#[allow(dead_code)]
-pub trait SymbolicState<W: Word>: State<W> {}
 
 // ============================================================================
 //                                SMT state types
 // ============================================================================
 
 #[derive(Clone, Copy, Debug)]
-pub struct StateVars<'st, W: Word> {
-    pub registers: [Const<'st, W::SymbolicBitVec<'st>>; Register::COUNT as usize],
+pub struct StateVars<'st, B> {
+    pub registers: [Const<'st, B>; Register::COUNT as usize],
     pub flags: FlagVars<'st>,
 }
 
-impl<'st, W: Word> StateVars<'st, W> {
+impl<'st, B: StaticSorted<'st>> StateVars<'st, B> {
     pub fn new(st: &'st Storage, name: &str) -> Self {
         Self {
             registers: std::array::from_fn(|i| {
-                W::SymbolicBitVec::new_const(st, &format!("{}_r{}", name, i))
+                B::new_const(st, &format!("{}_r{}", name, i))
             }),
             flags: FlagVars::new(st, name),
         }
@@ -201,8 +100,8 @@ impl<'st> FlagVars<'st> {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct SmtState<'st, W: Word> {
-    pub registers: [W::SymbolicBitVec<'st>; Register::COUNT as usize],
+pub struct SmtState<'st, W> {
+    pub registers: [W; Register::COUNT as usize],
     pub flags: SymbolicFlags<'st>,
 }
 
@@ -214,7 +113,7 @@ pub struct SymbolicFlags<'st> {
     pub v: Bool<'st>,
 }
 
-impl<'st, W: Word> From<StateVars<'st, W>> for SmtState<'st, W> {
+impl<'st, W: SmtBitVecTrait<'st>> From<StateVars<'st, W>> for SmtState<'st, W> {
     fn from(value: StateVars<'st, W>) -> Self {
         Self {
             registers: value.registers.map(Into::into),
@@ -234,7 +133,7 @@ impl<'st> From<FlagVars<'st>> for SymbolicFlags<'st> {
     }
 }
 
-impl<'st, W: Word> SmtState<'st, W> {
+impl<'st, W> SmtState<'st, W> {
     pub fn eq(&self, other: Self) -> Bool<'st> {
         let regs = self.registers.iter().zip(other.registers);
         let regs_eq = regs
@@ -251,80 +150,28 @@ impl<'st> SymbolicFlags<'st> {
     }
 }
 
-impl<'st, W: Word> State<W> for SmtState<'st, W> {
-    type Num = W::SymbolicBitVec<'st>;
-    type Bool = Bool<'st>;
+impl<'st, W: SmtBitVecTrait<'st>> State for SmtState<'st, W> {
+    type BitVec = W;
 
-    fn get_register(&self, reg: Register) -> Self::Num {
+    fn get_register(&self, reg: Register) -> Self::BitVec {
         self.registers[reg.0 as usize]
     }
-    fn set_register(&mut self, reg: Register, val: Self::Num) {
+    fn set_register(&mut self, reg: Register, val: Self::BitVec) {
         self.registers[reg.0 as usize] = val;
     }
-    fn get_flags_raw(&self) -> (Self::Bool, Self::Bool, Self::Bool, Self::Bool) {
+    fn get_flags_raw(&self) -> (StateBool<Self>, StateBool<Self>, StateBool<Self>, StateBool<Self>) {
         (self.flags.z, self.flags.n, self.flags.c, self.flags.v)
     }
-    fn set_flags_raw(&mut self, (z, n, c, v): (Self::Bool, Self::Bool, Self::Bool, Self::Bool)) {
+    fn set_flags_raw(&mut self, (z, n, c, v): (StateBool<Self>, StateBool<Self>, StateBool<Self>, StateBool<Self>)) {
         self.flags = SymbolicFlags { z, n, c, v };
-    }
-    fn bool_lit(&self, b: bool) -> Self::Bool {
-        Bool::new(self.flags.z.st(), b)
-    }
-    fn from_word(&self, val: W::Unsigned) -> Self::Num {
-        W::new_bit_vec(self.flags.z.st(), val)
-    }
-    fn num_add(a: Self::Num, b: Self::Num) -> Self::Num {
-        a + b
-    }
-    fn num_sub(a: Self::Num, b: Self::Num) -> Self::Num {
-        a + (-b)
-    }
-    fn num_mul(a: Self::Num, b: Self::Num) -> Self::Num {
-        a * b
-    }
-
-    fn is_zero(a: Self::Num) -> Self::Bool {
-        let zero = W::new_bit_vec(a.st(), 0.as_());
-        a._eq(zero)
-    }
-    fn is_negative(a: Self::Num) -> Self::Bool {
-        let zero = W::new_bit_vec(a.st(), 0.as_());
-        a.bvslt(zero)
-    }
-    fn add_carry(a: Self::Num, b: Self::Num) -> Self::Bool {
-        (a + b).bvult(a)
-    }
-    fn sub_carry(a: Self::Num, b: Self::Num) -> Self::Bool {
-        a.bvuge(b)
-    }
-    fn add_signed_overflow(a: Self::Num, b: Self::Num) -> Self::Bool {
-        let zero = W::new_bit_vec(a.st(), 0.as_());
-        let sum = a + b;
-        let a_neg = a.bvslt(zero);
-        let b_neg = b.bvslt(zero);
-        let sum_neg = sum.bvslt(zero);
-        (!a_neg & !b_neg & sum_neg) | (a_neg & b_neg & !sum_neg)
-    }
-    fn sub_signed_overflow(a: Self::Num, b: Self::Num) -> Self::Bool {
-        let zero = W::new_bit_vec(a.st(), 0.as_());
-        let diff = a + (-b);
-        let a_neg = a.bvslt(zero);
-        let b_neg = b.bvslt(zero);
-        let diff_neg = diff.bvslt(zero);
-        (a_neg & !b_neg & !diff_neg) | (!a_neg & b_neg & diff_neg)
-    }
-    fn bool_eq(a: Self::Bool, b: Self::Bool) -> Self::Bool {
-        !(a ^ b)
-    }
-    fn select_num(cond: Self::Bool, t: Self::Num, e: Self::Num) -> Self::Num {
-        <W::SymbolicBitVec<'st> as SymbolicOps<'st>>::select(cond, t, e)
-    }
-    fn select_bool(cond: Self::Bool, t: Self::Bool, e: Self::Bool) -> Self::Bool {
-        cond.ite(t, e)
     }
 }
 
-impl<'st, W: Word> SymbolicState<W> for SmtState<'st, W> {}
+impl<'st, W: GetStorage<'st>> AsRef<smtlib::Storage> for SmtState<'st, W> {
+    fn as_ref(&self) -> &smtlib::Storage {
+        self.registers[0].st()
+    }
+}
 
 // ============================================================================
 // SearchState — concrete state used during bidirectional search
@@ -348,15 +195,15 @@ impl<'st, W: Word> SymbolicState<W> for SmtState<'st, W> {}
         None => "None".to_string(),
     }
 )]
-pub struct SearchState<W: Word> {
+pub struct SearchState<W> {
     /// This vector is always sorted by register.
     /// Registers that are not present are not "live".
-    pub registers: Vec<(Register, W::Unsigned)>,
+    pub registers: Vec<(Register, W)>,
     /// The value of the flags register. If None, flags is not "live".
     pub flags: Option<Flags>,
 }
 
-impl<W: Word> SearchState<W> {
+impl<W> SearchState<W> {
     /// Copies this state to another state object. Used to avoid clones, that in a loop, can
     /// allocate more.
     #[inline]
@@ -366,7 +213,7 @@ impl<W: Word> SearchState<W> {
         other.flags = self.flags;
     }
 
-    pub(crate) fn reduce<WSmall: Word>(&self, reducer: &mut Reducer<W, WSmall>) -> SearchState<WSmall> {
+    pub(crate) fn reduce<WSmall>(&self, reducer: &mut Reducer<W, WSmall>) -> SearchState<WSmall> {
         SearchState {
             registers: self
                 .registers
@@ -378,11 +225,16 @@ impl<W: Word> SearchState<W> {
     }
 }
 
-impl<W: Word> State<W> for SearchState<W> {
-    type Num = W::Unsigned;
-    type Bool = bool;
+impl<W> AsRef<()> for SearchState<W> {
+    fn as_ref(&self) -> &() {
+        &()
+    }
+}
 
-    fn get_register(&self, reg: Register) -> W::Unsigned {
+impl<W: BitVecTrait<Bool=bool>> State for SearchState<W> {
+    type BitVec = W;
+
+    fn get_register(&self, reg: Register) -> W {
         for (r, v) in &self.registers {
             if *r == reg {
                 return *v;
@@ -391,7 +243,7 @@ impl<W: Word> State<W> for SearchState<W> {
         panic!("Register {reg:?} not found in state.");
     }
 
-    fn set_register(&mut self, reg: Register, value: W::Unsigned) {
+    fn set_register(&mut self, reg: Register, value: W) {
         for (r, v) in &mut self.registers {
             if *r == reg {
                 *v = value;
@@ -416,53 +268,15 @@ impl<W: Word> State<W> for SearchState<W> {
         self.flags = Some(Flags::new(z, n, c, v));
     }
 
-    fn bool_lit(&self, b: bool) -> bool { b }
-    fn from_word(&self, val: W::Unsigned) -> W::Unsigned { val }
-
-    fn num_add(a: W::Unsigned, b: W::Unsigned) -> W::Unsigned { a.overflowing_add(b).0 }
-    fn num_sub(a: W::Unsigned, b: W::Unsigned) -> W::Unsigned { a.overflowing_sub(b).0 }
-    fn num_mul(a: W::Unsigned, b: W::Unsigned) -> W::Unsigned {
-        let as_: W::Signed = a.as_();
-        let bs_: W::Signed = b.as_();
-        as_.overflowing_mul(bs_).0.as_()
-    }
-
-    fn is_zero(a: W::Unsigned) -> bool { a.is_zero() }
-    fn is_negative(a: W::Unsigned) -> bool {
-        let s: W::Signed = a.as_();
-        s < 0.as_()
-    }
-    fn add_carry(a: W::Unsigned, b: W::Unsigned) -> bool { a.overflowing_add(b).1 }
-    fn sub_carry(a: W::Unsigned, b: W::Unsigned) -> bool { !a.overflowing_sub(b).1 }
-    fn add_signed_overflow(a: W::Unsigned, b: W::Unsigned) -> bool {
-        let as_: W::Signed = a.as_();
-        let bs_: W::Signed = b.as_();
-        as_.overflowing_add(bs_).1
-    }
-    fn sub_signed_overflow(a: W::Unsigned, b: W::Unsigned) -> bool {
-        let as_: W::Signed = a.as_();
-        let bs_: W::Signed = b.as_();
-        as_.overflowing_sub(bs_).1
-    }
-
-    fn bool_eq(a: bool, b: bool) -> bool { a == b }
-    fn select_num(cond: bool, t: W::Unsigned, e: W::Unsigned) -> W::Unsigned {
-        if cond { t } else { e }
-    }
-    fn select_bool(cond: bool, t: bool, e: bool) -> bool {
-        if cond { t } else { e }
-    }
 }
 
-impl<W: Word> ConcreteState<W> for SearchState<W> {}
-
-impl<W: Word> collect_registers::State<W> for SearchState<W> {
-    fn registers(&self) -> impl Iterator<Item = (Register, W::Unsigned)> {
+impl<W: Clone> collect_registers::State<W> for SearchState<W> {
+    fn registers(&self) -> impl Iterator<Item = (Register, W)> {
         self.registers.iter().cloned()
     }
 }
 
-impl<W: Word> oracle::test_cases::State for SearchState<W> {
+impl<W> CloneTo for SearchState<W> {
     fn clone_to(&self, output: &mut Self) {
         self.clone_to(output);
     }

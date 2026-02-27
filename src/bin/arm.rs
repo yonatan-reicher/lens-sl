@@ -13,7 +13,7 @@ struct S {
 }
 
 impl State<W> for S {
-    type Num = u64;
+    type BitVec = u64;
     type Bool = bool;
 
     fn get_register(&self, r: Register) -> u64 {

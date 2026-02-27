@@ -1,7 +1,7 @@
 //! The main loop for synthesis and optimization.
 //! Here we have basically the code that you would see in the actual paper that describes Lens.
 
-use crate::collect_registers::{Collector};
+use crate::collect_registers::Collector;
 use crate::enumerate::{EnumerationInfo, Enumerator};
 use crate::graph;
 use crate::isa::{Flags, Inst, Register, extend_program_for_each};
@@ -9,10 +9,10 @@ use crate::oracle::{self, Oracle, SmtOracle};
 use crate::programs;
 use crate::reduce_bit_width::Reducer;
 use crate::state::{SearchState, SmtState, State as _, StateVars};
-use crate::word::prelude::*;
 
 use std::ops::ControlFlow::{Break, Continue};
 use std::rc::Rc;
+use std::fmt::Debug;
 
 use functionality::Pipe;
 
@@ -33,85 +33,77 @@ type Graph<W> = graph::Graph<State<W>, Programs<W>>;
 
 // ========================================== Oracle ==============================================
 
-impl<W: Word> oracle::test_cases::Program<State<W>> for [Inst<W>] {
-    fn run(&self, state: &mut State<W>) {
-        for inst in self {
-            inst.run(state);
-        }
-    }
-}
-
-impl<W: Word> oracle::smt::Inst for Inst<W> {
-    type State = State<W>;
-
-    type StateVars<'st> = StateVars<'st, W>;
-
-    type SymbolicState<'st> = SmtState<'st, W>;
-
-    fn new_state_vars<'st>(st: &'st smtlib::Storage, name: &str) -> Self::StateVars<'st> {
-        StateVars::new(st, name)
-    }
-
-    fn state_neq<'st>(
-        s1: Self::SymbolicState<'st>,
-        s2: Self::SymbolicState<'st>,
-    ) -> smtlib::Bool<'st> {
-        !s1.eq(s2)
-    }
-
-    fn step_symbolic<'st>(&self, s: &mut Self::SymbolicState<'st>) {
-        self.run_symbolic(s);
-    }
-
-    fn step<'st>(&self, s: &mut Self::State) {
-        self.run(s);
-    }
-
-    fn extract_from_model<'st>(model: &smtlib::Model<'st>, s: StateVars<'st, W>) -> State<W> {
-        // The state to return at the end.
-        let st = s.registers[0].st();
-        // == Registers ==
-        let mut state = State::default();
-        for (i, var) in s.registers.iter().enumerate() {
-            let reg = Register(i as u8);
-            let val = model
-                .eval(*var)
-                .unwrap_or_else(|| W::new_bit_vec(st, 0.as_()))
-                .pipe(W::bit_vec_try_into)
-                //.try_into()
-                .unwrap_or_else(|| {
-                    panic!(
-                        "Failed to convert variable '{var:?}' to the right type in model {model}."
-                    )
-                })
-                .as_();
-            state.set_register(reg, val);
-        }
-        // == Flags ==
-        let load_bool = |b| {
-            model
-                .eval(b)
-                .and_then(|b| bool_term_to_bool(b))
-                .unwrap_or(false /* Arbitrary default, result did not matter */)
-        };
-        let z = load_bool(s.flags.z);
-        let n = load_bool(s.flags.n);
-        let c = load_bool(s.flags.c);
-        let v = load_bool(s.flags.v);
-        let flags = Flags::new(z, n, c, v);
-        state.flags = Some(flags);
-        state
-    }
-}
+// impl<W> oracle::smt::Inst for Inst<W> {
+//     type State = State<W>;
+// 
+//     type StateVars<'st> = StateVars<'st, W>;
+// 
+//     type SymbolicState<'st> = SmtState<'st, W>;
+// 
+//     fn new_state_vars<'st>(st: &'st smtlib::Storage, name: &str) -> Self::StateVars<'st> {
+//         StateVars::new(st, name)
+//     }
+// 
+//     fn state_neq<'st>(
+//         s1: Self::SymbolicState<'st>,
+//         s2: Self::SymbolicState<'st>,
+//     ) -> smtlib::Bool<'st> {
+//         !s1.eq(s2)
+//     }
+// 
+//     fn step_symbolic<'st>(&self, s: &mut Self::SymbolicState<'st>) {
+//         self.run_symbolic(s);
+//     }
+// 
+//     fn step<'st>(&self, s: &mut Self::State) {
+//         self.run(s);
+//     }
+// 
+//     fn extract_from_model<'st>(model: &smtlib::Model<'st>, s: StateVars<'st, W>) -> State<W> {
+//         // The state to return at the end.
+//         let st = s.registers[0].st();
+//         // == Registers ==
+//         let mut state = State::default();
+//         for (i, var) in s.registers.iter().enumerate() {
+//             let reg = Register(i as u8);
+//             let val = model
+//                 .eval(*var)
+//                 .unwrap_or_else(|| W::new_bit_vec(st, 0.as_()))
+//                 .pipe(W::bit_vec_try_into)
+//                 //.try_into()
+//                 .unwrap_or_else(|| {
+//                     panic!(
+//                         "Failed to convert variable '{var:?}' to the right type in model {model}."
+//                     )
+//                 })
+//                 .as_();
+//             state.set_register(reg, val);
+//         }
+//         // == Flags ==
+//         let load_bool = |b| {
+//             model
+//                 .eval(b)
+//                 .and_then(|b| bool_term_to_bool(b))
+//                 .unwrap_or(false /* Arbitrary default, result did not matter */)
+//         };
+//         let z = load_bool(s.flags.z);
+//         let n = load_bool(s.flags.n);
+//         let c = load_bool(s.flags.c);
+//         let v = load_bool(s.flags.v);
+//         let flags = Flags::new(z, n, c, v);
+//         state.flags = Some(flags);
+//         state
+//     }
+// }
 
 // ====================================== Implementation ==========================================
 
 // This is the main function that gets exposed.
 /// `WT` for word size of the target program.
 /// `WS` for word size of the synthesis process.
-pub fn optimize<WT: Word, WS: Word>(
+pub fn optimize<WT, WS>(
     program: &[Inst<WT>],
-    inputs: &[&[(Register, WT::Unsigned)]], // TODO: Return a program in Program<WT> instead...
+    inputs: &[&[(Register, WT)]], // TODO: Return a program in Program<WT> instead...
 ) -> Option<Program<WT>> {
     let mut reducer = Reducer::<WT, WS>::default();
     let mut reduced_program = Vec::with_capacity(program.len());
@@ -172,7 +164,7 @@ pub fn optimize<WT: Word, WS: Word>(
     )
 }
 
-fn synthesize<WT: Word, W: Word>(
+fn synthesize<WT, W>(
     registers: &[Register],
     immediates: &[W::Unsigned],
     oracle: impl Oracle<[Inst<WT>], State<WT>>,
@@ -251,15 +243,15 @@ fn synthesize<WT: Word, W: Word>(
     }
 }
 
-enum ConnectAndRefineResult<W: Word> {
+enum ConnectAndRefineResult<W> {
     Found(Program<W>),
     Continue,
 }
 
 /// WT - word for the target program. WS - word for the synthesis process.
 struct Globals<
-    WT: Word,
-    WS: Word,
+    WT,
+    WS,
     OT: Oracle<[Inst<WT>], State<WT>>,
     OS: Oracle<[Inst<WS>], State<WS>>,
 > {
@@ -274,12 +266,12 @@ struct Globals<
     extender: Reducer<WT, WS>,
 }
 
-enum ProgramOrRetry<W: Word> {
+enum ProgramOrRetry<W> {
     Program(Program<W>),
     Retry,
 }
 
-fn connect_and_refine<WT: Word, WS: Word>(
+fn connect_and_refine<WT, WS: Debug + Default>(
     globals: &mut Globals<
         WT,
         WS,
@@ -408,8 +400,8 @@ fn connect_and_refine<WT: Word, WS: Word>(
 /// Go through each program prefix in the graph, and expand it by one
 /// instruction forward. This is done for each program, and for each
 /// instruction.
-fn expand_forward<W: Word>(graph: &mut Graph<W>, inputs: &Vec<State<W>>, ei: &EnumerationInfo<W>) {
-    fn inner<W: Word>(
+fn expand_forward<W>(graph: &mut Graph<W>, inputs: &Vec<State<W>>, ei: &EnumerationInfo<W>) {
+    fn inner<W>(
         graph: Graph<W>,
         inputs: &Vec<State<W>>,
         out: &mut Graph<W>,
@@ -457,9 +449,9 @@ fn expand_forward<W: Word>(graph: &mut Graph<W>, inputs: &Vec<State<W>>, ei: &En
     inner(old_graph, inputs, graph, ei);
 }
 
-fn expand_backward<W: Word>(_graph: &mut Graph<W>) {}
+fn expand_backward<W>(_graph: &mut Graph<W>) {}
 
-fn build_forward<W: Word>(graph: &mut Graph<W>, test_cases_inputs: &[State<W>]) {
+fn build_forward<W>(graph: &mut Graph<W>, test_cases_inputs: &[State<W>]) {
     build_forwards_or_backwards(graph, test_cases_inputs, |program, state| {
         for inst in program {
             inst.run(state);
@@ -467,7 +459,7 @@ fn build_forward<W: Word>(graph: &mut Graph<W>, test_cases_inputs: &[State<W>]) 
     });
 }
 
-fn build_backward<W: Word>(graph: &mut Graph<W>, test_cases_outputs: &[State<W>]) {
+fn build_backward<W>(graph: &mut Graph<W>, test_cases_outputs: &[State<W>]) {
     build_forwards_or_backwards::<W>(graph, test_cases_outputs, |program, _state| {
         for _inst in program.iter().rev() {
             todo!("Backward execution not implemented yet.");
@@ -475,7 +467,7 @@ fn build_backward<W: Word>(graph: &mut Graph<W>, test_cases_outputs: &[State<W>]
     });
 }
 
-fn build_forwards_or_backwards<W: Word>(
+fn build_forwards_or_backwards<W>(
     graph: &mut Graph<W>,
     initial_states: &[State<W>],
     step: impl Fn(&Program<W>, &mut State<W>),
@@ -516,7 +508,7 @@ fn build_forwards_or_backwards<W: Word>(
 
 /// Checks if the given counter-example has already been seen, by searching the input-output pairs
 /// in the global context.
-fn has_counter_example_been_seen<WT: Word, WS: Word>(
+fn has_counter_example_been_seen<WT, WS>(
     globals: &mut Globals<
         WT,
         WS,
@@ -534,7 +526,7 @@ fn has_counter_example_been_seen<WT: Word, WS: Word>(
 }
 
 /// Print information that shows us growth and memory usage of the graphs.
-fn print_stats<W: Word>(forward_graph: &Graph<W>, backward_graph: &Graph<W>) {
+fn print_stats<W>(forward_graph: &Graph<W>, backward_graph: &Graph<W>) {
     macro_rules! ignore {
         ( $a:tt, $b:tt ) => {
             $b

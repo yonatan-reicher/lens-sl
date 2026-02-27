@@ -2,22 +2,14 @@ use rustc_hash::FxHashMap;
 use std::fmt::Display;
 use std::hash::Hash;
 
-pub trait Programs: Default + Into<Vec<Self::Program>> {
-    type Program;
-    fn len(&self) -> usize;
-    #[allow(dead_code)]
-    fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-    fn extend(&mut self, other: Self);
-}
+use crate::some_traits::Len;
 
 /// A search graph for programs and their outputs on some test cases.
 /// For n test cases (input_n, output_n), the graph has n levels, including 0.
 /// On the 0 < k ≤ n level, each edge with output_k connects to a sub-graph
 /// where all programs produce output_k on input_k.
 #[derive(Clone, Debug)]
-pub enum Graph<State, P: Programs> {
+pub enum Graph<State, P> {
     /// A 0-tests graph. Just a series of programs.
     Leaf(P),
     /// For the corresponding test case (input, output), each program in the
@@ -25,9 +17,10 @@ pub enum Graph<State, P: Programs> {
     Nest(FxHashMap<State, Self>),
 }
 
-impl<S, P: Programs> Graph<S, P>
+impl<S, P> Graph<S, P>
 where
     S: Eq + Hash + Clone,
+    P: Len,
 {
     /// The number of programs stored in the graph.
     pub fn n_programs(&self) -> usize {
@@ -133,7 +126,7 @@ where
 impl<S, P> Graph<S, P>
 where
     S: Eq + Hash + Display,
-    P: Programs + Display,
+    P: Len + Display,
 {
     pub fn pretty_print_lines(&self) -> Vec<String> {
         match self {

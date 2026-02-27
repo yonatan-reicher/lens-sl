@@ -1,12 +1,14 @@
 use crate::all_permutations::Iter as PermutationIter;
+use crate::bit_vec::{BitVec, ConcreteeeBitVec};
 use crate::iter_slice_or_single::Iter as SliceOrSingle;
 use crate::reduce_bit_width::{ImmediateInfo, Reducer};
-use crate::state::{SmtState, State};
-use crate::word::prelude::*;
+use crate::some_traits::{IfThenElse, Run, Bool};
+use crate::state::State;
 
 use std::ops::ControlFlow;
+use std::fmt::{self, Display, Formatter};
 
-use arbitrary_int::traits::Integer;
+use derive_more::{Debug, Display};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(test, derive(proptest_derive::Arbitrary))]
@@ -142,18 +144,7 @@ define_instructions! {
 }
 
 /// A number representing a register.
-#[derive(
-    Clone,
-    Copy,
-    derive_more::Debug,
-    derive_more::Display,
-    Default,
-    PartialEq,
-    Eq,
-    Hash,
-    PartialOrd,
-    Ord,
-)]
+#[derive(Clone, Copy, Debug, Display, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(test, derive(proptest_derive::Arbitrary))]
 #[debug("r{_0}")]
 #[display("r{_0}")]
@@ -165,7 +156,7 @@ impl Register {
 }
 
 /// A single instruction.
-#[derive(derive_more::Debug, derive_more::Display, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(test, derive(proptest_derive::Arbitrary))]
 #[debug("{op_code:?}{}{args:?}",
     match cond_code {
@@ -173,20 +164,10 @@ impl Register {
         _ => format!("{cond_code:?}"),
     }
 )]
-#[display("{}", self.to_string_impl())]
-pub struct Inst<W: Word> {
+pub struct Inst<W> {
     pub op_code: OpCode,
     pub cond_code: CondCode,
-    pub args: [W::Unsigned; 3],
-}
-
-// Implementing `Clone` and `Copy` manually instead of by `derive` because `derive` adds
-// unnecessary trait bounds on the generic parameter.
-impl<W: Word> Copy for Inst<W> {}
-impl<W: Word> Clone for Inst<W> {
-    fn clone(&self) -> Self {
-        *self
-    }
+    pub args: [W; 3],
 }
 
 bitflags::bitflags! {
@@ -236,103 +217,105 @@ impl proptest::arbitrary::Arbitrary for Flags {
     }
 }
 
-#[allow(dead_code)]
-fn run_instruction<W: Word, S: State<W>>(inst: &Inst<W>, state: &mut S) {
-    use OpCode::*;
+impl<W: ConcreteeeBitVec, S: State> Run<S> for Inst<W> {
+    fn run(&self, state: &mut S) {
+        use OpCode::*;
 
-    let cond = state.cond_holds(inst.cond_code);
+        let cond = state.cond_holds(self.cond_code);
+        let st = *state.as_ref();
 
-    macro_rules! r {
-        ($i:literal) => {{
-            debug_assert!($i < 3);
-            debug_assert!(inst.op_code.arg_types()[$i] == ArgType::Reg);
-            state.get_register(Register(inst.args[$i].as_()))
-        }};
-    }
-    macro_rules! imm {
-        ($i:literal) => {
-            state.from_word(inst.args[$i])
-        };
-    }
-    macro_rules! dst {
-        ($i:literal) => {
-            Register(inst.args[$i].as_())
-        };
-    }
-
-    match inst.op_code {
-        Nop => return,
-        Add | AddI | Sub | SubI => {
-            let left = r![1];
-            let right = match inst.op_code {
-                Add | Sub => r![2],
-                _ => imm![2],
-            };
-            let (new_val, new_c, new_v) = match inst.op_code {
-                Add | AddI => (
-                    S::num_add(left, right),
-                    S::add_carry(left, right),
-                    S::add_signed_overflow(left, right),
-                ),
-                _ => (
-                    S::num_sub(left, right),
-                    S::sub_carry(left, right),
-                    S::sub_signed_overflow(left, right),
-                ),
-            };
-            let new_z = S::is_zero(new_val);
-            let new_n = S::is_negative(new_val);
-
-            let old = state.get_register(dst![0]);
-            state.set_register(dst![0], S::select_num(cond, new_val, old));
-
-            let (old_z, old_n, old_c, old_v) = state.get_flags_raw();
-            state.set_flags_raw((
-                S::select_bool(cond, new_z, old_z),
-                S::select_bool(cond, new_n, old_n),
-                S::select_bool(cond, new_c, old_c),
-                S::select_bool(cond, new_v, old_v),
-            ));
+        macro_rules! r {
+            ($i:literal) => {{
+                debug_assert!($i < 3);
+                debug_assert!(self.op_code.arg_types()[$i] == ArgType::Reg);
+                let r = Register(Into::<u64>::into(self.args[$i]) as u8);
+                state.get_register(r)
+            }};
         }
-        And | Eor | Orr | Mul | Mov | MovI => {
-            let new_val = match inst.op_code {
-                And => r![1] & r![2],
-                Eor => r![1] ^ r![2],
-                Orr => r![1] | r![2],
-                Mul => S::num_mul(r![1], r![2]),
-                Mov => r![1],
-                MovI => imm![1],
-                _ => unreachable!(),
+        macro_rules! imm {
+            ($i:literal) => {
+                S::BitVec::from_i64(self.args[$i].into(), st)
             };
-            let new_z = S::is_zero(new_val);
-            let new_n = S::is_negative(new_val);
-            let new_c = state.bool_lit(false);
-            let new_v = state.bool_lit(false);
+        }
+        macro_rules! dst {
+            ($i:literal) => {
+                Register(Into::<u64>::into(self.args[$i]) as u8)
+            };
+        }
 
-            let old = state.get_register(dst![0]);
-            state.set_register(dst![0], S::select_num(cond, new_val, old));
+        // TODO
+        match self.op_code {
+            Nop => return,
+            Add | AddI | Sub | SubI => {
+                let left = r![1];
+                let right = match self.op_code {
+                    Add | Sub => r![2],
+                    _ => imm![2],
+                };
+                let (new_val, new_c, new_v) = match self.op_code {
+                    Add | AddI => (left + right, (left + right).unsigned_lt(left), {
+                        let zero = S::BitVec::from_i64(0, st);
+                        let sum = left + right;
+                        let a_neg = left.signed_lt(zero);
+                        let b_neg = right.signed_lt(zero);
+                        let sum_neg = sum.signed_lt(zero);
+                        (!a_neg & !b_neg & sum_neg) | (a_neg & b_neg & !sum_neg)
+                    }),
+                    _ => (left.sub(right), right.unsigned_le(left), {
+                        let zero = S::BitVec::from_i64(0, st);
+                        let diff = left + (-right);
+                        let a_neg = left.signed_lt(zero);
+                        let b_neg = right.signed_lt(zero);
+                        let diff_neg = diff.signed_lt(zero);
+                        (a_neg & !b_neg & !diff_neg) | (!a_neg & b_neg & diff_neg)
+                    }),
+                };
+                let new_z = S::BitVec::is_zero(new_val);
+                let new_n = S::BitVec::is_negative(new_val);
 
-            let (old_z, old_n, old_c, old_v) = state.get_flags_raw();
-            state.set_flags_raw((
-                S::select_bool(cond, new_z, old_z),
-                S::select_bool(cond, new_n, old_n),
-                S::select_bool(cond, new_c, old_c),
-                S::select_bool(cond, new_v, old_v),
-            ));
+                let old = state.get_register(dst![0]);
+                state.set_register(dst![0], cond.if_then_else(new_val, old));
+
+                let (old_z, old_n, old_c, old_v) = state.get_flags_raw();
+                state.set_flags_raw((
+                    cond.if_then_else(new_z, old_z),
+                    cond.if_then_else(new_z, old_z),
+                    cond.if_then_else(new_n, old_n),
+                    cond.if_then_else(new_c, old_c),
+                ));
+            }
+            And | Eor | Orr | Mul | Mov | MovI => {
+                let new_val = match self.op_code {
+                    And => r![1] & r![2],
+                    Eor => r![1] ^ r![2],
+                    Orr => r![1] | r![2],
+                    Mul => r![1] * r![2],
+                    Mov => r![1],
+                    MovI => imm![1],
+                    _ => unreachable!(),
+                };
+                let new_z = new_val.is_zero();
+                let new_n = new_val.is_negative();
+                let new_c = Bool::r#false();
+                let new_v = Bool::r#false();
+
+                let old = state.get_register(dst![0]);
+                state.set_register(dst![0], cond.if_then_else(new_val, old));
+
+                let (old_z, old_n, old_c, old_v) = state.get_flags_raw();
+                state.set_flags_raw((
+                    cond.if_then_else(new_z, old_z),
+                    cond.if_then_else(new_n, old_n),
+                    cond.if_then_else(new_c, old_c),
+                    cond.if_then_else(new_v, old_v),
+                ));
+            }
         }
     }
 }
 
-impl<W: Word> Inst<W> {
-    pub fn run<S: State<W>>(&self, state: &mut S) {
-        run_instruction(self, state)
-    }
-
-    pub fn run_symbolic(&self, state: &mut SmtState<'_, W>) {
-        run_instruction(self, state)
-    }
-
-    fn to_string_impl(self) -> String {
+impl<W: Display> Display for Inst<W> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         let Inst {
             op_code,
             cond_code,
@@ -347,23 +330,26 @@ impl<W: Word> Inst<W> {
                 ArgType::Unused => "-".to_string(),
             })
             .collect::<Vec<_>>();
-        if cond_code == CondCode::Al {
-            format!("{op_code} {}, {}, {}", args[0], args[1], args[2])
+        if *cond_code == CondCode::Al {
+            write!(f, "{op_code} {}, {}, {}", args[0], args[1], args[2])?;
         } else {
-            format!("{op_code}{cond_code} {}, {}, {}", args[0], args[1], args[2])
+            write!(f, "{op_code}{cond_code} {}, {}, {}", args[0], args[1], args[2])?;
         }
+        Ok(())
     }
+}
 
-    pub fn reduce<WSmall: Word>(&self, reducer: &mut Reducer<W, WSmall>) -> Inst<WSmall> {
-        fn reduce_arg<W: Word, WSmall: Word>(
+impl<W: ConcreteeeBitVec> Inst<W> {
+    pub fn reduce<WSmall: ConcreteeeBitVec>(&self, reducer: &mut Reducer<W, WSmall>) -> Inst<WSmall> {
+        fn reduce_arg<W: ConcreteeeBitVec, WSmall: ConcreteeeBitVec>(
             reducer: &mut Reducer<W, WSmall>,
-            arg: W::Unsigned,
+            arg: W,
             arg_type: ArgType,
             info: &ImmediateInfo,
-        ) -> WSmall::Unsigned {
+        ) -> WSmall {
             match arg_type {
                 ArgType::Imm => reducer.reduce(arg, info),
-                ArgType::Reg | ArgType::Unused => arg.as_(),
+                ArgType::Reg | ArgType::Unused => arg.into_concrete_bit_vec(),
             }
         }
 
@@ -383,18 +369,18 @@ impl<W: Word> Inst<W> {
         }
     }
 
-    pub fn extend<WBig: Word>(
+    pub fn extend<WBig: ConcreteeeBitVec>(
         &self,
         reducer: &Reducer<WBig, W>,
     ) -> impl Iterator<Item = Inst<WBig>> + Clone {
-        fn extend_arg<WSmall: Word, WBig: Word>(
+        fn extend_arg<WSmall: ConcreteeeBitVec, WBig: ConcreteeeBitVec>(
             reducer: &Reducer<WBig, WSmall>,
-            arg: WSmall::Unsigned,
+            arg: WSmall,
             arg_type: ArgType,
-        ) -> SliceOrSingle<'_, WBig::Unsigned> {
+        ) -> SliceOrSingle<'_, WBig> {
             match arg_type {
                 ArgType::Imm => reducer.extend(arg),
-                ArgType::Reg | ArgType::Unused => SliceOrSingle::Single(arg.as_()),
+                ArgType::Reg | ArgType::Unused => SliceOrSingle::Single(arg.into_concrete_bit_vec()),
             }
         }
         // If only we had do notation 🥹
@@ -422,9 +408,9 @@ macro_rules! inst {
                 op_code: $crate::OpCode::$op_code,
                 cond_code: $crate::CondCode::$cond_code,
                 args: [
-                    *args_iter.get(0).unwrap_or(&Default::default()),
-                    *args_iter.get(1).unwrap_or(&Default::default()),
-                    *args_iter.get(2).unwrap_or(&Default::default()),
+                    *args_iter.get(0).unwrap_or(&Default::default()).into(),
+                    *args_iter.get(1).unwrap_or(&Default::default()).into(),
+                    *args_iter.get(2).unwrap_or(&Default::default()).into(),
                 ],
             }
         }
@@ -434,15 +420,13 @@ macro_rules! inst {
     };
 }
 
-pub fn extend_program_for_each<F, T, WBig, WSmall>(
+pub fn extend_program_for_each<F, T, WBig: ConcreteeeBitVec, WSmall: ConcreteeeBitVec>(
     program: &[Inst<WSmall>],
     reducer: &Reducer<WBig, WSmall>,
     mut f: F,
 ) -> ControlFlow<T>
 where
     F: FnMut(&[Inst<WBig>]) -> ControlFlow<T>,
-    WBig: Word,
-    WSmall: Word,
 {
     let mut ret = vec![];
     let iters: Vec<_> = program.iter().map(|inst| inst.extend(reducer)).collect();
@@ -458,21 +442,21 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::SearchState;
+    use crate::{bit_vec::ConcreteBitVec, state::SearchState};
     use std::collections::HashSet;
 
     // ── Helpers for execution tests ───────────────────────────────────────
 
-    type S = SearchState<Word64>;
+    type S = SearchState<ConcreteBitVec<64>>;
 
     fn state(regs: &[(u8, u64)], z: bool, n: bool, c: bool, v: bool) -> S {
         S {
-            registers: regs.iter().map(|&(r, v)| (Register(r), v)).collect(),
+            registers: regs.iter().map(|&(r, v)| (Register(r), v.into())).collect(),
             flags: Some(Flags::new(z, n, c, v)),
         }
     }
 
-    fn r(s: &S, reg: u8) -> u64 {
+    fn r(s: &S, reg: u8) -> <S as State>::BitVec {
         s.get_register(Register(reg))
     }
 
@@ -557,7 +541,7 @@ mod tests {
         // Eq requires Z=1; Z=0 here, so the instruction should not execute.
         let mut s = state(&[(0, 5)], false, false, false, false); // Z=0
         inst!(AddI Eq, 0, 0, 1).run(&mut s);
-        assert_eq!(r(&s, 0), 5, "r0 should be unchanged");
+        assert_eq!(r(&s, 0), 5.into(), "r0 should be unchanged");
     }
 
     /// When the condition is met, the instruction executes.
@@ -566,7 +550,7 @@ mod tests {
         // Eq requires Z=1.
         let mut s = state(&[(0, 5)], true, false, false, false); // Z=1
         inst!(AddI Eq, 0, 0, 1).run(&mut s);
-        assert_eq!(r(&s, 0), 6, "r0 should be incremented");
+        assert_eq!(r(&s, 0), 6.into(), "r0 should be incremented");
     }
 
     /// When the condition is not met, the flags are preserved.
@@ -587,15 +571,15 @@ mod tests {
     fn cs_condition_code() {
         let mut s = state(&[(0, 0)], false, false, true, false); // C=1
         inst!(AddI Cs, 0, 0, 10).run(&mut s);
-        assert_eq!(r(&s, 0), 10);
+        assert_eq!(r(&s, 0), 10.into());
     }
 
     // ── Extend test (pre-existing) ────────────────────────────────────────
 
     #[test]
     fn basic_extend_test() {
-        let program: [Inst<Word64>; _] = [inst!(AddI, 0, 1, 1242), inst!(Sub, 2, 0, 1)];
-        let mut reducer = Reducer::<Word64, Word4>::default();
+        let program: [Inst<ConcreteBitVec<64>>; _] = [inst!(AddI, 0, 1, 1242), inst!(Sub, 2, 0, 1)];
+        let mut reducer = Reducer::<ConcreteBitVec<64>, ConcreteBitVec<4>>::default();
         // Add another constant that clashes with 1242 when reduced.
         reducer.reduce(1242 + 16, &ImmediateInfo { is_shift: false });
         let mut programs = HashSet::new();

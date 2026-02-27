@@ -3,11 +3,6 @@
 version = 4
 
 [[package]]
-name = "arbitrary-int"
-version = "2.1.0"
-source = "git+https://github.com/danlehmann/arbitrary-int?rev=0b888b8#0b888b8ef9678ebbc972aa808f3204710562157d"
-
-[[package]]
 name = "autocfg"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -177,7 +172,6 @@ dependencies = [
 name = "lens-sl"
 version = "0.1.0"
 dependencies = [
- "arbitrary-int",
  "bitflags",
  "derive_more",
  "functionality",

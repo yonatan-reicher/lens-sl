@@ -1,6 +1,4 @@
 /// --- Main Files ---
-/// Definitions of different word sizes, for example 4-bit, 8-bit, 64-bit.
-mod word;
 /// The search graph that we use for forward and backward search.
 mod graph;
 /// Definitions of how we represent programs in an efficient way.
@@ -53,9 +51,15 @@ mod iter_slice_or_single;
 /// Helpers for using the `smtlib` crate.
 mod smtlib_utils;
 
+// --- Traits ---
+/// This modules just defines some very generic traits to help us structure the code.
+mod some_traits;
+/// A module that defines bit vectors, that behave like ints, but wrap, and are generic over their
+/// bit-width.
+mod bit_vec;
+
 // Let's expose just the necessary items.
 
 pub use isa::{CondCode, Flags, Inst, OpCode, Register};
 pub use state::State;
 pub use main_loop::optimize;
-pub use word::{Word, Word4, Word8, Word64};
