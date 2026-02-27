@@ -67,7 +67,16 @@ impl<'st, I: Inst> Oracle<[I], I::State> for SmtOracle<'st, I> {
 fn new_solver<'st>(st: &'st Storage) -> Solver<'st, Cvc5Binary> {
     let cvc5 = Cvc5Binary::new("cvc5")
         .or_else(|_| Cvc5Binary::new("./cvc5"))
-        .expect("failed to initialize cvc5 - binary 'cvc5' not found on path");
+        .unwrap_or_else(|e| {
+            eprintln!(
+                "Error: cvc5 executable not found. \n\
+                 You must have cvc5 installed with executable permissions either on your path, or \
+                 in the current working directory of this binary. You can download cvc5 on \
+                 https://github.com/cvc5/cvc5/releases/. \n\
+                 OS Error: {e}"
+            );
+            std::process::exit(1);
+        });
     let mut solver = Solver::new(st, cvc5).expect("failed to initialize solver");
     solver
         .set_logic(smtlib::Logic::Custom("ALL".into()))
