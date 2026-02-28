@@ -10,6 +10,10 @@ fn main() {
             inst!(Mul Eq, 1, 0, 1),
             inst!(Orr, 0, 0, 1),
             inst!(AddI Eq, 1, 0, 1),
+            inst!(AddI, 1, 0, 1),
+            inst!(Mul, 1, 0, 1),
+            inst!(AddI Eq, 1, 0, 1),
+            inst!(AddI Eq, 1, 0, 1),
         ],
         &[
             &[(Register(0), 0), (Register(1), 0)],
