@@ -420,17 +420,24 @@ fn connect_and_refine<WT: Word, WS: Word>(
                                 },
                             ),
                             Err((inp, out)) => {
-                                debug_assert!(
-                                    !has_counter_example_been_seen(globals, &inp, &out),
-                                    "Counter-example from reduced oracle should not have been seen before."
-                                );
                                 println!("Oracle found counter example.");
                                 println!("  Input: {:?}", &inp);
                                 println!("  Expected output: {:?}", &out);
+                                let mut actual = inp.clone();
+                                program.iter().for_each(|i| i.run(&mut actual));
+                                println!("  Actual output: {:?}", &actual);
                                 println!("  For program:");
                                 for inst in &program {
                                     println!("    {inst}");
                                 }
+                                debug_assert!(
+                                    !has_counter_example_been_seen(globals, &inp, &out),
+                                    "Counter-example from reduced oracle should not have been seen before."
+                                );
+                                debug_assert!(
+                                    actual != out,
+                                    "Found mismatched interpreter behaviours!"
+                                );
                                 globals.inputs.push(inp);
                                 globals.outputs.push(out);
                                 counter_example_added = true;
