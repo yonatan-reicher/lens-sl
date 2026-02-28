@@ -473,11 +473,11 @@ fn connect_and_refine<WT: Word, WS: Word>(
     }
 
     if matches!(forward_graph, Graph::Leaf(..)) {
-        build_forward(forward_graph, &globals.inputs[k - 1..]);
+        build_forward(forward_graph, &globals.inputs[k - 1]);
     }
 
     if matches!(backward_graph, Graph::Leaf(..)) {
-        build_backward(backward_graph, &globals.outputs[k - 1..]);
+        build_backward(backward_graph, &globals.outputs[k - 1]);
     }
 
     // Must be nests, because build_forwards/backwards always turn leaves into nests.
@@ -506,7 +506,11 @@ fn connect_and_refine<WT: Word, WS: Word>(
 /// contrast to [expand_forward], this function flattens the graph, making it faster, but leaving
 /// the searching phase to re-expand the graph when it needs to. Need to see what is actually
 /// faster.
-fn expand_forward_flatten<W: Word>(graph: &mut Graph<W>, _inputs: &Vec<State<W>>, ei: &EnumerationInfo<W>) {
+fn expand_forward_flatten<W: Word>(
+    graph: &mut Graph<W>,
+    _inputs: &Vec<State<W>>,
+    ei: &EnumerationInfo<W>,
+) {
     let mut final_leaf = Programs::default();
 
     fn inner<W: Word>(final_leaf: &mut Programs<W>, graph: Graph<W>, ei: &EnumerationInfo<W>) {
@@ -588,16 +592,16 @@ fn expand_forward<W: Word>(graph: &mut Graph<W>, inputs: &Vec<State<W>>, ei: &En
 
 fn expand_backward<W: Word>(_graph: &mut Graph<W>) {}
 
-fn build_forward<W: Word>(graph: &mut Graph<W>, test_cases_inputs: &[State<W>]) {
-    build_forwards_or_backwards(graph, test_cases_inputs, |program, state| {
+fn build_forward<W: Word>(graph: &mut Graph<W>, input: &State<W>) {
+    build_forwards_or_backwards(graph, input, |program, state| {
         for inst in program {
             inst.run(state);
         }
     });
 }
 
-fn build_backward<W: Word>(graph: &mut Graph<W>, test_cases_outputs: &[State<W>]) {
-    build_forwards_or_backwards::<W>(graph, test_cases_outputs, |program, _state| {
+fn build_backward<W: Word>(graph: &mut Graph<W>, input: &State<W>) {
+    build_forwards_or_backwards::<W>(graph, input, |program, _state| {
         for _inst in program.iter().rev() {
             todo!("Backward execution not implemented yet.");
         }
@@ -606,28 +610,20 @@ fn build_backward<W: Word>(graph: &mut Graph<W>, test_cases_outputs: &[State<W>]
 
 fn build_forwards_or_backwards<W: Word>(
     graph: &mut Graph<W>,
-    initial_states: &[State<W>],
+    input: &State<W>,
     step: impl Fn(&Program<W>, &mut State<W>),
 ) {
-    assert!(
-        !initial_states.is_empty(),
-        "Must give initial states to build the graph from."
-    );
+    debug_assert!(matches!(graph, Graph::Leaf(..)));
     // Rebuild the graph.
     // TODO: We can probably avoid completely rebuilding by just removing and adding programs on
     // the same data-structure. This would reduce allocations, but you need to mark which programs
     // have been visited, or store them in a list.
     let old_graph = std::mem::replace(graph, Graph::Nest(Default::default()));
-    let mut my_outputs = Vec::with_capacity(initial_states.len());
     old_graph.for_each(&mut |programs| {
         programs.for_each_ref(&mut |program| {
-            my_outputs.clear();
-            for i in initial_states {
-                let mut my_output = i.clone();
-                step(&program, &mut my_output);
-                my_outputs.push(my_output);
-            }
-            graph.insert_all(&my_outputs, Programs::Program(program));
+            let mut output = input.clone();
+            step(&program, &mut output);
+            graph.insert(output, Programs::Program(program));
         });
         // let program = programs
         //     .sample()
