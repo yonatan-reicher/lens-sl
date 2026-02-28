@@ -27,16 +27,17 @@ use smtlib::Sorted;
 /// The state of the machine at a given point in time.
 #[derive(Clone, Debug, Default, derive_more::Display, PartialEq, Eq, Hash)]
 #[display(
-    "Registers: {{{}}}, Flags: {}",
-    registers
-        .iter()
-        .map(|(r, v)| format!("{r:?}: {v}"))
-        .collect::<Vec<_>>()
-        .join(", "),
+    "State({} {})",
     match &flags {
         Some(f) => format!("{f:?}"),
         None => "None".to_string(),
-    }
+    },
+    registers
+        .iter()
+        .filter(|(_, v)| !v.is_zero())
+        .map(|(r, v)| format!("{r:?}={v}"))
+        .collect::<Vec<_>>()
+        .join(" "),
 )]
 pub struct State<W: Word> {
     /// This vector is always sorted by register.
