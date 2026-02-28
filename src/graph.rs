@@ -89,6 +89,27 @@ where
 
     /// Insert the given programs under the given set of states. The length of
     /// the slice of output states must be of the same depth as the graph.
+    pub fn insert(&mut self, output: S, progs: P) {
+        debug_assert!(matches!(self, Graph::Nest(..)));
+        match self {
+            Self::Leaf(..) => unreachable!(),
+            Self::Nest(hash_map) => {
+                // Find the sub-graph, or create it.
+                let sub_graph_in_output = hash_map
+                    .entry(output.clone())
+                    .or_insert_with(|| Self::Leaf(P::default()));
+                // It must be a leaf!
+                let Graph::Leaf(sub_graph_programs) = sub_graph_in_output else {
+                    unreachable!();
+                };
+                // Insert
+                sub_graph_programs.extend(progs);
+            }
+        }
+    }
+
+    /// Insert the given programs under the given set of states. The length of
+    /// the slice of output states must be of the same depth as the graph.
     pub fn insert_all(&mut self, outputs: &[S], progs: P) {
         match self {
             Self::Leaf(programs) => {
