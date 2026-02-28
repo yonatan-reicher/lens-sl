@@ -104,6 +104,85 @@ impl<'st> From<Flags<Const<'st, SmtBool<'st>>>> for Flags<SmtBool<'st>> {
     }
 }
 
+impl<'st> Flags<SmtBool<'st>> {
+    fn update_from_add<W: Word>(
+        &mut self,
+        op1: W::SymbolicBitVec<'st>,
+        op2: W::SymbolicBitVec<'st>,
+        enabled: SmtBool<'st>,
+    ) {
+        let sum = op1 + op2;
+        self.z = enabled.if_then_else(sum.is_zero(), self.z);
+        self.n = enabled.if_then_else(sum.is_negative(), self.n);
+        self.c = enabled.if_then_else(sum.unsigned_lt(op1), self.c);
+        let both_positive = op1.is_positive() & op2.is_positive();
+        let both_negative = op1.is_negative() & op2.is_negative();
+        self.v = enabled.if_then_else(
+            (both_positive & sum.signed_lt(op1)) | (both_negative & sum.is_positive()),
+            self.v,
+        );
+    }
+
+    fn update_from_sub<W: Word>(
+        &mut self,
+        op1: W::SymbolicBitVec<'st>,
+        op2: W::SymbolicBitVec<'st>,
+        enabled: SmtBool<'st>,
+    ) {
+        let diff = op1.sub(op2);
+        self.z = enabled.if_then_else(diff.is_zero(), self.z);
+        self.n = enabled.if_then_else(diff.is_negative(), self.n);
+        self.c = enabled.if_then_else(op2.unsigned_le(op1), self.c);
+        let op1_positive = op1.is_positive();
+        let op2_negative = op2.is_negative();
+        let op1_negative = op1.is_negative();
+        let op2_positive = op2.is_positive();
+        self.v = enabled.if_then_else(
+            (op1_positive & op2_negative & diff.is_negative())
+                | (op1_negative & op2_positive & diff.is_positive()),
+            self.v,
+        );
+    }
+}
+
+impl Flags<bool> {
+    fn update_from_add<W: Word>(&mut self, op1: W::Unsigned, op2: W::Unsigned, enabled: bool) {
+        if !enabled {
+            return;
+        }
+        let unsigned_sum = op1.wrapping_add(op2);
+        let signed_sum: W::Signed = unsigned_sum.as_();
+        self.z = unsigned_sum.is_zero();
+        self.n = signed_sum < 0.as_();
+        self.c = unsigned_sum < op1;
+        let signed_op1: W::Signed = op1.as_();
+        let signed_op2: W::Signed = op2.as_();
+        let both_positive = signed_op1 > 0.as_() && signed_op2 > 0.as_();
+        let both_negative = signed_op1 < 0.as_() && signed_op2 < 0.as_();
+        self.v =
+            (both_positive && signed_sum < signed_op1) || (both_negative && signed_sum > 0.as_());
+    }
+
+    fn update_from_sub<W: Word>(&mut self, op1: W::Unsigned, op2: W::Unsigned, enabled: bool) {
+        if !enabled {
+            return;
+        }
+        let unsigned_diff = op1.wrapping_sub(op2);
+        let signed_diff: W::Signed = unsigned_diff.as_();
+        self.z = unsigned_diff.is_zero();
+        self.n = signed_diff < 0.as_();
+        self.c = op1 >= op2;
+        let signed_op1: W::Signed = op1.as_();
+        let signed_op2: W::Signed = op2.as_();
+        let op1_positive = signed_op1 > 0.as_();
+        let op2_negative = signed_op2 < 0.as_();
+        let op1_negative = signed_op1 < 0.as_();
+        let op2_positive = signed_op2 > 0.as_();
+        self.v = (op1_positive && op2_negative && signed_diff < 0.as_())
+            || (op1_negative && op2_positive && signed_diff > 0.as_());
+    }
+}
+
 impl CondCode {
     pub const COUNT: u8 = 6;
 
@@ -711,5 +790,71 @@ mod tests {
             ]
             .into()
         );
+    }
+
+    #[test]
+    fn test_update_from_sub_zero() {
+        let mut flags = Flags::<bool>::default();
+        flags.update_from_sub::<Word64>(5, 5, true);
+        assert_eq!(flags.z, true);
+        assert_eq!(flags.n, false);
+        assert_eq!(flags.c, true); // no borrow
+        assert_eq!(flags.v, false);
+    }
+
+    #[test]
+    fn test_update_from_sub_positive() {
+        let mut flags = Flags::<bool>::default();
+        flags.update_from_sub::<Word64>(10, 3, true);
+        assert_eq!(flags.z, false);
+        assert_eq!(flags.n, false); // 7 is positive
+        assert_eq!(flags.c, true); // no borrow (10 >= 3)
+        assert_eq!(flags.v, false);
+    }
+
+    #[test]
+    fn test_update_from_sub_negative() {
+        let mut flags = Flags::<bool>::default();
+        flags.update_from_sub::<Word64>(3, 10, true);
+        assert_eq!(flags.z, false);
+        assert_eq!(flags.n, true); // result is negative (wraps)
+        assert_eq!(flags.c, false); // borrow occurred (3 < 10)
+        assert_eq!(flags.v, false);
+    }
+
+    #[test]
+    fn test_update_from_sub_overflow_positive() {
+        // Positive - Negative = Negative (overflow)
+        // For u8: 127 - (-128) = 127 - 128 (as unsigned) = 127 - 128 (wraps)
+        let mut flags = Flags::<bool>::default();
+        flags.update_from_sub::<Word8>(127, 128, true); // 127 - (-128 as u8)
+        assert_eq!(flags.n, true); // wrapped to negative
+        assert_eq!(flags.v, true); // overflow occurred
+    }
+
+    #[test]
+    fn test_update_from_sub_overflow_negative() {
+        // Negative - Positive = Positive (overflow)
+        // For u8: 128 (as -128 signed) - 1 = wraps to 127
+        let mut flags = Flags::<bool>::default();
+        flags.update_from_sub::<Word8>(128, 1, true);
+        assert_eq!(flags.n, false); // wrapped to positive
+        assert_eq!(flags.v, true); // overflow occurred
+    }
+
+    #[test]
+    fn test_update_from_sub_disabled() {
+        let mut flags = Flags {
+            z: true,
+            n: true,
+            c: true,
+            v: true,
+        };
+        flags.update_from_sub::<Word64>(10, 3, false);
+        // All flags should remain unchanged
+        assert_eq!(flags.z, true);
+        assert_eq!(flags.n, true);
+        assert_eq!(flags.c, true);
+        assert_eq!(flags.v, true);
     }
 }
