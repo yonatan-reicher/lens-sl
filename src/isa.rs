@@ -1,4 +1,5 @@
 use crate::all_permutations::Iter as PermutationIter;
+use crate::bool::prelude::*;
 use crate::iter_slice_or_single::Iter as SliceOrSingle;
 use crate::reduce_bit_width::{ImmediateInfo, Reducer};
 use crate::word::prelude::*;
@@ -8,9 +9,9 @@ use std::ops::ControlFlow;
 
 use arbitrary_int::traits::Integer;
 
+use smtlib::Storage;
 use smtlib::prelude::*;
 use smtlib::terms::Const;
-use smtlib::{Bool, Storage};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(test, derive(proptest_derive::Arbitrary))]
@@ -64,6 +65,124 @@ pub enum CondCode {
     Le,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Flags<B = bool> {
+    pub z: B,
+    pub n: B,
+    pub c: B,
+    pub v: B,
+}
+
+impl<'st, B: Copy + Into<SmtBool<'st>>> BoolEq<SmtBool<'st>> for Flags<B> {
+    fn eq(&self, other: &Self) -> SmtBool<'st> {
+        self.z.into().eq(&other.z.into())
+            & self.n.into().eq(&other.n.into())
+            & self.c.into().eq(&other.c.into())
+            & self.v.into().eq(&other.v.into())
+    }
+}
+
+impl<'st> From<Flags<bool>> for Flags<SmtBool<'st>> {
+    fn from(Flags { z, n, c, v }: Flags<bool>) -> Self {
+        Self {
+            z: Bool::from_bool(z),
+            n: Bool::from_bool(n),
+            c: Bool::from_bool(c),
+            v: Bool::from_bool(v),
+        }
+    }
+}
+
+impl<'st> From<Flags<Const<'st, SmtBool<'st>>>> for Flags<SmtBool<'st>> {
+    fn from(Flags { z, n, c, v }: Flags<Const<'st, SmtBool<'st>>>) -> Self {
+        Self {
+            z: z.into(),
+            n: n.into(),
+            c: c.into(),
+            v: v.into(),
+        }
+    }
+}
+
+impl<'st> Flags<SmtBool<'st>> {
+    fn update_from_add<W: Word>(
+        &mut self,
+        op1: W::SymbolicBitVec<'st>,
+        op2: W::SymbolicBitVec<'st>,
+        enabled: SmtBool<'st>,
+    ) {
+        let sum = op1 + op2;
+        self.z = enabled.if_then_else(sum.is_zero(), self.z);
+        self.n = enabled.if_then_else(sum.is_negative(), self.n);
+        self.c = enabled.if_then_else(sum.unsigned_lt(op1), self.c);
+        let both_positive = op1.is_positive() & op2.is_positive();
+        let both_negative = op1.is_negative() & op2.is_negative();
+        self.v = enabled.if_then_else(
+            (both_positive & sum.signed_lt(op1)) | (both_negative & sum.is_positive()),
+            self.v,
+        );
+    }
+
+    fn update_from_sub<W: Word>(
+        &mut self,
+        op1: W::SymbolicBitVec<'st>,
+        op2: W::SymbolicBitVec<'st>,
+        enabled: SmtBool<'st>,
+    ) {
+        let diff = op1.sub(op2);
+        self.z = enabled.if_then_else(diff.is_zero(), self.z);
+        self.n = enabled.if_then_else(diff.is_negative(), self.n);
+        self.c = enabled.if_then_else(op2.unsigned_le(op1), self.c);
+        let op1_positive = op1.is_positive();
+        let op2_negative = op2.is_negative();
+        let op1_negative = op1.is_negative();
+        let op2_positive = op2.is_positive();
+        self.v = enabled.if_then_else(
+            (op1_positive & op2_negative & diff.is_negative())
+                | (op1_negative & op2_positive & diff.is_positive()),
+            self.v,
+        );
+    }
+}
+
+impl Flags<bool> {
+    fn update_from_add<W: Word>(&mut self, op1: W::Unsigned, op2: W::Unsigned, enabled: bool) {
+        if !enabled {
+            return;
+        }
+        let unsigned_sum = op1.wrapping_add(op2);
+        let signed_sum: W::Signed = unsigned_sum.as_();
+        self.z = unsigned_sum.is_zero();
+        self.n = signed_sum < 0.as_();
+        self.c = unsigned_sum < op1;
+        let signed_op1: W::Signed = op1.as_();
+        let signed_op2: W::Signed = op2.as_();
+        let both_positive = signed_op1 > 0.as_() && signed_op2 > 0.as_();
+        let both_negative = signed_op1 < 0.as_() && signed_op2 < 0.as_();
+        self.v =
+            (both_positive && signed_sum < signed_op1) || (both_negative && signed_sum > 0.as_());
+    }
+
+    fn update_from_sub<W: Word>(&mut self, op1: W::Unsigned, op2: W::Unsigned, enabled: bool) {
+        if !enabled {
+            return;
+        }
+        let unsigned_diff = op1.wrapping_sub(op2);
+        let signed_diff: W::Signed = unsigned_diff.as_();
+        self.z = unsigned_diff.is_zero();
+        self.n = signed_diff < 0.as_();
+        self.c = op1 >= op2;
+        let signed_op1: W::Signed = op1.as_();
+        let signed_op2: W::Signed = op2.as_();
+        let op1_positive = signed_op1 > 0.as_();
+        let op2_negative = signed_op2 < 0.as_();
+        let op1_negative = signed_op1 < 0.as_();
+        let op2_positive = signed_op2 > 0.as_();
+        self.v = (op1_positive && op2_negative && signed_diff < 0.as_())
+            || (op1_negative && op2_positive && signed_diff > 0.as_());
+    }
+}
+
 impl CondCode {
     pub const COUNT: u8 = 6;
 
@@ -84,6 +203,27 @@ impl CondCode {
             CondCode::Lt => "lt",
             CondCode::Gt => "gt",
             CondCode::Le => "le",
+        }
+    }
+
+    pub fn check<B: Bool>(self, flags: Flags<B>) -> B {
+        let Flags { z, n, c, v } = flags;
+        match self {
+            CondCode::Al => Bool::r#true(),
+            CondCode::Eq => z,
+            CondCode::Ne => !z,
+            CondCode::Cs => c,
+            CondCode::Cc => !c,
+            CondCode::Mi => n,
+            CondCode::Pl => !n,
+            CondCode::Vs => v,
+            CondCode::Vc => !v,
+            CondCode::Hi => c & !z,
+            CondCode::Ls => !c | z,
+            CondCode::Ge => n.eq(&v),
+            CondCode::Lt => n.neq(&v),
+            CondCode::Gt => !z & n.eq(&v),
+            CondCode::Le => z | n.neq(&v),
         }
     }
 }
@@ -195,7 +335,7 @@ impl<W: Word> Clone for Inst<W> {
 
 bitflags::bitflags! {
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-    pub struct Flags: u8 {
+    pub struct FlagsBitField: u8 {
         /// Zero - is the result zero? Disregard overflow and carry.
         const Z = 0b0001;
         /// Negative - is the Msb set? Disregard overflow and carry.
@@ -207,20 +347,31 @@ bitflags::bitflags! {
     }
 }
 
-impl Flags {
+impl From<Flags> for FlagsBitField {
     #[rustfmt::skip]
-    pub fn new(z: bool, n: bool, c: bool, v: bool) -> Self {
-        let mut flags = Flags::empty();
-        if z { flags |= Flags::Z; }
-        if n { flags |= Flags::N; }
-        if c { flags |= Flags::C; }
-        if v { flags |= Flags::V; }
+    fn from(Flags { z, n, c, v } : Flags) -> Self {
+        let mut flags = FlagsBitField::empty();
+        if z { flags |= FlagsBitField::Z; }
+        if n { flags |= FlagsBitField::N; }
+        if c { flags |= FlagsBitField::C; }
+        if v { flags |= FlagsBitField::V; }
         flags
     }
 }
 
+impl<B: Bool> From<FlagsBitField> for Flags<B> {
+    fn from(value: FlagsBitField) -> Self {
+        Self {
+            z: B::from_bool(value.contains(FlagsBitField::Z)),
+            n: B::from_bool(value.contains(FlagsBitField::N)),
+            c: B::from_bool(value.contains(FlagsBitField::C)),
+            v: B::from_bool(value.contains(FlagsBitField::V)),
+        }
+    }
+}
+
 #[cfg(test)]
-impl proptest::arbitrary::Arbitrary for Flags {
+impl proptest::arbitrary::Arbitrary for FlagsBitField {
     type Parameters = ();
     type Strategy = proptest::strategy::BoxedStrategy<Self>;
 
@@ -229,11 +380,11 @@ impl proptest::arbitrary::Arbitrary for Flags {
         use proptest::prelude::*;
         (any::<bool>(), any::<bool>(), any::<bool>(), any::<bool>())
             .prop_map(|(z, n, c, v)| {
-                let mut flags = Flags::empty();
-                if z { flags |= Flags::Z; }
-                if n { flags |= Flags::N; }
-                if c { flags |= Flags::C; }
-                if v { flags |= Flags::V; }
+                let mut flags = FlagsBitField::empty();
+                if z { flags |= FlagsBitField::Z; }
+                if n { flags |= FlagsBitField::N; }
+                if c { flags |= FlagsBitField::C; }
+                if v { flags |= FlagsBitField::V; }
                 flags
             })
             .boxed()
@@ -243,14 +394,14 @@ impl proptest::arbitrary::Arbitrary for Flags {
 pub trait State<W: Word> {
     fn get_register(&self, reg: Register) -> W::Unsigned;
     fn set_register(&mut self, reg: Register, value: W::Unsigned);
-    fn get_flags(&self) -> Flags;
-    fn set_flags(&mut self, flags: Flags);
+    fn get_flags(&self) -> FlagsBitField;
+    fn set_flags(&mut self, flags: FlagsBitField);
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct StateVars<'st, W: Word> {
     pub registers: [Const<'st, W::SymbolicBitVec<'st>>; Register::COUNT as usize],
-    pub flags: FlagVars<'st>,
+    pub flags: Flags<Const<'st, SmtBool<'st>>>,
 }
 
 impl<'st, W: Word> StateVars<'st, W> {
@@ -259,42 +410,26 @@ impl<'st, W: Word> StateVars<'st, W> {
             registers: std::array::from_fn(|i| {
                 W::SymbolicBitVec::new_const(st, &format!("{name}_r{i}"))
             }),
-            flags: FlagVars::new(st, name),
+            flags: Flags::new(st, name),
         }
     }
 }
 
-impl<'st> FlagVars<'st> {
+impl<'st> Flags<Const<'st, SmtBool<'st>>> {
     pub fn new(st: &'st Storage, name: &str) -> Self {
         Self {
-            z: Bool::new_const(st, &format!("{name}_z")),
-            n: Bool::new_const(st, &format!("{name}_n")),
-            c: Bool::new_const(st, &format!("{name}_c")),
-            v: Bool::new_const(st, &format!("{name}_v")),
+            z: SmtBool::new_const(st, &format!("{name}_z")),
+            n: SmtBool::new_const(st, &format!("{name}_n")),
+            c: SmtBool::new_const(st, &format!("{name}_c")),
+            v: SmtBool::new_const(st, &format!("{name}_v")),
         }
     }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct FlagVars<'st> {
-    pub z: Const<'st, Bool<'st>>,
-    pub n: Const<'st, Bool<'st>>,
-    pub c: Const<'st, Bool<'st>>,
-    pub v: Const<'st, Bool<'st>>,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct SymbolicState<'st, W: Word> {
     pub registers: [W::SymbolicBitVec<'st>; Register::COUNT as usize],
-    pub flags: SymbolicFlags<'st>,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct SymbolicFlags<'st> {
-    pub z: Bool<'st>,
-    pub n: Bool<'st>,
-    pub c: Bool<'st>,
-    pub v: Bool<'st>,
+    pub flags: Flags<SmtBool<'st>>,
 }
 
 impl<'st, W: Word> From<StateVars<'st, W>> for SymbolicState<'st, W> {
@@ -306,31 +441,14 @@ impl<'st, W: Word> From<StateVars<'st, W>> for SymbolicState<'st, W> {
     }
 }
 
-impl<'st> From<FlagVars<'st>> for SymbolicFlags<'st> {
-    fn from(value: FlagVars<'st>) -> Self {
-        Self {
-            z: value.z.into(),
-            n: value.n.into(),
-            c: value.c.into(),
-            v: value.v.into(),
-        }
-    }
-}
-
 impl<'st, W: Word> SymbolicState<'st, W> {
-    pub fn eq(&self, other: Self) -> Bool<'st> {
+    pub fn eq(&self, other: Self) -> SmtBool<'st> {
         let regs = self.registers.iter().zip(other.registers);
         let regs_eq = regs
             .map(|(ra, rb)| ra._eq(rb))
             .reduce(|b1, b2| b1 & b2)
             .unwrap();
-        regs_eq & self.flags.eq(other.flags)
-    }
-}
-
-impl<'st> SymbolicFlags<'st> {
-    pub fn eq(&self, other: Self) -> Bool<'st> {
-        self.z._eq(other.z) & self.n._eq(other.n) & self.c._eq(other.c) & self.v._eq(other.v)
+        regs_eq & self.flags.eq(&other.flags)
     }
 }
 
@@ -338,53 +456,6 @@ impl<'st> SymbolicFlags<'st> {
 enum AddOrSub {
     Add,
     Sub,
-}
-
-fn run_addition_or_subtraction<W: Word, S: State<W>>(
-    state: &mut S,
-    left: W::Unsigned,
-    right: W::Unsigned,
-    result_register: Register,
-    kind: AddOrSub,
-) {
-    let (res, signed_overflow, unsigned_overflow) = match kind {
-        AddOrSub::Add => {
-            let signed_left: W::Signed = left.as_();
-            let signed_right: W::Signed = right.as_();
-            let (res, unsigend_overflow) = left.overflowing_add(right);
-            let (res2, signed_overflow) = signed_left.overflowing_add(signed_right);
-            debug_assert_eq!(Integer::as_::<W::Signed>(res), res2);
-            (res, signed_overflow, unsigend_overflow)
-        }
-        AddOrSub::Sub => {
-            let signed_left: W::Signed = left.as_();
-            let signed_right: W::Signed = right.as_();
-            let (res, unsigend_overflow) = left.overflowing_sub(right);
-            let (res2, signed_overflow) = signed_left.overflowing_sub(signed_right);
-            debug_assert_eq!(Integer::as_::<W::Signed>(res), res2);
-            (res, signed_overflow, unsigend_overflow)
-        }
-    };
-    let res_signed: W::Signed = res.as_();
-    state.set_register(result_register, res);
-    // Set flags.
-    let mut flags = Flags::empty();
-    if res.is_zero() {
-        flags |= Flags::Z;
-    }
-    if res_signed > 0.as_() {
-        flags |= Flags::N;
-    }
-    if unsigned_overflow && kind == AddOrSub::Add {
-        flags |= Flags::C;
-    }
-    if !unsigned_overflow && kind == AddOrSub::Sub {
-        flags |= Flags::C;
-    }
-    if signed_overflow {
-        flags |= Flags::V;
-    }
-    state.set_flags(flags);
 }
 
 fn run_instruction<W: Word, S: State<W>>(inst: &Inst<W>, state: &mut S) {
@@ -412,6 +483,11 @@ fn run_instruction<W: Word, S: State<W>>(inst: &Inst<W>, state: &mut S) {
         (r![$i:literal i] <- $value:expr) => {{
             set!(r![$i u] <- $value.as_())
         }};
+        (flags <- $f:ident( $($e:expr),* )) => {{
+            let mut flags: Flags = state.get_flags().into();
+            flags.$f::<W>( $($e),*, true );
+            state.set_flags(flags.into());
+        }};
     }
     /// Get an immediate value.
     macro_rules! imm {
@@ -422,37 +498,30 @@ fn run_instruction<W: Word, S: State<W>>(inst: &Inst<W>, state: &mut S) {
         }};
     }
 
+    // Skip the instruction if it is skipped by the flags.
+    if !inst.cond_code.check(state.get_flags().into()) {
+        return;
+    }
+
     use OpCode::*;
     match inst.op_code {
         Nop => (),
-        Add => run_addition_or_subtraction(
-            state,
-            r![1 u],
-            r![2 u],
-            Register(inst.args[0].as_()),
-            AddOrSub::Add,
-        ),
-        AddI => run_addition_or_subtraction(
-            state,
-            r![1 u],
-            imm![2 u],
-            Register(inst.args[0].as_()),
-            AddOrSub::Add,
-        ),
-        Sub => run_addition_or_subtraction(
-            state,
-            r![1 u],
-            r![2 u],
-            Register(inst.args[0].as_()),
-            AddOrSub::Sub,
-        ),
-        SubI => run_addition_or_subtraction(
-            state,
-            r![1 u],
-            imm![2 u],
-            Register(inst.args[0].as_()),
-            AddOrSub::Sub,
-        ),
+        Add => {
+            set! { flags <- update_from_add(r![1 u], r![2 u]) };
+            set! { r![0 u] <- r![1 u].wrapping_add(r![2 u]) };
+        },
+        AddI => {
+            set! { flags <- update_from_add(r![1 u], imm![2 u]) };
+            set! { r![0 u] <- r![1 u].wrapping_add(imm![2 u]) };
+        },
+        Sub => {
+            set! { flags <- update_from_sub(r![1 u], r![2 u]) };
+            set! { r![0 u] <- r![1 u].wrapping_sub(r![2 u]) };
+        },
+        SubI => {
+            set! { flags <- update_from_sub(r![1 u], imm![2 u]) };
+            set! { r![0 u] <- r![1 u].wrapping_sub(imm![2 u]) };
+        },
         And => set!(r![0 u] <- r![1 u] & r![2 u]),
         Eor => set!(r![0 u] <- r![1 u] ^ r![2 u]),
         Mov => set!(r![0 u] <- r![1 u]),
@@ -463,6 +532,8 @@ fn run_instruction<W: Word, S: State<W>>(inst: &Inst<W>, state: &mut S) {
 }
 
 fn run_instruction_symbolic<W: Word>(inst: &Inst<W>, state: &mut SymbolicState<'_, W>) {
+    let enabled = inst.cond_code.check(state.flags);
+
     /// Get a register value.
     macro_rules! r {
         ($i:literal) => {
@@ -474,6 +545,11 @@ fn run_instruction_symbolic<W: Word>(inst: &Inst<W>, state: &mut SymbolicState<'
             }]
         };
     }
+    /// Set a register value. Also checks the condition code.
+    macro_rules! set {
+        (r![$i:literal] <- $e:expr) => {{ r![$i] = enabled.if_then_else($e, r![$i]); }};
+        (flags <- $f:ident($($e:expr),*)) => {{ state.flags.$f::<W>($($e),* , enabled); }};
+    }
     /// Get an immediate value.
     macro_rules! imm {
         ($i:literal) => {
@@ -484,16 +560,28 @@ fn run_instruction_symbolic<W: Word>(inst: &Inst<W>, state: &mut SymbolicState<'
     use OpCode::*;
     match inst.op_code {
         Nop => (),
-        Add => r![0] = r![1] + r![2],
-        AddI => r![0] = r![1] + imm![2],
-        Sub => r![0] = r![1] + -r![2],
-        SubI => r![0] = r![1] + -imm![2],
-        And => r![0] = r![1] & r![2],
-        Eor => r![0] = r![1] ^ r![2],
-        Mov => r![0] = r![1],
-        MovI => r![0] = imm![1],
-        Mul => r![0] = r![1] * r![2],
-        Orr => r![0] = r![1] | r![2],
+        Add => {
+            set! { flags <- update_from_add(r![1], r![2]) };
+            set! { r![0] <- r![1] + r![2] };
+        }
+        AddI => {
+            set! { flags <- update_from_add(r![1], imm![2]) };
+            set! { r![0] <- r![1] + imm![2] };
+        }
+        Sub => {
+            set! { flags <- update_from_sub(r![1], r![2]) };
+            set! { r![0] <- r![1] + -r![2] };
+        },
+        SubI => {
+            set! { flags <- update_from_sub(r![1], imm![2]) };
+            set! { r![0] <- r![1] + -imm![2] };
+        },
+        And => set! { r![0] <- r![1] & r![2] },
+        Eor => set! { r![0] <- r![1] ^ r![2] },
+        Mov => set! { r![0] <- r![1] },
+        MovI => set! { r![0] <- imm![1] },
+        Mul => set! { r![0] <- r![1] * r![2] },
+        Orr => set! { r![0] <- r![1] | r![2] },
     }
 }
 
@@ -658,5 +746,71 @@ mod tests {
             ]
             .into()
         );
+    }
+
+    #[test]
+    fn test_update_from_sub_zero() {
+        let mut flags = Flags::<bool>::default();
+        flags.update_from_sub::<Word64>(5, 5, true);
+        assert_eq!(flags.z, true);
+        assert_eq!(flags.n, false);
+        assert_eq!(flags.c, true); // no borrow
+        assert_eq!(flags.v, false);
+    }
+
+    #[test]
+    fn test_update_from_sub_positive() {
+        let mut flags = Flags::<bool>::default();
+        flags.update_from_sub::<Word64>(10, 3, true);
+        assert_eq!(flags.z, false);
+        assert_eq!(flags.n, false); // 7 is positive
+        assert_eq!(flags.c, true); // no borrow (10 >= 3)
+        assert_eq!(flags.v, false);
+    }
+
+    #[test]
+    fn test_update_from_sub_negative() {
+        let mut flags = Flags::<bool>::default();
+        flags.update_from_sub::<Word64>(3, 10, true);
+        assert_eq!(flags.z, false);
+        assert_eq!(flags.n, true); // result is negative (wraps)
+        assert_eq!(flags.c, false); // borrow occurred (3 < 10)
+        assert_eq!(flags.v, false);
+    }
+
+    #[test]
+    fn test_update_from_sub_overflow_positive() {
+        // Positive - Negative = Negative (overflow)
+        // For u8: 127 - (-128) = 127 - 128 (as unsigned) = 127 - 128 (wraps)
+        let mut flags = Flags::<bool>::default();
+        flags.update_from_sub::<Word8>(127, 128, true); // 127 - (-128 as u8)
+        assert_eq!(flags.n, true); // wrapped to negative
+        assert_eq!(flags.v, true); // overflow occurred
+    }
+
+    #[test]
+    fn test_update_from_sub_overflow_negative() {
+        // Negative - Positive = Positive (overflow)
+        // For u8: 128 (as -128 signed) - 1 = wraps to 127
+        let mut flags = Flags::<bool>::default();
+        flags.update_from_sub::<Word8>(128, 1, true);
+        assert_eq!(flags.n, false); // wrapped to positive
+        assert_eq!(flags.v, true); // overflow occurred
+    }
+
+    #[test]
+    fn test_update_from_sub_disabled() {
+        let mut flags = Flags {
+            z: true,
+            n: true,
+            c: true,
+            v: true,
+        };
+        flags.update_from_sub::<Word64>(10, 3, false);
+        // All flags should remain unchanged
+        assert_eq!(flags.z, true);
+        assert_eq!(flags.n, true);
+        assert_eq!(flags.c, true);
+        assert_eq!(flags.v, true);
     }
 }

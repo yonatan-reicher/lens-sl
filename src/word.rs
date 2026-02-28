@@ -5,7 +5,7 @@ use std::ops::*;
 use arbitrary_int::traits::{Integer, SignedInteger, UnsignedInteger};
 use arbitrary_int::{i4, u4};
 
-use crate::smtlib_utils::bit_vec_term_to_i128;
+use crate::smtlib_utils::{BitVecExt, bit_vec_term_to_i128};
 use smtlib::terms::{IntoWithStorage, StaticSorted};
 use smtlib::{BitVec, Storage};
 
@@ -24,6 +24,7 @@ pub trait Word:
         + Debug
         + Div<Output = Self::SymbolicBitVec<'st>>
         + From<smtlib::terms::Const<'st, Self::SymbolicBitVec<'st>>>
+        + Into<smtlib::terms::Dynamic<'st>>
         + IntoWithStorage<'st, Self::SymbolicBitVec<'st>>
         + Mul<Output = Self::SymbolicBitVec<'st>>
         + Neg<Output = Self::SymbolicBitVec<'st>>
@@ -32,6 +33,7 @@ pub trait Word:
         + Shl<Output = Self::SymbolicBitVec<'st>>
         + Shr<Output = Self::SymbolicBitVec<'st>>
         + StaticSorted<'st, Inner = Self::SymbolicBitVec<'st>>
+        + BitVecExt<'st>
         // + TryInto<i64, Error: Debug> // This TryInto implementation is currently broken, so we use our own.
         // + Sub<Output = Self::SymbolicBitVec<'st>> // For some reason, this is unimplemented.
         + 'st;
@@ -90,27 +92,24 @@ impl Word for Word4 {
 }
 
 pub trait WordOps: Sized {
-    fn overflowing_add(self, rhs: Self) -> (Self, bool);
-    fn overflowing_sub(self, rhs: Self) -> (Self, bool);
-    fn overflowing_mul(self, rhs: Self) -> (Self, bool);
     fn is_zero(&self) -> bool;
+    fn overflowing_add(self, rhs: Self) -> (Self, bool);
+    fn overflowing_mul(self, rhs: Self) -> (Self, bool);
+    fn overflowing_sub(self, rhs: Self) -> (Self, bool);
+    fn wrapping_add(self, rhs: Self) -> Self;
+    fn wrapping_sub(self, rhs: Self) -> Self;
 }
 
 macro_rules! define_word_ops {
     ($t:ty) => {
+        #[rustfmt::skip]
         impl WordOps for $t {
-            fn overflowing_add(self, rhs: Self) -> (Self, bool) {
-                self.overflowing_add(rhs)
-            }
-            fn overflowing_sub(self, rhs: Self) -> (Self, bool) {
-                self.overflowing_sub(rhs)
-            }
-            fn overflowing_mul(self, rhs: Self) -> (Self, bool) {
-                self.overflowing_mul(rhs)
-            }
-            fn is_zero(&self) -> bool {
-                *self == Integer::ZERO
-            }
+            fn is_zero(&self) -> bool { *self == Integer::ZERO }
+            fn overflowing_add(self, rhs: Self) -> (Self, bool) { self.overflowing_add(rhs) }
+            fn overflowing_mul(self, rhs: Self) -> (Self, bool) { self.overflowing_mul(rhs) }
+            fn overflowing_sub(self, rhs: Self) -> (Self, bool) { self.overflowing_sub(rhs) }
+            fn wrapping_add(self, rhs: Self) -> Self { self.wrapping_add(rhs) }
+            fn wrapping_sub(self, rhs: Self) -> Self { self.wrapping_sub(rhs) }
         }
     };
 }
@@ -124,6 +123,7 @@ define_word_ops!(i64);
 pub mod prelude {
     #[allow(unused_imports)]
     pub use super::{Word, Word4, Word8, Word64, WordOps};
+    pub use crate::smtlib_utils::BitVecExt;
     pub use arbitrary_int::prelude::*;
 }
 

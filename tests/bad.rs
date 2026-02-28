@@ -40,5 +40,12 @@ fn bad_case_2() {
         ],
         &[&[(Register(0), 0), (Register(1), 0)]],
     );
-    assert_eq!(p, None);
+    assert_eq!(
+        p,
+        Some(vec![
+            inst!(AddI, 0, 0, 5),
+            inst!(AddI Eq, 1, 0, 1),
+            inst!(Orr, 0, 1, 0)
+        ])
+    );
 }

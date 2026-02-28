@@ -1,29 +1,31 @@
+use arbitrary_int::traits::Integer;
 use lens_sl::*;
 
 // This binary runs arm programs for us
 
 // TODO: rename this binary...
 
-type W = Word64;
+type W = Word4;
+type U = <W as Word>::Unsigned;
 
 #[derive(Clone, Copy, Debug, Default)]
 struct S {
-    registers: [u64; 16],
+    registers: [U; 16],
     flags: Flags,
 }
 
 impl State<W> for S {
-    fn get_register(&self, r: Register) -> u64 {
+    fn get_register(&self, r: Register) -> U {
         self.registers[r.0 as usize]
     }
-    fn set_register(&mut self, r: Register, x: u64) {
+    fn set_register(&mut self, r: Register, x: U) {
         self.registers[r.0 as usize] = x;
     }
-    fn get_flags(&self) -> Flags {
-        self.flags
+    fn get_flags(&self) -> FlagsBitField {
+        self.flags.into()
     }
-    fn set_flags(&mut self, f: Flags) {
-        self.flags = f;
+    fn set_flags(&mut self, f: FlagsBitField) {
+        self.flags = f.into();
     }
 }
 
@@ -36,20 +38,17 @@ impl std::fmt::Display for S {
 
 fn main() {
     let program = &[
-        inst!(AddI, 0, 0, 5),
-        inst!(AddI Eq, 1, 0, 1),
-        inst!(Mul Eq, 1, 0, 1),
-        inst!(Orr, 0, 0, 1),
-        inst!(AddI Eq, 1, 0, 1),
+        inst!(AddI, 0.as_(), 0.as_(), 5.as_()),
+        inst!(Orr, 0.as_(), 1.as_(), 0.as_()),
     ];
     let initial_state = S {
         registers: [
-            /* r0  = */ 1, /* r1  = */ 0, /* r2  = */ 0, /* r3  = */ 0,
+            /* r0  = */ 6, /* r1  = */13, /* r2  = */ 0, /* r3  = */ 0,
             /* r4  = */ 0, /* r5  = */ 0, /* r6  = */ 0, /* r7  = */ 0,
             /* r8  = */ 0, /* r9  = */ 0, /* r10 = */ 0, /* r11 = */ 0,
             /* r12 = */ 0, /* r13 = */ 0, /* r14 = */ 0, /* r15 = */ 0,
-        ],
-        flags: Flags::empty(),
+        ].map(|x| x.as_()),
+        flags: Flags::default(),
     };
     println!("Initial state: {initial_state}");
     let mut state = initial_state;
