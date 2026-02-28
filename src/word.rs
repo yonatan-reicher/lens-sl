@@ -92,29 +92,22 @@ impl Word for Word4 {
 }
 
 pub trait WordOps: Sized {
-    fn overflowing_add(self, rhs: Self) -> (Self, bool);
-    fn overflowing_sub(self, rhs: Self) -> (Self, bool);
-    fn overflowing_mul(self, rhs: Self) -> (Self, bool);
     fn is_zero(&self) -> bool;
+    fn overflowing_add(self, rhs: Self) -> (Self, bool);
+    fn overflowing_mul(self, rhs: Self) -> (Self, bool);
+    fn overflowing_sub(self, rhs: Self) -> (Self, bool);
     fn wrapping_add(self, rhs: Self) -> Self;
     fn wrapping_sub(self, rhs: Self) -> Self;
 }
 
 macro_rules! define_word_ops {
     ($t:ty) => {
+        #[rustfmt::skip]
         impl WordOps for $t {
-            fn overflowing_add(self, rhs: Self) -> (Self, bool) {
-                self.overflowing_add(rhs)
-            }
-            fn overflowing_sub(self, rhs: Self) -> (Self, bool) {
-                self.overflowing_sub(rhs)
-            }
-            fn overflowing_mul(self, rhs: Self) -> (Self, bool) {
-                self.overflowing_mul(rhs)
-            }
-            fn is_zero(&self) -> bool {
-                *self == Integer::ZERO
-            }
+            fn is_zero(&self) -> bool { *self == Integer::ZERO }
+            fn overflowing_add(self, rhs: Self) -> (Self, bool) { self.overflowing_add(rhs) }
+            fn overflowing_mul(self, rhs: Self) -> (Self, bool) { self.overflowing_mul(rhs) }
+            fn overflowing_sub(self, rhs: Self) -> (Self, bool) { self.overflowing_sub(rhs) }
             fn wrapping_add(self, rhs: Self) -> Self { self.wrapping_add(rhs) }
             fn wrapping_sub(self, rhs: Self) -> Self { self.wrapping_sub(rhs) }
         }
