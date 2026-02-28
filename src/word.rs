@@ -5,7 +5,7 @@ use std::ops::*;
 use arbitrary_int::traits::{Integer, SignedInteger, UnsignedInteger};
 use arbitrary_int::{i4, u4};
 
-use crate::smtlib_utils::bit_vec_term_to_i128;
+use crate::smtlib_utils::{BitVecExt, bit_vec_term_to_i128};
 use smtlib::terms::{IntoWithStorage, StaticSorted};
 use smtlib::{BitVec, Storage};
 
@@ -33,6 +33,7 @@ pub trait Word:
         + Shl<Output = Self::SymbolicBitVec<'st>>
         + Shr<Output = Self::SymbolicBitVec<'st>>
         + StaticSorted<'st, Inner = Self::SymbolicBitVec<'st>>
+        + BitVecExt<'st>
         // + TryInto<i64, Error: Debug> // This TryInto implementation is currently broken, so we use our own.
         // + Sub<Output = Self::SymbolicBitVec<'st>> // For some reason, this is unimplemented.
         + 'st;
@@ -95,6 +96,8 @@ pub trait WordOps: Sized {
     fn overflowing_sub(self, rhs: Self) -> (Self, bool);
     fn overflowing_mul(self, rhs: Self) -> (Self, bool);
     fn is_zero(&self) -> bool;
+    fn wrapping_add(self, rhs: Self) -> Self;
+    fn wrapping_sub(self, rhs: Self) -> Self;
 }
 
 macro_rules! define_word_ops {
@@ -112,6 +115,8 @@ macro_rules! define_word_ops {
             fn is_zero(&self) -> bool {
                 *self == Integer::ZERO
             }
+            fn wrapping_add(self, rhs: Self) -> Self { self.wrapping_add(rhs) }
+            fn wrapping_sub(self, rhs: Self) -> Self { self.wrapping_sub(rhs) }
         }
     };
 }
