@@ -458,53 +458,6 @@ enum AddOrSub {
     Sub,
 }
 
-fn run_addition_or_subtraction<W: Word, S: State<W>>(
-    state: &mut S,
-    left: W::Unsigned,
-    right: W::Unsigned,
-    result_register: Register,
-    kind: AddOrSub,
-) {
-    let (res, signed_overflow, unsigned_overflow) = match kind {
-        AddOrSub::Add => {
-            let signed_left: W::Signed = left.as_();
-            let signed_right: W::Signed = right.as_();
-            let (res, unsigend_overflow) = left.overflowing_add(right);
-            let (res2, signed_overflow) = signed_left.overflowing_add(signed_right);
-            debug_assert_eq!(Integer::as_::<W::Signed>(res), res2);
-            (res, signed_overflow, unsigend_overflow)
-        }
-        AddOrSub::Sub => {
-            let signed_left: W::Signed = left.as_();
-            let signed_right: W::Signed = right.as_();
-            let (res, unsigend_overflow) = left.overflowing_sub(right);
-            let (res2, signed_overflow) = signed_left.overflowing_sub(signed_right);
-            debug_assert_eq!(Integer::as_::<W::Signed>(res), res2);
-            (res, signed_overflow, unsigend_overflow)
-        }
-    };
-    let res_signed: W::Signed = res.as_();
-    state.set_register(result_register, res);
-    // Set flags.
-    let mut flags = FlagsBitField::empty();
-    if res.is_zero() {
-        flags |= FlagsBitField::Z;
-    }
-    if res_signed > 0.as_() {
-        flags |= FlagsBitField::N;
-    }
-    if unsigned_overflow && kind == AddOrSub::Add {
-        flags |= FlagsBitField::C;
-    }
-    if !unsigned_overflow && kind == AddOrSub::Sub {
-        flags |= FlagsBitField::C;
-    }
-    if signed_overflow {
-        flags |= FlagsBitField::V;
-    }
-    state.set_flags(flags);
-}
-
 fn run_instruction<W: Word, S: State<W>>(inst: &Inst<W>, state: &mut S) {
     /// Get a register value.
     macro_rules! r {
@@ -530,6 +483,11 @@ fn run_instruction<W: Word, S: State<W>>(inst: &Inst<W>, state: &mut S) {
         (r![$i:literal i] <- $value:expr) => {{
             set!(r![$i u] <- $value.as_())
         }};
+        (flags <- $f:ident( $($e:expr),* )) => {{
+            let mut flags: Flags = state.get_flags().into();
+            flags.$f::<W>( $($e),*, true );
+            state.set_flags(flags.into());
+        }};
     }
     /// Get an immediate value.
     macro_rules! imm {
@@ -548,34 +506,22 @@ fn run_instruction<W: Word, S: State<W>>(inst: &Inst<W>, state: &mut S) {
     use OpCode::*;
     match inst.op_code {
         Nop => (),
-        Add => run_addition_or_subtraction(
-            state,
-            r![1 u],
-            r![2 u],
-            Register(inst.args[0].as_()),
-            AddOrSub::Add,
-        ),
-        AddI => run_addition_or_subtraction(
-            state,
-            r![1 u],
-            imm![2 u],
-            Register(inst.args[0].as_()),
-            AddOrSub::Add,
-        ),
-        Sub => run_addition_or_subtraction(
-            state,
-            r![1 u],
-            r![2 u],
-            Register(inst.args[0].as_()),
-            AddOrSub::Sub,
-        ),
-        SubI => run_addition_or_subtraction(
-            state,
-            r![1 u],
-            imm![2 u],
-            Register(inst.args[0].as_()),
-            AddOrSub::Sub,
-        ),
+        Add => {
+            set! { flags <- update_from_add(r![1 u], r![2 u]) };
+            set! { r![0 u] <- r![1 u].wrapping_add(r![2 u]) };
+        },
+        AddI => {
+            set! { flags <- update_from_add(r![1 u], imm![2 u]) };
+            set! { r![0 u] <- r![1 u].wrapping_add(imm![2 u]) };
+        },
+        Sub => {
+            set! { flags <- update_from_sub(r![1 u], r![2 u]) };
+            set! { r![0 u] <- r![1 u].wrapping_sub(r![2 u]) };
+        },
+        SubI => {
+            set! { flags <- update_from_sub(r![1 u], imm![2 u]) };
+            set! { r![0 u] <- r![1 u].wrapping_sub(imm![2 u]) };
+        },
         And => set!(r![0 u] <- r![1 u] & r![2 u]),
         Eor => set!(r![0 u] <- r![1 u] ^ r![2 u]),
         Mov => set!(r![0 u] <- r![1 u]),
@@ -586,6 +532,8 @@ fn run_instruction<W: Word, S: State<W>>(inst: &Inst<W>, state: &mut S) {
 }
 
 fn run_instruction_symbolic<W: Word>(inst: &Inst<W>, state: &mut SymbolicState<'_, W>) {
+    let enabled = inst.cond_code.check(state.flags);
+
     /// Get a register value.
     macro_rules! r {
         ($i:literal) => {
@@ -599,12 +547,8 @@ fn run_instruction_symbolic<W: Word>(inst: &Inst<W>, state: &mut SymbolicState<'
     }
     /// Set a register value. Also checks the condition code.
     macro_rules! set {
-        (r![$i:literal] <- $e:expr) => {
-            r![$i] = inst
-                .cond_code
-                .check(state.flags.into())
-                .if_then_else($e, r![$i])
-        };
+        (r![$i:literal] <- $e:expr) => {{ r![$i] = enabled.if_then_else($e, r![$i]); }};
+        (flags <- $f:ident($($e:expr),*)) => {{ state.flags.$f::<W>($($e),* , enabled); }};
     }
     /// Get an immediate value.
     macro_rules! imm {
@@ -616,10 +560,22 @@ fn run_instruction_symbolic<W: Word>(inst: &Inst<W>, state: &mut SymbolicState<'
     use OpCode::*;
     match inst.op_code {
         Nop => (),
-        Add => set! { r![0] <- r![1] + r![2] },
-        AddI => set! { r![0] <- r![1] + imm![2] },
-        Sub => set! { r![0] <- r![1] + -r![2] },
-        SubI => set! { r![0] <- r![1] + -imm![2] },
+        Add => {
+            set! { flags <- update_from_add(r![1], r![2]) };
+            set! { r![0] <- r![1] + r![2] };
+        }
+        AddI => {
+            set! { flags <- update_from_add(r![1], imm![2]) };
+            set! { r![0] <- r![1] + imm![2] };
+        }
+        Sub => {
+            set! { flags <- update_from_sub(r![1], r![2]) };
+            set! { r![0] <- r![1] + -r![2] };
+        },
+        SubI => {
+            set! { flags <- update_from_sub(r![1], imm![2]) };
+            set! { r![0] <- r![1] + -imm![2] };
+        },
         And => set! { r![0] <- r![1] & r![2] },
         Eor => set! { r![0] <- r![1] ^ r![2] },
         Mov => set! { r![0] <- r![1] },
