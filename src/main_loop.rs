@@ -502,6 +502,38 @@ fn connect_and_refine<WT: Word, WS: Word>(
     ConnectAndRefineResult::Continue
 }
 
+/// Go through each program prefix in the graph, and expand it by one instruction forward. In
+/// contrast to [expand_forward], this function flattens the graph, making it faster, but leaving
+/// the searching phase to re-expand the graph when it needs to. Need to see what is actually
+/// faster.
+fn expand_forward_flatten<W: Word>(graph: &mut Graph<W>, _inputs: &Vec<State<W>>, ei: &EnumerationInfo<W>) {
+    let mut final_leaf = Programs::default();
+
+    fn inner<W: Word>(final_leaf: &mut Programs<W>, graph: Graph<W>, ei: &EnumerationInfo<W>) {
+        match graph {
+            graph::Graph::Leaf(programs) => {
+                let programs = Rc::new(programs);
+                for inst in Enumerator::new().into_iter(ei) {
+                    let concated = programs.clone().concat(inst);
+                    final_leaf.extend(concated);
+                }
+            }
+            graph::Graph::Nest(hash_map) => {
+                for sub_graph in hash_map.into_values() {
+                    inner(final_leaf, sub_graph, ei);
+                }
+            }
+        }
+    }
+    inner(
+        &mut final_leaf,
+        std::mem::replace(graph, Graph::Leaf(Programs::default())),
+        ei,
+    );
+
+    *graph = Graph::Leaf(final_leaf);
+}
+
 /// Go through each program prefix in the graph, and expand it by one
 /// instruction forward. This is done for each program, and for each
 /// instruction.
