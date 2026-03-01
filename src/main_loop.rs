@@ -328,7 +328,12 @@ fn synthesize<WT: Word, W: Word>(
             // print_stats(&forward_graph, &backward_graph);
             let should_exapnd_forward = true;
             if should_exapnd_forward {
-                expand_forward(&mut forward_graph, &globals.inputs, enumeration_info, globals.debug_printer);
+                expand_forward(
+                    &mut forward_graph,
+                    &globals.inputs,
+                    enumeration_info,
+                    globals.debug_printer,
+                );
                 globals.forward_length += 1;
             } else {
                 expand_backward(&mut backward_graph);
