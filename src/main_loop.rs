@@ -579,47 +579,50 @@ fn expand_forward<W: Word>(
         inputs: &[State<W>],
         out: &mut Graph<W>,
         ei: &EnumerationInfo<W>,
+        debug_printer: &impl DebugPrinter,
     ) {
         match graph {
             Graph::Leaf(programs) if programs.is_empty() => {}
             Graph::Leaf(programs) => {
-                // Calculate the outputs of the current programs.
-                // (All the programs in the same leaf have the same outputs)
-                let program = programs
-                    .sample()
-                    .expect("programs should not be empty here.");
-                let outputs: Vec<State<W>> = inputs
-                    .iter()
-                    .map(|input| {
-                        let mut state = input.clone();
-                        for inst in &program {
-                            inst.run(&mut state);
+                debug_printer.visiting_leaf(programs.len(), || {
+                    // Calculate the outputs of the current programs.
+                    // (All the programs in the same leaf have the same outputs)
+                    let program = programs
+                        .sample()
+                        .expect("programs should not be empty here.");
+                    let outputs: Vec<State<W>> = inputs
+                        .iter()
+                        .map(|input| {
+                            let mut state = input.clone();
+                            for inst in &program {
+                                inst.run(&mut state);
+                            }
+                            state
+                        })
+                        .collect();
+                    let mut outputs_after_inst = vec![];
+                    let programs = Rc::new(programs);
+                    for inst in Enumerator::new().into_iter(ei) {
+                        outputs_after_inst.clear();
+                        for output in &outputs {
+                            let mut next_state = output.clone();
+                            inst.run(&mut next_state);
+                            outputs_after_inst.push(next_state);
                         }
-                        state
-                    })
-                    .collect();
-                let mut outputs_after_inst = vec![];
-                let programs = Rc::new(programs);
-                for inst in Enumerator::new().into_iter(ei) {
-                    outputs_after_inst.clear();
-                    for output in &outputs {
-                        let mut next_state = output.clone();
-                        inst.run(&mut next_state);
-                        outputs_after_inst.push(next_state);
+                        out.insert_all(&outputs_after_inst, programs.clone().concat(inst));
                     }
-                    out.insert_all(&outputs_after_inst, programs.clone().concat(inst));
-                }
+                })
             }
-            Graph::Nest(hash_map) => {
+            Graph::Nest(hash_map) => debug_printer.visiting_inner_node(hash_map.len(), || {
                 for sub_graph in hash_map.into_values() {
-                    inner(sub_graph, inputs, out, ei);
+                    inner(sub_graph, inputs, out, ei, debug_printer);
                 }
-            }
+            }),
         }
     }
 
     let old_graph = std::mem::replace(graph, Graph::Nest(Default::default()));
-    inner(old_graph, inputs, graph, ei);
+    inner(old_graph, inputs, graph, ei, debug_printer);
 }
 
 fn expand_backward<W: Word>(_graph: &mut Graph<W>) {}
