@@ -21,6 +21,7 @@ pub trait DebugPrinter {
 
 // ====== Null Implementation ======
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct EmptyDebugPrinter;
 
 #[rustfmt::skip]
