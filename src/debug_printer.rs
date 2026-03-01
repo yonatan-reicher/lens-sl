@@ -197,13 +197,13 @@ impl Msg {
             }
             Msg::DoneBuildingInnerNode => state.building = None,
             &Msg::VisitingInnerNode { n_sub_graphs } => {
+                if let Some(node) = state.node_stack.last_mut() {
+                    node.n_sub_graphs_visited += 1;
+                }
                 state.node_stack.push(InnerNodeInfo {
                     n_sub_graphs,
                     n_sub_graphs_visited: 0,
                 });
-                if let Some(node) = state.node_stack.last_mut() {
-                    node.n_sub_graphs_visited += 1;
-                }
             }
             Msg::DoneVisitingInnerNode => {
                 state.node_stack.pop();
