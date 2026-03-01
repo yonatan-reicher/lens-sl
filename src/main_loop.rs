@@ -390,12 +390,13 @@ fn connect_and_refine<WT: Word, WS: Word>(
     // This is the index of the input/output pair we are currently trying to connect.
     k: usize,
 ) -> ConnectAndRefineResult<WT> {
+    let debug_printer = globals.debug_printer;
     if k > globals.inputs.len() {
         let mut counter_example_added = false;
         match (&forward_graph, &backward_graph) {
             (Graph::Leaf(prefixes), Graph::Leaf(postfixes)) => {
                 let n_programs = prefixes.len() * postfixes.len();
-                let ret = globals.debug_printer.visiting_leaf(n_programs, || {
+                let ret = debug_printer.visiting_leaf(n_programs, || {
                     // We found a class of candidate programs.
                     // Try each one. If one works, return it. If none work, adds all counter-examples.
                     // First, make a buffer to hold the program.
@@ -412,7 +413,7 @@ fn connect_and_refine<WT: Word, WS: Word>(
                             program.push(inst);
                             program.extend(postfix.iter());
                             let s = program.iter().map(|i| format!("{i}")).collect();
-                            globals.debug_printer.visiting_program(s, ||{
+                            debug_printer.visiting_program(s, ||{
                             match globals.oracle_reduced.check_program(&program) {
                                 // Found!
                                 Ok(()) => extend_program_for_each(
@@ -429,7 +430,7 @@ fn connect_and_refine<WT: Word, WS: Word>(
                                     },
                                 ),
                                 Err((inp, out)) => {
-                                    globals.debug_printer.found_counter_example(
+                                    debug_printer.found_counter_example(
                                         inp.to_string(),
                                         out.to_string(),
                                     );
