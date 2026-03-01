@@ -8,6 +8,9 @@ pub trait DebugPrinter {
     /// Called when reaching a leaf, a set of programs that pass all the current counter-examples.
     fn visiting_leaf<T>(&self, n_programs: usize, action: impl FnOnce() -> T) -> T;
     fn visiting_program<T>(&self, program: Vec<String>, action: impl FnOnce() -> T) -> T;
+    /// Called when building a part of the graph (calculating new outputs).
+    fn building_inner_node<T>(&self, n_programs: usize, action: impl FnOnce() -> T) -> T;
+    fn building_program(&self);
     /// Called when reaching an inner node, which is associated with some input and holds the
     /// sub-graphs and the outputs that all programs in each sub-graph gave.
     fn visiting_inner_node<T>(&self, n_sub_graphs: usize, action: impl FnOnce() -> T) -> T;
@@ -24,6 +27,8 @@ pub struct EmptyDebugPrinter;
 impl DebugPrinter for EmptyDebugPrinter {
     fn visiting_leaf<T>(&self, _: usize, f: impl FnOnce() -> T) -> T { f() }
     fn visiting_program<T>(&self, _: Vec<String>, f: impl FnOnce() -> T) -> T { f() }
+    fn building_inner_node<T>(&self, _: usize, f: impl FnOnce() -> T) -> T { f() }
+    fn building_program(&self) {}
     fn visiting_inner_node<T>(&self, _: usize, f: impl FnOnce() -> T) -> T { f() }
     fn expanding<T>(&self, f: impl FnOnce() -> T) -> T { f() }
     fn found_counter_example(&self, _: String, _: String) {}
@@ -42,6 +47,9 @@ enum Msg {
     DoneVisitingLeaf,
     VisitingProgram(Vec<String>),
     DoneVisitingProgram,
+    BuildingInnerNode { n_programs: usize },
+    BuildingProgram,
+    DoneBuildingInnerNode,
     VisitingInnerNode { n_sub_graphs: usize },
     DoneVisitingInnerNode,
     Expanding,
@@ -90,6 +98,17 @@ impl DebugPrinter for DebugPrinterImpl {
         r
     }
 
+    fn building_inner_node<T>(&self, n_programs: usize, f: impl FnOnce() -> T) -> T {
+        self.send(Msg::BuildingInnerNode { n_programs });
+        let r = f();
+        self.send(Msg::DoneBuildingInnerNode);
+        r
+    }
+
+    fn building_program(&self) {
+        self.send(Msg::BuildingProgram);
+    }
+
     fn visiting_inner_node<T>(&self, n_sub_graphs: usize, f: impl FnOnce() -> T) -> T {
         self.send(Msg::VisitingInnerNode { n_sub_graphs });
         let r = f();
@@ -126,6 +145,7 @@ fn io_thread_main(channel: Receiver<Msg>) -> impl FnOnce() {
             println!("{n_msgs_received} messages received.");
             // println!("Messages: {msg_queue:?}");
             println!("{state}");
+            std::thread::sleep(std::time::Duration::from_secs_f64(1. / 24.));
         }
     }
 }
@@ -136,6 +156,7 @@ struct IoThreadState {
     pub node_stack: Vec<InnerNodeInfo>,
     pub leaf: Option<LeafInfo>,
     pub expanding: bool,
+    pub building: Option<(usize, usize)>,
     pub counter_examples: Vec<(String, String)>,
     pub forward_length: usize,
     pub program: Option<Vec<String>>,
@@ -165,15 +186,16 @@ impl Msg {
                     node.n_sub_graphs_visited += 1;
                 }
             }
-            Msg::DoneVisitingLeaf => {
-                state.leaf = None;
+            Msg::DoneVisitingLeaf => state.leaf = None,
+            Msg::VisitingProgram(p) => state.program = Some(p.clone()),
+            Msg::DoneVisitingProgram => state.program = None,
+            &Msg::BuildingInnerNode { n_programs } => state.building = Some((1, n_programs)),
+            Msg::BuildingProgram => {
+                if let Some((a, _)) = &mut state.building {
+                    *a += 1;
+                }
             }
-            Msg::VisitingProgram(p) => {
-                state.program = Some(p.clone());
-            }
-            Msg::DoneVisitingProgram => {
-                state.program = None;
-            }
+            Msg::DoneBuildingInnerNode => state.building = None,
             &Msg::VisitingInnerNode { n_sub_graphs } => {
                 state.node_stack.push(InnerNodeInfo {
                     n_sub_graphs,
@@ -191,9 +213,7 @@ impl Msg {
                 state.expanding = true;
                 state.forward_length += 1;
             }
-            Msg::DoneExpanding => {
-                state.expanding = false;
-            }
+            Msg::DoneExpanding => state.expanding = false,
             Msg::FoundCounterExample { input, output } => {
                 state.counter_examples.push((input.clone(), output.clone()));
             }
@@ -233,6 +253,9 @@ impl Display for IoThreadState {
                 writeln!(f, "  {l}")?;
             }
         }
+        if let Some((a, b)) = self.building {
+            writeln!(f, "Building [{a}/{b}]")?;
+        }
         writeln!(f)?;
         writeln!(f, "Counter Examples:")?;
         for (i, o) in &self.counter_examples {
@@ -245,7 +268,7 @@ impl Display for IoThreadState {
 /// Get 1 or more messages from a channel.
 fn get_all_messages_or_block<T>(channel: &Receiver<T>, out: &mut Vec<T>) -> Result<(), RecvError> {
     // Limit to some amount of messages, to make sure this function always returns.
-    const LIMIT: usize = 1000;
+    const LIMIT: usize = 1_000_000;
     let first = channel.recv()?;
     out.push(first);
     out.extend(channel.try_iter().take(LIMIT));
