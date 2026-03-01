@@ -43,10 +43,10 @@ unifying symbolic and concrete execution
 
 Expand ISA and correct it's behavior.
 Backwards search.
-Build forward only one layer deeper, not the entire way.
 Reduced program with SMT holes for the SMT to find!
 Collect information.
 Make SMT code more efficient, by giving variables for each step.
+Make expand cut-off after a certain depth or something.
 
 ## On Collecting Information
 

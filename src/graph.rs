@@ -79,6 +79,14 @@ where
         }
     }
 
+    /// The number of direct children in the tree.
+    pub fn n_children(&self) -> usize {
+        match self {
+            Graph::Leaf(_) => 0,
+            Graph::Nest(hash_map) => hash_map.len(),
+        }
+    }
+
     /// Insert the given programs under the given set of states. The length of
     /// the slice of output states must be of the same depth as the graph.
     pub fn insert(&mut self, output: S, progs: P) {

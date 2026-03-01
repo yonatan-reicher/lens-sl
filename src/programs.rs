@@ -33,7 +33,7 @@ impl<I> Programs<I> {
     pub fn len(&self) -> usize {
         match self {
             Self::Program(_) => 1,
-            Self::List(vec) => vec.len(),
+            Self::List(vec) => vec.iter().map(|p| p.len()).sum(),
             Self::Concat(inner, _) => inner.len(),
         }
     }

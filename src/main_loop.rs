@@ -2,6 +2,7 @@
 //! Here we have basically the code that you would see in the actual paper that describes Lens.
 
 use crate::collect_registers::{self, Collector};
+use crate::debug_printer::DebugPrinter;
 use crate::enumerate::{EnumerationInfo, Enumerator};
 use crate::graph;
 use crate::isa::{
@@ -26,16 +27,17 @@ use smtlib::Sorted;
 /// The state of the machine at a given point in time.
 #[derive(Clone, Debug, Default, derive_more::Display, PartialEq, Eq, Hash)]
 #[display(
-    "Registers: {{{}}}, Flags: {}",
-    registers
-        .iter()
-        .map(|(r, v)| format!("{r:?}: {v}"))
-        .collect::<Vec<_>>()
-        .join(", "),
+    "State({} {})",
     match &flags {
         Some(f) => format!("{f:?}"),
         None => "None".to_string(),
-    }
+    },
+    registers
+        .iter()
+        .filter(|(_, v)| !v.is_zero())
+        .map(|(r, v)| format!("{r:?}={v}"))
+        .collect::<Vec<_>>()
+        .join(" "),
 )]
 pub struct State<W: Word> {
     /// This vector is always sorted by register.
@@ -202,6 +204,7 @@ impl<W: Word> oracle::smt::Inst for Inst<W> {
 pub fn optimize<WT: Word, WS: Word>(
     program: &[Inst<WT>],
     inputs: &[&[(Register, WT::Unsigned)]], // TODO: Return a program in Program<WT> instead...
+    print_debuger: &impl DebugPrinter,
 ) -> Option<Program<WT>> {
     let mut reducer = Reducer::<WT, WS>::default();
     let mut reduced_program = Vec::with_capacity(program.len());
@@ -259,6 +262,7 @@ pub fn optimize<WT: Word, WS: Word>(
         oracle_reduced,
         reducer,
         program.len(),
+        print_debuger,
     )
 }
 
@@ -271,6 +275,7 @@ fn synthesize<WT: Word, W: Word>(
     // The length of the original program.
     // In the future, this could be max_cost.
     original_length: usize,
+    debug_printer: &impl DebugPrinter,
 ) -> Option<Program<WT>> {
     // The forward and backward graphs start while having the empty program.
     let mut forward_graph = Graph::Leaf(Programs::program(vec![]));
@@ -287,24 +292,19 @@ fn synthesize<WT: Word, W: Word>(
         forward_length: 0,
         backward_length: 0,
         extender: reducer,
+        debug_printer,
     };
     // Generate a first input
     println!("Checking empty program");
     match globals.oracle_reduced.check_program(&[]) {
         Ok(()) => return Some(vec![]), // Turns out it's actually the empty program 🤷
         Err((inp, out)) => {
+            debug_printer.found_counter_example(inp.to_string(), out.to_string());
             globals.inputs.push(inp);
             globals.outputs.push(out);
         }
     }
     loop {
-        // Searching phase
-        println!(
-            "Searching forward_length={} backward_length={}",
-            globals.forward_length, globals.backward_length
-        );
-        // println!("Forward Graph: \n{}", forward_graph.pretty_print());
-        // println!("Backward Graph: \n{}", backward_graph.pretty_print());
         for inst in Enumerator::new().into_iter(enumeration_info) {
             let res = connect_and_refine::<WT, W>(
                 &mut globals,
@@ -324,20 +324,23 @@ fn synthesize<WT: Word, W: Word>(
         if globals.forward_length + globals.backward_length + 1 == original_length - 1 {
             return None;
         }
-        // println!("Forward Graph: \n{}", forward_graph.pretty_print());
-        // println!("Backward Graph: \n{}", backward_graph.pretty_print());
-        // Expanding phase
-        println!("Expanding");
-        print_stats(&forward_graph, &backward_graph);
-        let should_exapnd_forward = true;
-        if should_exapnd_forward {
-            expand_forward(&mut forward_graph, &globals.inputs, enumeration_info);
-            globals.forward_length += 1;
-        } else {
-            expand_backward(&mut backward_graph);
-            globals.backward_length += 1;
-        }
-        print_stats(&forward_graph, &backward_graph);
+        debug_printer.expanding(|| {
+            // print_stats(&forward_graph, &backward_graph);
+            let should_exapnd_forward = true;
+            if should_exapnd_forward {
+                expand_forward(
+                    &mut forward_graph,
+                    &globals.inputs,
+                    enumeration_info,
+                    globals.debug_printer,
+                );
+                globals.forward_length += 1;
+            } else {
+                expand_backward(&mut backward_graph);
+                globals.backward_length += 1;
+            }
+            // print_stats(&forward_graph, &backward_graph);
+        });
     }
 }
 
@@ -348,10 +351,12 @@ enum ConnectAndRefineResult<W: Word> {
 
 /// WT - word for the target program. WS - word for the synthesis process.
 struct Globals<
+    'debug_printer,
     WT: Word,
     WS: Word,
     OT: Oracle<[Inst<WT>], State<WT>>,
     OS: Oracle<[Inst<WS>], State<WS>>,
+    DP: DebugPrinter,
 > {
     oracle: OT,
     /// The oracle that checks program in the reduced word size.
@@ -362,6 +367,7 @@ struct Globals<
     forward_length: usize,
     backward_length: usize,
     extender: Reducer<WT, WS>,
+    debug_printer: &'debug_printer DP,
 }
 
 enum ProgramOrRetry<W: Word> {
@@ -371,10 +377,12 @@ enum ProgramOrRetry<W: Word> {
 
 fn connect_and_refine<WT: Word, WS: Word>(
     globals: &mut Globals<
+        '_,
         WT,
         WS,
         impl Oracle<[Inst<WT>], State<WT>>,
         impl Oracle<[Inst<WS>], State<WS>>,
+        impl DebugPrinter,
     >,
     forward_graph: &mut Graph<WS>,
     backward_graph: &mut Graph<WS>,
@@ -382,68 +390,65 @@ fn connect_and_refine<WT: Word, WS: Word>(
     // This is the index of the input/output pair we are currently trying to connect.
     k: usize,
 ) -> ConnectAndRefineResult<WT> {
+    let debug_printer = globals.debug_printer;
     if k > globals.inputs.len() {
         let mut counter_example_added = false;
         match (&forward_graph, &backward_graph) {
             (Graph::Leaf(prefixes), Graph::Leaf(postfixes)) => {
-                println!(
-                    "Found leaf graphs at index {k}. Trying to connect them. {}",
-                    prefixes.len() * postfixes.len()
-                );
-                // We found a class of candidate programs.
-                // Try each one. If one works, return it. If none work, adds all counter-examples.
-                // First, make a buffer to hold the program.
-                let mut program =
-                    Vec::with_capacity(globals.forward_length + 1 + globals.backward_length);
-                let ret = prefixes.try_for_each_ref(&mut |prefix| {
-                    debug_assert_eq!(prefix.len(), globals.forward_length);
-                    postfixes.try_for_each_ref(&mut |postfix| {
-                        debug_assert_eq!(postfix.len(), globals.backward_length);
-                        // Build the current candidate (reduced) program.
-                        program.clear();
-                        program.extend(prefix.iter());
-                        program.push(inst);
-                        program.extend(postfix.iter());
-                        match globals.oracle_reduced.check_program(&program) {
-                            // Found!
-                            Ok(()) => extend_program_for_each(
-                                &program,
-                                &globals.extender,
-                                |extended_program| match globals
-                                    .oracle
-                                    .check_program(extended_program)
-                                {
-                                    Ok(()) => {
-                                        Break(ProgramOrRetry::Program(extended_program.to_vec()))
-                                    }
-                                    Err(_) => Continue(()),
-                                },
-                            ),
-                            Err((inp, out)) => {
-                                println!("Oracle found counter example.");
-                                println!("  Input: {:?}", &inp);
-                                println!("  Expected output: {:?}", &out);
-                                let mut actual = inp.clone();
-                                program.iter().for_each(|i| i.run(&mut actual));
-                                println!("  Actual output: {:?}", &actual);
-                                println!("  For program:");
-                                for inst in &program {
-                                    println!("    {inst}");
+                let n_programs = prefixes.len() * postfixes.len();
+                let ret = debug_printer.visiting_leaf(n_programs, || {
+                    // We found a class of candidate programs.
+                    // Try each one. If one works, return it. If none work, adds all counter-examples.
+                    // First, make a buffer to hold the program.
+                    let program_length = globals.forward_length + 1 + globals.backward_length;
+                    let mut program =
+                        Vec::with_capacity(program_length);
+                    prefixes.try_for_each_ref(&mut |prefix| {
+                        debug_assert_eq!(prefix.len(), globals.forward_length);
+                        postfixes.try_for_each_ref(&mut |postfix| {
+                            debug_assert_eq!(postfix.len(), globals.backward_length);
+                            // Build the current candidate (reduced) program.
+                            program.clear();
+                            program.extend(prefix.iter());
+                            program.push(inst);
+                            program.extend(postfix.iter());
+                            let s = program.iter().map(|i| format!("{i}")).collect();
+                            debug_printer.visiting_program(s, ||{
+                            match globals.oracle_reduced.check_program(&program) {
+                                // Found!
+                                Ok(()) => extend_program_for_each(
+                                    &program,
+                                    &globals.extender,
+                                    |extended_program| match globals
+                                        .oracle
+                                        .check_program(extended_program)
+                                    {
+                                        Ok(()) => {
+                                            Break(ProgramOrRetry::Program(extended_program.to_vec()))
+                                        }
+                                        Err(_) => Continue(()),
+                                    },
+                                ),
+                                Err((inp, out)) => {
+                                    debug_printer.found_counter_example(
+                                        inp.to_string(),
+                                        out.to_string(),
+                                    );
+                                    let mut actual = inp.clone();
+                                    program.iter().for_each(|i| i.run(&mut actual));
+                                    debug_assert!(
+                                        !has_counter_example_been_seen(globals, &inp, &out),
+                                        "Counter-example from reduced oracle should not have been seen before."
+                                    );
+                                    debug_assert!(actual != out, "Found mismatched interpreter behaviours!");
+                                    globals.inputs.push(inp);
+                                    globals.outputs.push(out);
+                                    counter_example_added = true;
+                                    Break(ProgramOrRetry::Retry)
                                 }
-                                debug_assert!(
-                                    !has_counter_example_been_seen(globals, &inp, &out),
-                                    "Counter-example from reduced oracle should not have been seen before."
-                                );
-                                debug_assert!(
-                                    actual != out,
-                                    "Found mismatched interpreter behaviours!"
-                                );
-                                globals.inputs.push(inp);
-                                globals.outputs.push(out);
-                                counter_example_added = true;
-                                Break(ProgramOrRetry::Retry)
                             }
-                        }
+                            })
+                        })
                     })
                 });
                 match ret {
@@ -473,33 +478,46 @@ fn connect_and_refine<WT: Word, WS: Word>(
     }
 
     if matches!(forward_graph, Graph::Leaf(..)) {
-        build_forward(forward_graph, &globals.inputs[k - 1]);
+        build_forward(forward_graph, &globals.inputs[k - 1], debug_printer);
     }
 
     if matches!(backward_graph, Graph::Leaf(..)) {
-        build_backward(backward_graph, &globals.outputs[k - 1]);
+        build_backward(backward_graph, &globals.outputs[k - 1], debug_printer);
     }
 
-    // Must be nests, because build_forwards/backwards always turn leaves into nests.
-    let Graph::Nest(forward_outputs) = forward_graph else {
-        panic!();
-    };
-    let Graph::Nest(backward_outputs) = backward_graph else {
-        panic!();
-    };
-    let mut next = State::default();
-    for (forward_output, forward_subgraph) in forward_outputs {
-        forward_output.clone_to(&mut next);
-        inst.run(&mut next);
-        if let Some(backward_subgraph) = backward_outputs.get_mut(&next) {
-            let res = connect_and_refine(globals, forward_subgraph, backward_subgraph, inst, k + 1);
-            match res {
-                ConnectAndRefineResult::Found(prog) => return ConnectAndRefineResult::Found(prog),
-                ConnectAndRefineResult::Continue => {}
+    globals
+        .debug_printer
+        .visiting_inner_node(forward_graph.n_children(), move || {
+            // Must be nests, because build_forwards/backwards always turn leaves into nests.
+            let Graph::Nest(forward_outputs) = forward_graph else {
+                panic!();
+            };
+            let Graph::Nest(backward_outputs) = backward_graph else {
+                panic!();
+            };
+
+            let mut next = State::default();
+            for (forward_output, forward_subgraph) in forward_outputs {
+                forward_output.clone_to(&mut next);
+                inst.run(&mut next);
+                if let Some(backward_subgraph) = backward_outputs.get_mut(&next) {
+                    let res = connect_and_refine(
+                        globals,
+                        forward_subgraph,
+                        backward_subgraph,
+                        inst,
+                        k + 1,
+                    );
+                    match res {
+                        ConnectAndRefineResult::Found(prog) => {
+                            return ConnectAndRefineResult::Found(prog);
+                        }
+                        ConnectAndRefineResult::Continue => {}
+                    }
+                }
             }
-        }
-    }
-    ConnectAndRefineResult::Continue
+            ConnectAndRefineResult::Continue
+        })
 }
 
 /// Go through each program prefix in the graph, and expand it by one instruction forward. In
@@ -510,29 +528,38 @@ fn expand_forward_flatten<W: Word>(
     graph: &mut Graph<W>,
     _inputs: &Vec<State<W>>,
     ei: &EnumerationInfo<W>,
+    debug_printer: &impl DebugPrinter,
 ) {
     let mut final_leaf = Programs::default();
 
-    fn inner<W: Word>(final_leaf: &mut Programs<W>, graph: Graph<W>, ei: &EnumerationInfo<W>) {
+    fn inner<W: Word>(
+        final_leaf: &mut Programs<W>,
+        graph: Graph<W>,
+        ei: &EnumerationInfo<W>,
+        debug_printer: &impl DebugPrinter,
+    ) {
         match graph {
-            graph::Graph::Leaf(programs) => {
-                let programs = Rc::new(programs);
-                for inst in Enumerator::new().into_iter(ei) {
-                    let concated = programs.clone().concat(inst);
-                    final_leaf.extend(concated);
-                }
+            Graph::Leaf(programs) => {
+                debug_printer.visiting_leaf(programs.len(), || {
+                    let programs = Rc::new(programs);
+                    for inst in Enumerator::new().into_iter(ei) {
+                        let concated = programs.clone().concat(inst);
+                        final_leaf.extend(concated);
+                    }
+                });
             }
-            graph::Graph::Nest(hash_map) => {
+            Graph::Nest(hash_map) => debug_printer.visiting_inner_node(hash_map.len(), move || {
                 for sub_graph in hash_map.into_values() {
-                    inner(final_leaf, sub_graph, ei);
+                    inner(final_leaf, sub_graph, ei, debug_printer);
                 }
-            }
+            }),
         }
     }
     inner(
         &mut final_leaf,
         std::mem::replace(graph, Graph::Leaf(Programs::default())),
         ei,
+        debug_printer,
     );
 
     *graph = Graph::Leaf(final_leaf);
@@ -541,67 +568,83 @@ fn expand_forward_flatten<W: Word>(
 /// Go through each program prefix in the graph, and expand it by one
 /// instruction forward. This is done for each program, and for each
 /// instruction.
-fn expand_forward<W: Word>(graph: &mut Graph<W>, inputs: &Vec<State<W>>, ei: &EnumerationInfo<W>) {
+fn expand_forward<W: Word>(
+    graph: &mut Graph<W>,
+    inputs: &[State<W>],
+    ei: &EnumerationInfo<W>,
+    debug_printer: &impl DebugPrinter,
+) {
     fn inner<W: Word>(
         graph: Graph<W>,
-        inputs: &Vec<State<W>>,
+        inputs: &[State<W>],
         out: &mut Graph<W>,
         ei: &EnumerationInfo<W>,
+        debug_printer: &impl DebugPrinter,
     ) {
         match graph {
             Graph::Leaf(programs) if programs.is_empty() => {}
             Graph::Leaf(programs) => {
-                // Calculate the outputs of the current programs.
-                // (All the programs in the same leaf have the same outputs)
-                let program = programs
-                    .sample()
-                    .expect("programs should not be empty here.");
-                let outputs: Vec<State<W>> = inputs
-                    .iter()
-                    .map(|input| {
-                        let mut state = input.clone();
-                        for inst in &program {
-                            inst.run(&mut state);
+                debug_printer.visiting_leaf(programs.len(), || {
+                    // Calculate the outputs of the current programs.
+                    // (All the programs in the same leaf have the same outputs)
+                    let program = programs
+                        .sample()
+                        .expect("programs should not be empty here.");
+                    let outputs: Vec<State<W>> = inputs
+                        .iter()
+                        .map(|input| {
+                            let mut state = input.clone();
+                            for inst in &program {
+                                inst.run(&mut state);
+                            }
+                            state
+                        })
+                        .collect();
+                    let mut outputs_after_inst = vec![];
+                    let programs = Rc::new(programs);
+                    for inst in Enumerator::new().into_iter(ei) {
+                        outputs_after_inst.clear();
+                        for output in &outputs {
+                            let mut next_state = output.clone();
+                            inst.run(&mut next_state);
+                            outputs_after_inst.push(next_state);
                         }
-                        state
-                    })
-                    .collect();
-                let mut outputs_after_inst = vec![];
-                let programs = Rc::new(programs);
-                for inst in Enumerator::new().into_iter(ei) {
-                    outputs_after_inst.clear();
-                    for output in &outputs {
-                        let mut next_state = output.clone();
-                        inst.run(&mut next_state);
-                        outputs_after_inst.push(next_state);
+                        out.insert_all(&outputs_after_inst, programs.clone().concat(inst));
                     }
-                    out.insert_all(&outputs_after_inst, programs.clone().concat(inst));
-                }
+                })
             }
-            Graph::Nest(hash_map) => {
+            Graph::Nest(hash_map) => debug_printer.visiting_inner_node(hash_map.len(), || {
                 for sub_graph in hash_map.into_values() {
-                    inner(sub_graph, inputs, out, ei);
+                    inner(sub_graph, inputs, out, ei, debug_printer);
                 }
-            }
+            }),
         }
     }
 
     let old_graph = std::mem::replace(graph, Graph::Nest(Default::default()));
-    inner(old_graph, inputs, graph, ei);
+    inner(old_graph, inputs, graph, ei, debug_printer);
 }
 
 fn expand_backward<W: Word>(_graph: &mut Graph<W>) {}
 
-fn build_forward<W: Word>(graph: &mut Graph<W>, input: &State<W>) {
-    build_forwards_or_backwards(graph, input, |program, state| {
+fn build_forward<W: Word>(
+    graph: &mut Graph<W>,
+    input: &State<W>,
+    debug_printer: &impl DebugPrinter,
+) {
+    build_forwards_or_backwards(graph, input, debug_printer, |program, state| {
         for inst in program {
             inst.run(state);
         }
     });
 }
 
-fn build_backward<W: Word>(graph: &mut Graph<W>, input: &State<W>) {
-    build_forwards_or_backwards::<W>(graph, input, |program, _state| {
+fn build_backward<W: Word>(
+    graph: &mut Graph<W>,
+    input: &State<W>,
+    debug_printer: &impl DebugPrinter,
+) {
+    build_forwards_or_backwards::<W>(graph, input, debug_printer, |program, _state| {
         for _inst in program.iter().rev() {
             todo!("Backward execution not implemented yet.");
         }
@@ -611,31 +654,36 @@ fn build_backward<W: Word>(graph: &mut Graph<W>, input: &State<W>) {
 fn build_forwards_or_backwards<W: Word>(
     graph: &mut Graph<W>,
     input: &State<W>,
+    debug_printer: &impl DebugPrinter,
     step: impl Fn(&Program<W>, &mut State<W>),
 ) {
     debug_assert!(matches!(graph, Graph::Leaf(..)));
-    // Rebuild the graph.
-    // TODO: We can probably avoid completely rebuilding by just removing and adding programs on
-    // the same data-structure. This would reduce allocations, but you need to mark which programs
-    // have been visited, or store them in a list.
-    let old_graph = std::mem::replace(graph, Graph::Nest(Default::default()));
-    old_graph.for_each(&mut |programs| {
-        programs.for_each_ref(&mut |program| {
-            let mut output = input.clone();
-            step(&program, &mut output);
-            graph.insert(output, Programs::Program(program));
+    let n = graph.n_programs();
+    debug_printer.building_inner_node(n, || {
+        // Rebuild the graph.
+        // TODO: We can probably avoid completely rebuilding by just removing and adding programs on
+        // the same data-structure. This would reduce allocations, but you need to mark which programs
+        // have been visited, or store them in a list.
+        let old_graph = std::mem::replace(graph, Graph::Nest(Default::default()));
+        old_graph.for_each(&mut |programs| {
+            programs.for_each_ref(&mut |program| {
+                debug_printer.building_program();
+                let mut output = input.clone();
+                step(&program, &mut output);
+                graph.insert(output, Programs::Program(program));
+            });
+            // let program = programs
+            //     .sample()
+            //     .expect("programs should not be empty here.");
+            // my_outputs.clear();
+            // dbg!(programs.len());
+            // for i in initial_states {
+            //     let mut my_output = i.clone();
+            //     step(&program, &mut my_output);
+            //     my_outputs.push(my_output);
+            // }
+            // graph.insert_all(&my_outputs, programs);
         });
-        // let program = programs
-        //     .sample()
-        //     .expect("programs should not be empty here.");
-        // my_outputs.clear();
-        // dbg!(programs.len());
-        // for i in initial_states {
-        //     let mut my_output = i.clone();
-        //     step(&program, &mut my_output);
-        //     my_outputs.push(my_output);
-        // }
-        // graph.insert_all(&my_outputs, programs);
     });
 }
 
@@ -643,10 +691,12 @@ fn build_forwards_or_backwards<W: Word>(
 /// in the global context.
 fn has_counter_example_been_seen<WT: Word, WS: Word>(
     globals: &mut Globals<
+        '_,
         WT,
         WS,
         impl Oracle<[Inst<WT>], State<WT>>,
         impl Oracle<[Inst<WS>], State<WS>>,
+        impl DebugPrinter,
     >,
     inp: &State<WS>,
     out: &State<WS>,

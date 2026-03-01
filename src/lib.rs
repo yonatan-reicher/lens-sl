@@ -19,6 +19,7 @@ mod enumerate;
 mod oracle;
 /// This module collects registers that we consider for synthesis.
 mod collect_registers;
+mod debug_printer;
 /// Main loop where the big picture stuff happens.
 mod main_loop;
 
@@ -61,3 +62,4 @@ mod bool;
 pub use isa::{CondCode, Flags, FlagsBitField, Inst, OpCode, Register, State};
 pub use main_loop::optimize;
 pub use word::{Word, Word4, Word8, Word64};
+pub use debug_printer::{DebugPrinter, EmptyDebugPrinter, DebugPrinterImpl};
