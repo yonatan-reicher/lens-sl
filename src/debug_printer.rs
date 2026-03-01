@@ -234,15 +234,18 @@ impl Display for IoThreadState {
             "Last message received: {}",
             self.last_msg.as_deref().unwrap_or("nothing")
         )?;
+        if self.expanding {
+            writeln!(f, "Expanding...")?;
+        }
+        if let Some((a, b)) = self.building {
+            writeln!(f, "Building [{a}/{b}]")?;
+        }
         for &InnerNodeInfo {
             n_sub_graphs,
             n_sub_graphs_visited,
         } in &self.node_stack
         {
             writeln!(f, "◆ [{n_sub_graphs_visited}/{n_sub_graphs}]")?;
-        }
-        if self.expanding {
-            writeln!(f, "Expanding...")?;
         }
         if let Some(LeafInfo { n_programs }) = self.leaf {
             writeln!(f, "Looking at a leaf with {n_programs} programs.")?;
@@ -252,9 +255,6 @@ impl Display for IoThreadState {
             for l in program {
                 writeln!(f, "  {l}")?;
             }
-        }
-        if let Some((a, b)) = self.building {
-            writeln!(f, "Building [{a}/{b}]")?;
         }
         writeln!(f)?;
         writeln!(f, "Counter Examples:")?;
