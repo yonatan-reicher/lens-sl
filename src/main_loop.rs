@@ -328,7 +328,7 @@ fn synthesize<WT: Word, W: Word>(
             // print_stats(&forward_graph, &backward_graph);
             let should_exapnd_forward = true;
             if should_exapnd_forward {
-                expand_forward(&mut forward_graph, enumeration_info, globals.debug_printer);
+                expand_forward(&mut forward_graph, &globals.inputs, enumeration_info, globals.debug_printer);
                 globals.forward_length += 1;
             } else {
                 expand_backward(&mut backward_graph);
@@ -563,10 +563,15 @@ fn expand_forward_flatten<W: Word>(
 /// Go through each program prefix in the graph, and expand it by one
 /// instruction forward. This is done for each program, and for each
 /// instruction.
-fn expand_forward<W: Word>(graph: &mut Graph<W>, inputs: &Vec<State<W>>, ei: &EnumerationInfo<W>) {
+fn expand_forward<W: Word>(
+    graph: &mut Graph<W>,
+    inputs: &[State<W>],
+    ei: &EnumerationInfo<W>,
+    debug_printer: &impl DebugPrinter,
+) {
     fn inner<W: Word>(
         graph: Graph<W>,
-        inputs: &Vec<State<W>>,
+        inputs: &[State<W>],
         out: &mut Graph<W>,
         ei: &EnumerationInfo<W>,
     ) {

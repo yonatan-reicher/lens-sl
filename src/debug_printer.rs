@@ -145,7 +145,7 @@ fn io_thread_main(channel: Receiver<Msg>) -> impl FnOnce() {
             println!("{n_msgs_received} messages received.");
             // println!("Messages: {msg_queue:?}");
             println!("{state}");
-            std::thread::sleep(std::time::Duration::from_secs_f64(1. / 24.));
+            std::thread::sleep(std::time::Duration::from_secs_f64(0.5));
         }
     }
 }
