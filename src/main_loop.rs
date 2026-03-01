@@ -328,12 +328,7 @@ fn synthesize<WT: Word, W: Word>(
             // print_stats(&forward_graph, &backward_graph);
             let should_exapnd_forward = true;
             if should_exapnd_forward {
-                expand_forward_flatten(
-                    &mut forward_graph,
-                    &globals.inputs,
-                    enumeration_info,
-                    globals.debug_printer,
-                );
+                expand_forward(&mut forward_graph, enumeration_info, globals.debug_printer);
                 globals.forward_length += 1;
             } else {
                 expand_backward(&mut backward_graph);
@@ -478,11 +473,11 @@ fn connect_and_refine<WT: Word, WS: Word>(
     }
 
     if matches!(forward_graph, Graph::Leaf(..)) {
-        build_forward(forward_graph, &globals.inputs[k - 1]);
+        build_forward(forward_graph, &globals.inputs[k - 1], debug_printer);
     }
 
     if matches!(backward_graph, Graph::Leaf(..)) {
-        build_backward(backward_graph, &globals.outputs[k - 1]);
+        build_backward(backward_graph, &globals.outputs[k - 1], debug_printer);
     }
 
     globals
@@ -619,16 +614,24 @@ fn expand_forward<W: Word>(graph: &mut Graph<W>, inputs: &Vec<State<W>>, ei: &En
 
 fn expand_backward<W: Word>(_graph: &mut Graph<W>) {}
 
-fn build_forward<W: Word>(graph: &mut Graph<W>, input: &State<W>) {
-    build_forwards_or_backwards(graph, input, |program, state| {
+fn build_forward<W: Word>(
+    graph: &mut Graph<W>,
+    input: &State<W>,
+    debug_printer: &impl DebugPrinter,
+) {
+    build_forwards_or_backwards(graph, input, debug_printer, |program, state| {
         for inst in program {
             inst.run(state);
         }
     });
 }
 
-fn build_backward<W: Word>(graph: &mut Graph<W>, input: &State<W>) {
-    build_forwards_or_backwards::<W>(graph, input, |program, _state| {
+fn build_backward<W: Word>(
+    graph: &mut Graph<W>,
+    input: &State<W>,
+    debug_printer: &impl DebugPrinter,
+) {
+    build_forwards_or_backwards::<W>(graph, input, debug_printer, |program, _state| {
         for _inst in program.iter().rev() {
             todo!("Backward execution not implemented yet.");
         }
@@ -638,31 +641,36 @@ fn build_backward<W: Word>(graph: &mut Graph<W>, input: &State<W>) {
 fn build_forwards_or_backwards<W: Word>(
     graph: &mut Graph<W>,
     input: &State<W>,
+    debug_printer: &impl DebugPrinter,
     step: impl Fn(&Program<W>, &mut State<W>),
 ) {
     debug_assert!(matches!(graph, Graph::Leaf(..)));
-    // Rebuild the graph.
-    // TODO: We can probably avoid completely rebuilding by just removing and adding programs on
-    // the same data-structure. This would reduce allocations, but you need to mark which programs
-    // have been visited, or store them in a list.
-    let old_graph = std::mem::replace(graph, Graph::Nest(Default::default()));
-    old_graph.for_each(&mut |programs| {
-        programs.for_each_ref(&mut |program| {
-            let mut output = input.clone();
-            step(&program, &mut output);
-            graph.insert(output, Programs::Program(program));
+    let n = graph.n_programs();
+    debug_printer.building_inner_node(n, || {
+        // Rebuild the graph.
+        // TODO: We can probably avoid completely rebuilding by just removing and adding programs on
+        // the same data-structure. This would reduce allocations, but you need to mark which programs
+        // have been visited, or store them in a list.
+        let old_graph = std::mem::replace(graph, Graph::Nest(Default::default()));
+        old_graph.for_each(&mut |programs| {
+            programs.for_each_ref(&mut |program| {
+                debug_printer.building_program();
+                let mut output = input.clone();
+                step(&program, &mut output);
+                graph.insert(output, Programs::Program(program));
+            });
+            // let program = programs
+            //     .sample()
+            //     .expect("programs should not be empty here.");
+            // my_outputs.clear();
+            // dbg!(programs.len());
+            // for i in initial_states {
+            //     let mut my_output = i.clone();
+            //     step(&program, &mut my_output);
+            //     my_outputs.push(my_output);
+            // }
+            // graph.insert_all(&my_outputs, programs);
         });
-        // let program = programs
-        //     .sample()
-        //     .expect("programs should not be empty here.");
-        // my_outputs.clear();
-        // dbg!(programs.len());
-        // for i in initial_states {
-        //     let mut my_output = i.clone();
-        //     step(&program, &mut my_output);
-        //     my_outputs.push(my_output);
-        // }
-        // graph.insert_all(&my_outputs, programs);
     });
 }
 
