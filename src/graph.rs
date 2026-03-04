@@ -1,14 +1,10 @@
 use rustc_hash::FxHashMap;
 use std::fmt::Display;
 use std::hash::Hash;
+use crate::len::Len;
 
-pub trait Programs: Default + Into<Vec<Self::Program>> {
+pub trait Programs: Default + Into<Vec<Self::Program>> + Len {
     type Program;
-    fn len(&self) -> usize;
-    #[allow(dead_code)]
-    fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
     fn extend(&mut self, other: Self);
 }
 

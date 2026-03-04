@@ -56,6 +56,8 @@ mod iter_slice_or_single;
 mod smtlib_utils;
 /// Helpers for dealing with booleans.
 mod bool;
+/// Defines a trait for things which have length
+mod len;
 
 // Let's expose just the necessary items.
 

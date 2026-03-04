@@ -1,6 +1,7 @@
 //! This module defines the `Programs` type. This type is an efficient representation of programs
 //! that allows fast concatenation of another instruction at the end and saves memory for us.
 
+use crate::len::Len;
 use std::rc::Rc;
 
 pub type Program<I> = Vec<I>;
@@ -27,19 +28,6 @@ impl<I> Programs<I> {
 
     pub const fn concat(self: Rc<Self>, inst: I) -> Self {
         Self::Concat(self, inst)
-    }
-
-    /// The number of programs stored.
-    pub fn len(&self) -> usize {
-        match self {
-            Self::Program(_) => 1,
-            Self::List(vec) => vec.iter().map(|p| p.len()).sum(),
-            Self::Concat(inner, _) => inner.len(),
-        }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
     }
 
     pub fn extend(&mut self, other: Self) {
@@ -170,16 +158,20 @@ impl<I: Clone> From<Programs<I>> for Vec<Program<I>> {
     }
 }
 
+impl<I> Len for Programs<I> {
+    fn len(&self) -> usize {
+        match self {
+            Self::Program(_) => 1,
+            Self::List(vec) => vec.iter().map(|p| p.len()).sum(),
+            Self::Concat(inner, _) => inner.len(),
+        }
+    }
+}
+
 impl<I: Clone> crate::graph::Programs for Programs<I> {
     type Program = Program<I>;
-    fn len(&self) -> usize {
-        self.len()
-    }
     fn extend(&mut self, other: Self) {
         self.extend(other)
-    }
-    fn is_empty(&self) -> bool {
-        self.is_empty()
     }
 }
 

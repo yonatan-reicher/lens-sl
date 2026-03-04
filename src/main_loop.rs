@@ -9,6 +9,7 @@ use crate::isa::{
     self, Flags, FlagsBitField, Inst, Register, State as _, StateVars, SymbolicState,
     extend_program_for_each,
 };
+use crate::len::Len;
 use crate::oracle::{self, Oracle, SmtOracle};
 use crate::programs;
 use crate::reduce_bit_width::Reducer;
