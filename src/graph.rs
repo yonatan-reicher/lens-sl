@@ -185,3 +185,44 @@ where
         self.pretty_print_lines().join("\n")
     }
 }
+
+// ==================== Printing Stats ==========================================
+
+impl<S, P: Programs> Graph<S, P>
+where
+    S: Eq + Hash + Clone,
+{
+    /// Print information that shows us growth and memory usage of the graphs.
+    #[allow(dead_code)]
+    fn print_states(forward_graph: &Self, backward_graph: &Self) {
+        macro_rules! ignore {
+            ( $a:tt, $b:tt ) => {
+                $b
+            };
+        }
+        macro_rules! print_row {
+        ( $($e:expr),+ $(,)? ) => {
+            println!(
+                concat!( $( ignore!($e, "{:<15}") ),+ ),
+                $( $e ),+
+            );
+        };
+    }
+
+        print_row!["Name", "Depth", "Nodes", "Leaves", "Programs"];
+        print_row![
+            "Forward",
+            forward_graph.depth(),
+            forward_graph.n_nodes(),
+            forward_graph.n_leaves(),
+            forward_graph.n_programs(),
+        ];
+        print_row![
+            "Backward",
+            backward_graph.depth(),
+            backward_graph.n_nodes(),
+            backward_graph.n_leaves(),
+            backward_graph.n_programs(),
+        ];
+    }
+}

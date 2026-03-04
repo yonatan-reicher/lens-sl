@@ -710,36 +710,3 @@ fn has_counter_example_been_seen<WT: Word, WS: Word>(
         .zip(&globals.outputs)
         .any(|(i, o)| i == inp && o == out)
 }
-
-/// Print information that shows us growth and memory usage of the graphs.
-fn print_stats<W: Word>(forward_graph: &Graph<W>, backward_graph: &Graph<W>) {
-    macro_rules! ignore {
-        ( $a:tt, $b:tt ) => {
-            $b
-        };
-    }
-    macro_rules! print_row {
-        ( $($e:expr),+ $(,)? ) => {
-            println!(
-                concat!( $( ignore!($e, "{:<15}") ),+ ),
-                $( $e ),+
-            );
-        };
-    }
-
-    print_row!["Name", "Depth", "Nodes", "Leaves", "Programs"];
-    print_row![
-        "Forward",
-        forward_graph.depth(),
-        forward_graph.n_nodes(),
-        forward_graph.n_leaves(),
-        forward_graph.n_programs(),
-    ];
-    print_row![
-        "Backward",
-        backward_graph.depth(),
-        backward_graph.n_nodes(),
-        backward_graph.n_leaves(),
-        backward_graph.n_programs(),
-    ];
-}
