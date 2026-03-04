@@ -38,7 +38,7 @@ impl DebugPrinter for EmptyDebugPrinter {
 // ====== Actual Implementation ======
 
 pub struct DebugPrinterImpl {
-    io_thread: ThreadHandle<()>,
+    _io_thread: ThreadHandle<()>,
     channel: Sender<Msg>,
 }
 
@@ -78,7 +78,7 @@ impl Default for DebugPrinterImpl {
         let (sender, receiver) = channel();
         let io_thread = spawn_thread(io_thread_main(receiver));
         Self {
-            io_thread,
+            _io_thread: io_thread,
             channel: sender,
         }
     }

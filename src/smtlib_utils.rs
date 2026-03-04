@@ -90,9 +90,9 @@ std::thread_local! {
 
 /// Extensions for [smtlib::BitVec]!
 pub trait BitVecExt<'st> {
-    fn is_negative(self) -> Bool<'st>;
-    fn is_positive(self) -> Bool<'st>;
-    fn is_zero(self) -> Bool<'st>;
+    fn is_negative(&self) -> Bool<'st>;
+    fn is_positive(&self) -> Bool<'st>;
+    fn is_zero(&self) -> Bool<'st>;
     fn signed_lt(self, other: Self) -> Bool<'st>;
     fn sub(self, other: Self) -> Self;
     fn unsigned_lt(self, other: Self) -> Bool<'st>;
@@ -101,9 +101,9 @@ pub trait BitVecExt<'st> {
 
 #[rustfmt::skip]
 impl<'st, const N: usize> BitVecExt<'st> for BitVec<'st, N> {
-    fn is_negative(self) -> Bool<'st> { self.bvslt(BitVec::new(self.st(), 0)) }
-    fn is_positive(self) -> Bool<'st> { self.bvsgt(BitVec::new(self.st(), 0)) }
-    fn is_zero(self) -> Bool<'st> { self._eq(0) }
+    fn is_negative(&self) -> Bool<'st> { self.bvslt(BitVec::new(self.st(), 0)) }
+    fn is_positive(&self) -> Bool<'st> { self.bvsgt(BitVec::new(self.st(), 0)) }
+    fn is_zero(&self) -> Bool<'st> { self._eq(0) }
     fn signed_lt(self, other: Self) -> Bool<'st> { self.bvslt(other) }
     fn sub(self, other: Self) -> Self { self + (-other) }
     fn unsigned_lt(self, other: Self) -> Bool<'st> { self.bvult(other) }
