@@ -1,6 +1,6 @@
 use smtlib::lowlevel::ast::{Identifier, QualIdentifier, SpecConstant, Term};
 use smtlib::lowlevel::lexicon::{Binary, Symbol};
-use smtlib::terms::{STerm, StaticSorted};
+use smtlib::terms::STerm;
 use smtlib::{BitVec, Bool, Int, Sorted, Storage};
 
 fn binary_to_u128<'st>(b: Binary<'st>) -> u128 {
@@ -88,6 +88,28 @@ std::thread_local! {
     static FALSE: Bool<'static> = Bool::new(static_storage(), false);
 }
 
+/// Extensions for [smtlib::BitVec]!
+pub trait BitVecExt<'st> {
+    fn is_negative(self) -> Bool<'st>;
+    fn is_positive(self) -> Bool<'st>;
+    fn is_zero(self) -> Bool<'st>;
+    fn signed_lt(self, other: Self) -> Bool<'st>;
+    fn sub(self, other: Self) -> Self;
+    fn unsigned_lt(self, other: Self) -> Bool<'st>;
+    fn unsigned_le(self, other: Self) -> Bool<'st>;
+}
+
+#[rustfmt::skip]
+impl<'st, const N: usize> BitVecExt<'st> for BitVec<'st, N> {
+    fn is_negative(self) -> Bool<'st> { self.bvslt(BitVec::new(self.st(), 0)) }
+    fn is_positive(self) -> Bool<'st> { self.bvsgt(BitVec::new(self.st(), 0)) }
+    fn is_zero(self) -> Bool<'st> { self._eq(0) }
+    fn signed_lt(self, other: Self) -> Bool<'st> { self.bvslt(other) }
+    fn sub(self, other: Self) -> Self { self + (-other) }
+    fn unsigned_lt(self, other: Self) -> Bool<'st> { self.bvult(other) }
+    fn unsigned_le(self, other: Self) -> Bool<'st> { self.bvule(other) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -140,26 +162,4 @@ mod tests {
         let b: Bool = false.into_with_storage(&st);
         assert_eq!(bool_term_to_bool(a & b), None);
     }
-}
-
-/// Extensions for [smtlib::BitVec]!
-pub trait BitVecExt<'st> {
-    fn is_negative(self) -> Bool<'st>;
-    fn is_positive(self) -> Bool<'st>;
-    fn is_zero(self) -> Bool<'st>;
-    fn signed_lt(self, other: Self) -> Bool<'st>;
-    fn sub(self, other: Self) -> Self;
-    fn unsigned_lt(self, other: Self) -> Bool<'st>;
-    fn unsigned_le(self, other: Self) -> Bool<'st>;
-}
-
-#[rustfmt::skip]
-impl<'st, const N: usize> BitVecExt<'st> for BitVec<'st, N> {
-    fn is_negative(self) -> Bool<'st> { self.bvslt(BitVec::new(self.st(), 0)) }
-    fn is_positive(self) -> Bool<'st> { self.bvsgt(BitVec::new(self.st(), 0)) }
-    fn is_zero(self) -> Bool<'st> { self._eq(0) }
-    fn signed_lt(self, other: Self) -> Bool<'st> { self.bvslt(other) }
-    fn sub(self, other: Self) -> Self { self + (-other) }
-    fn unsigned_lt(self, other: Self) -> Bool<'st> { self.bvult(other) }
-    fn unsigned_le(self, other: Self) -> Bool<'st> { self.bvule(other) }
 }

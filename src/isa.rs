@@ -452,12 +452,6 @@ impl<'st, W: Word> SymbolicState<'st, W> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum AddOrSub {
-    Add,
-    Sub,
-}
-
 fn run_instruction<W: Word, S: State<W>>(inst: &Inst<W>, state: &mut S) {
     /// Get a register value.
     macro_rules! r {
