@@ -752,30 +752,30 @@ mod tests {
     fn test_update_from_sub_zero() {
         let mut flags = Flags::<bool>::default();
         flags.update_from_sub::<Word64>(5, 5, true);
-        assert_eq!(flags.z, true);
-        assert_eq!(flags.n, false);
-        assert_eq!(flags.c, true); // no borrow
-        assert_eq!(flags.v, false);
+        assert!(flags.z);
+        assert!(!flags.n);
+        assert!(flags.c); // no borrow
+        assert!(!flags.v);
     }
 
     #[test]
     fn test_update_from_sub_positive() {
         let mut flags = Flags::<bool>::default();
         flags.update_from_sub::<Word64>(10, 3, true);
-        assert_eq!(flags.z, false);
-        assert_eq!(flags.n, false); // 7 is positive
-        assert_eq!(flags.c, true); // no borrow (10 >= 3)
-        assert_eq!(flags.v, false);
+        assert!(!flags.z);
+        assert!(!flags.n); // 7 is positive
+        assert!(flags.c); // no borrow (10 >= 3)
+        assert!(!flags.v);
     }
 
     #[test]
     fn test_update_from_sub_negative() {
         let mut flags = Flags::<bool>::default();
         flags.update_from_sub::<Word64>(3, 10, true);
-        assert_eq!(flags.z, false);
-        assert_eq!(flags.n, true); // result is negative (wraps)
-        assert_eq!(flags.c, false); // borrow occurred (3 < 10)
-        assert_eq!(flags.v, false);
+        assert!(!flags.z);
+        assert!(flags.n); // result is negative (wraps)
+        assert!(!flags.c); // borrow occurred (3 < 10)
+        assert!(!flags.v);
     }
 
     #[test]
@@ -784,8 +784,8 @@ mod tests {
         // For u8: 127 - (-128) = 127 - 128 (as unsigned) = 127 - 128 (wraps)
         let mut flags = Flags::<bool>::default();
         flags.update_from_sub::<Word8>(127, 128, true); // 127 - (-128 as u8)
-        assert_eq!(flags.n, true); // wrapped to negative
-        assert_eq!(flags.v, true); // overflow occurred
+        assert!(flags.n); // wrapped to negative
+        assert!(flags.v); // overflow occurred
     }
 
     #[test]
@@ -794,8 +794,8 @@ mod tests {
         // For u8: 128 (as -128 signed) - 1 = wraps to 127
         let mut flags = Flags::<bool>::default();
         flags.update_from_sub::<Word8>(128, 1, true);
-        assert_eq!(flags.n, false); // wrapped to positive
-        assert_eq!(flags.v, true); // overflow occurred
+        assert!(!flags.n); // wrapped to positive
+        assert!(flags.v); // overflow occurred
     }
 
     #[test]
@@ -808,9 +808,9 @@ mod tests {
         };
         flags.update_from_sub::<Word64>(10, 3, false);
         // All flags should remain unchanged
-        assert_eq!(flags.z, true);
-        assert_eq!(flags.n, true);
-        assert_eq!(flags.c, true);
-        assert_eq!(flags.v, true);
+        assert!(flags.z);
+        assert!(flags.n);
+        assert!(flags.c);
+        assert!(flags.v);
     }
 }
