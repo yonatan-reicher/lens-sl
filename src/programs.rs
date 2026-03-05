@@ -1,5 +1,8 @@
 //! This module defines the `Programs` type. This type is an efficient representation of programs
-//! that allows fast concatenation of another instruction at the end and saves memory for us.
+//! that allows fast concatenation of another instruction at the end and saves memory for us. The
+//! generic `BACKWARD` argument allows us to choose whether this set of programs is used for
+//! forwards or backwards propagation, and concatenation will do the thing appropriate according to
+//! the direction.
 
 use crate::len::Len;
 use std::rc::Rc;
@@ -8,16 +11,16 @@ pub type Program<I> = Vec<I>;
 
 /// See module documentation.
 #[derive(Debug)]
-pub enum Programs<I> {
+pub enum Programs<I, const BACKWARD: bool = false> {
     /// A single program.
     Program(Program<I>),
     /// A list of programs.
-    List(Vec<Programs<I>>),
+    List(Vec<Self>),
     /// Appends the instruction to the end of each program in the inner `Programs`.
-    Concat(Rc<Programs<I>>, I),
+    Concat(Rc<Self>, I),
 }
 
-impl<I> Programs<I> {
+impl<I, const BACKWARD: bool> Programs<I, BACKWARD> {
     pub const fn new() -> Self {
         Self::List(Vec::new())
     }
@@ -54,14 +57,29 @@ impl<I> Programs<I> {
     where
         I: Clone,
     {
-        match self {
-            Programs::Program(prog) => Some(prog.clone()),
-            Programs::List(vec) => vec.first().and_then(|p| p.sample()),
-            Programs::Concat(inner, inst) => inner.sample().map(|mut prog| {
-                prog.push(inst.clone());
-                prog
-            }),
+        // Recurse over the graph (tree) to take the first path to the bottom.
+        fn recurse<I: Clone, const BACKWARD: bool>(
+            this: &Programs<I, BACKWARD>,
+            out: &mut Program<I>,
+        ) -> Option<()> {
+            match this {
+                Programs::Program(prog) => out.extend_from_slice(prog),
+                Programs::List(vec) => recurse(vec.first()?, out)?,
+                Programs::Concat(inner, inst) => {
+                    if BACKWARD {
+                        out.push(inst.clone());
+                        recurse(inner, out)?;
+                    } else {
+                        recurse(inner, out)?;
+                        out.push(inst.clone());
+                    }
+                }
+            }
+            Some(())
         }
+        let mut out = vec![];
+        recurse(self, &mut out)?;
+        Some(out)
     }
 
     /// Run a function on each program.
@@ -79,7 +97,11 @@ impl<I> Programs<I> {
             }
             Programs::Concat(inner, inst) => {
                 inner.for_each_ref(&mut |mut prog| {
-                    prog.push(inst.clone());
+                    if BACKWARD {
+                        prog.insert(0, inst.clone());
+                    } else {
+                        prog.push(inst.clone());
+                    }
                     f(prog);
                 });
             }
@@ -104,7 +126,11 @@ impl<I> Programs<I> {
             Programs::Concat(inner, inst) => {
                 inner.for_each_ref(
                     &mut (Box::new(|mut prog: Program<I>| {
-                        prog.push(inst.clone());
+                        if BACKWARD {
+                            prog.insert(0, inst.clone());
+                        } else {
+                            prog.push(inst.clone());
+                        }
                         f(prog);
                     }) as Box<dyn FnMut(Program<I>)>),
                 );
@@ -129,7 +155,11 @@ impl<I> Programs<I> {
             }
             Programs::Concat(inner, inst) => inner.try_for_each_ref(
                 &mut (Box::new(|mut prog: Program<I>| {
-                    prog.push(inst.clone());
+                    if BACKWARD {
+                        prog.insert(0, inst.clone());
+                    } else {
+                        prog.push(inst.clone());
+                    }
                     f(prog)
                 }) as Box<dyn FnMut(Program<I>) -> ControlFlow<_>>),
             ),
@@ -146,19 +176,19 @@ impl<I> Programs<I> {
     }
 }
 
-impl<I> Default for Programs<I> {
+impl<I, const BACKWARD: bool> Default for Programs<I, BACKWARD> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<I: Clone> From<Programs<I>> for Vec<Program<I>> {
-    fn from(this: Programs<I>) -> Self {
+impl<I: Clone, const BACKWARD: bool> From<Programs<I, BACKWARD>> for Vec<Program<I>> {
+    fn from(this: Programs<I, BACKWARD>) -> Self {
         this.to_vec()
     }
 }
 
-impl<I> Len for Programs<I> {
+impl<I, const B: bool> Len for Programs<I, B> {
     fn len(&self) -> usize {
         match self {
             Self::Program(_) => 1,
@@ -168,14 +198,14 @@ impl<I> Len for Programs<I> {
     }
 }
 
-impl<I: Clone> crate::graph::Programs for Programs<I> {
+impl<I: Clone, const B: bool> crate::graph::Programs for Programs<I, B> {
     type Program = Program<I>;
     fn extend(&mut self, other: Self) {
         self.extend(other)
     }
 }
 
-impl<I: std::fmt::Display + Clone> std::fmt::Display for Programs<I> {
+impl<I: std::fmt::Display + Clone, const B: bool> std::fmt::Display for Programs<I, B> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         self.for_each_ref(&mut |program| {
             if program.is_empty() {
