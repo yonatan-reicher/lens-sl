@@ -11,9 +11,6 @@ mod reduce_bit_width;
 mod isa;
 /// Enumerating all instructions and whatever.
 mod enumerate;
-// TODO:
-// /// Representation of the state of the program execution.
-// mod state;
 /// Responsible for things which find counter examples when checking programs for equivalence to
 /// the original.
 mod oracle;
@@ -25,24 +22,24 @@ mod main_loop;
 
 // Here is a diagram of the dependency structure between some of the main modules:
 //
-//                              +-----------+ <--------------------------+
-//                     +------> | main_loop |                             \
-//                    /         +-----------+ <----------------+           \
-//                   /           ^  ^  ^  ^                     \           \
-//                  /           /   |   \  \                     \           \
-//                 /           /    \    \  +--------------+      \           \
-//                /           /      \    \                 \      \           \
-//          +-------+  +----------+   \    \  +-----------+  |  +-------+  +--------+
-//          | graph |  | programs |    \    +-| enumerate |  |  | state |  | Oracle |
-//          +-------+  +----------+     \     +-----------+  |  +-------+  +--------+
-//                                      |                    |      ^
-//                                   +-----+                 |      |
-//                                   | isa |                 |      |
-//                                   +-----+                 |      |
-//                                      ^                    |      |
-//                                       \                   |      |
-//                                        \   +------------------+  /
-//                                         +--| reduce_bit_width |-+
+//                              +-----------+
+//                     +------> | main_loop | <---------------------------+
+//                    /         +-----------+                              \
+//                   /           ^  ^  ^  ^                                 \
+//                  /           /   |   \  \                                 \
+//                 /           /    \    \  +--------------+                  \
+//                /           /      \    \                 \                  \
+//          +-------+  +----------+   \    \  +-----------+  |             +--------+
+//          | graph |  | programs |    \    +-| enumerate |  |             | Oracle |
+//          +-------+  +----------+     \     +-----------+  |             +--------+
+//                                      |                    |
+//                                   +-----+                 |
+//                                   | isa |                 |
+//                                   +-----+                 |
+//                                      ^                    |
+//                                       \                   |
+//                                        \   +------------------+
+//                                         +--| reduce_bit_width |
 //                                            +------------------+
 //
 

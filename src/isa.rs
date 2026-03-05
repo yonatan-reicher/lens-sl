@@ -1,6 +1,8 @@
 use crate::all_permutations::Iter as PermutationIter;
 use crate::bool::prelude::*;
+use crate::collect_registers;
 use crate::iter_slice_or_single::Iter as SliceOrSingle;
+use crate::oracle;
 use crate::reduce_bit_width::{ImmediateInfo, Reducer};
 use crate::word::prelude::*;
 
@@ -8,6 +10,8 @@ use std::fmt::Debug;
 use std::ops::ControlFlow;
 
 use arbitrary_int::traits::Integer;
+
+use derive_more::Display;
 
 use smtlib::Storage;
 use smtlib::prelude::*;
@@ -183,6 +187,19 @@ impl Flags<bool> {
     }
 }
 
+impl Display for Flags<bool> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        let &Self { z, n, c, v } = self;
+        let s = |b, c: char| if b { c } else { '─' };
+        let w = |f: &mut Formatter, b, c| write!(f, "{}", s(b, c));
+        w(f, z, 'Z')?;
+        w(f, n, 'N')?;
+        w(f, c, 'C')?;
+        w(f, v, 'V')?;
+        Ok(())
+    }
+}
+
 impl CondCode {
     pub const COUNT: u8 = 6;
 
@@ -306,6 +323,9 @@ pub struct Register(pub u8);
 impl Register {
     /// TODO: Does Lens only use the regular 16 registers?
     pub const COUNT: u8 = 16;
+    pub fn all() -> impl IntoIterator<Item = Register> + Iterator<Item = Register> {
+        (0..Self::COUNT).map(Register)
+    }
 }
 
 /// A single instruction.
@@ -334,7 +354,8 @@ impl<W: Word> Clone for Inst<W> {
 }
 
 bitflags::bitflags! {
-    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+    #[derive(Clone, Copy, Debug, Display, Default, PartialEq, Eq, Hash)]
+    #[display("{}", Flags::from(*self))]
     pub struct FlagsBitField: u8 {
         /// Zero - is the result zero? Disregard overflow and carry.
         const Z = 0b0001;
@@ -391,11 +412,120 @@ impl proptest::arbitrary::Arbitrary for FlagsBitField {
     }
 }
 
-pub trait State<W: Word> {
-    fn get_register(&self, reg: Register) -> W::Unsigned;
-    fn set_register(&mut self, reg: Register, value: W::Unsigned);
-    fn get_flags(&self) -> FlagsBitField;
-    fn set_flags(&mut self, flags: FlagsBitField);
+// =========================================== State ==============================================
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub struct State<W: Word> {
+    // pub registers: [W::Unsigned; Register::COUNT as usize],
+    // pub registers: Rc<[W::Unsigned; Register::COUNT as usize]>,
+    /// This vector is always sorted by register. Registers that are not present are not "live".
+    pub registers: Vec<(Register, W::Unsigned)>,
+    pub flags: Option<FlagsBitField>,
+}
+
+impl<W: Word> State<W> {
+    pub fn try_get_register(&self, reg: Register) -> Option<W::Unsigned> {
+        for (r, v) in &self.registers {
+            if *r == reg {
+                return Some(*v);
+            }
+        }
+        None
+    }
+    pub fn get_register(&self, reg: Register) -> W::Unsigned {
+        for (r, v) in &self.registers {
+            if *r == reg {
+                return *v;
+            }
+        }
+        panic!("Register {reg:?} not found in state.");
+    }
+    pub fn set_register(&mut self, reg: Register, x: W::Unsigned) {
+        for (r, v) in &mut self.registers {
+            if *r == reg {
+                *v = x;
+                return;
+            }
+        }
+        self.registers.push((reg, x));
+        self.registers.sort_by_key(|(r, _)| *r);
+    }
+    pub fn get_flags(&self) -> FlagsBitField {
+        // self.flags.expect("Flags not set in state.")
+        self.flags.unwrap_or_default()
+    }
+    pub fn set_flags(&mut self, flags: FlagsBitField) {
+        self.flags = Some(flags)
+    }
+    /// Copies this state to another state object. Used to avoid clones, that in a loop, can
+    /// allocate more.
+    #[inline]
+    pub fn clone_to(&self, other: &mut Self) {
+        other.registers.clear();
+        other.registers.extend(&self.registers);
+        other.flags = self.flags;
+    }
+    pub fn reduce<WSmall: Word>(&self, reducer: &mut Reducer<W, WSmall>) -> State<WSmall> {
+        State {
+            registers: self
+                .registers
+                .iter()
+                .map(|(r, v)| (*r, reducer.reduce(*v, &Default::default())))
+                .collect(),
+            flags: self.flags,
+        }
+    }
+}
+
+impl<W: Word, F, I> From<(F, I)> for State<W>
+where
+    F: Into<Flags>,
+    I: IntoIterator<Item = (Register, W::Unsigned)>,
+{
+    fn from((f, i): (F, I)) -> Self {
+        let mut ret = Self::default();
+        // Flags
+        ret.set_flags(f.into().into());
+        // Registers
+        for (r, v) in i {
+            ret.set_register(r, v);
+        }
+        ret
+    }
+}
+
+use std::fmt::{self, Display, Formatter};
+impl<W: Word> Display for State<W> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "{}", self.get_flags())?;
+        for r in Register::all() {
+            let v = self.try_get_register(r);
+            if let Some(v) = v
+                && !v.is_zero()
+            {
+                write!(f, " {r}={v:>2}")?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl<W: Word> collect_registers::State<W> for State<W> {
+    fn registers(&self) -> impl Iterator<Item = (Register, W::Unsigned)> {
+        Register::all().filter_map(|r| {
+            if self.registers.iter().any(|(r0, _)| *r0 == r) {
+                Some((r, self.get_register(r)))
+            } else {
+                None
+            }
+        })
+    }
+}
+
+impl<W: Word> oracle::test_cases::State for State<W> {
+    fn clone_to(&self, output: &mut Self) {
+        self.clone_to(output);
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -430,6 +560,7 @@ impl<'st> Flags<Const<'st, SmtBool<'st>>> {
 pub struct SymbolicState<'st, W: Word> {
     pub registers: [W::SymbolicBitVec<'st>; Register::COUNT as usize],
     pub flags: Flags<SmtBool<'st>>,
+    // TODO: Live mask
 }
 
 impl<'st, W: Word> From<StateVars<'st, W>> for SymbolicState<'st, W> {
@@ -452,7 +583,7 @@ impl<'st, W: Word> SymbolicState<'st, W> {
     }
 }
 
-fn run_instruction<W: Word, S: State<W>>(inst: &Inst<W>, state: &mut S) {
+fn run_instruction<W: Word>(inst: &Inst<W>, state: &mut State<W>) {
     /// Get a register value.
     macro_rules! r {
         ($i:literal u) => {{
@@ -503,19 +634,19 @@ fn run_instruction<W: Word, S: State<W>>(inst: &Inst<W>, state: &mut S) {
         Add => {
             set! { flags <- update_from_add(r![1 u], r![2 u]) };
             set! { r![0 u] <- r![1 u].wrapping_add(r![2 u]) };
-        },
+        }
         AddI => {
             set! { flags <- update_from_add(r![1 u], imm![2 u]) };
             set! { r![0 u] <- r![1 u].wrapping_add(imm![2 u]) };
-        },
+        }
         Sub => {
             set! { flags <- update_from_sub(r![1 u], r![2 u]) };
             set! { r![0 u] <- r![1 u].wrapping_sub(r![2 u]) };
-        },
+        }
         SubI => {
             set! { flags <- update_from_sub(r![1 u], imm![2 u]) };
             set! { r![0 u] <- r![1 u].wrapping_sub(imm![2 u]) };
-        },
+        }
         And => set!(r![0 u] <- r![1 u] & r![2 u]),
         Eor => set!(r![0 u] <- r![1 u] ^ r![2 u]),
         Mov => set!(r![0 u] <- r![1 u]),
@@ -565,11 +696,11 @@ fn run_instruction_symbolic<W: Word>(inst: &Inst<W>, state: &mut SymbolicState<'
         Sub => {
             set! { flags <- update_from_sub(r![1], r![2]) };
             set! { r![0] <- r![1] + -r![2] };
-        },
+        }
         SubI => {
             set! { flags <- update_from_sub(r![1], imm![2]) };
             set! { r![0] <- r![1] + -imm![2] };
-        },
+        }
         And => set! { r![0] <- r![1] & r![2] },
         Eor => set! { r![0] <- r![1] ^ r![2] },
         Mov => set! { r![0] <- r![1] },
@@ -580,7 +711,7 @@ fn run_instruction_symbolic<W: Word>(inst: &Inst<W>, state: &mut SymbolicState<'
 }
 
 impl<W: Word> Inst<W> {
-    pub fn run<S: State<W>>(&self, state: &mut S) {
+    pub fn run(&self, state: &mut State<W>) {
         run_instruction(self, state)
     }
 

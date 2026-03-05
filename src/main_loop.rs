@@ -1,14 +1,11 @@
 //! The main loop for synthesis and optimization.
 //! Here we have basically the code that you would see in the actual paper that describes Lens.
 
-use crate::collect_registers::{self, Collector};
+use crate::collect_registers::Collector;
 use crate::debug_printer::DebugPrinter;
 use crate::enumerate::{EnumerationInfo, Enumerator};
 use crate::graph;
-use crate::isa::{
-    self, Flags, FlagsBitField, Inst, Register, State as _, StateVars, SymbolicState,
-    extend_program_for_each,
-};
+use crate::isa::{Flags, Inst, Register, State, StateVars, SymbolicState, extend_program_for_each};
 use crate::len::Len;
 use crate::oracle::{self, Oracle, SmtOracle};
 use crate::programs;
@@ -25,96 +22,6 @@ use functionality::Pipe;
 // smt stuff!
 use crate::smtlib_utils::bool_term_to_bool;
 use smtlib::Sorted;
-
-// =========================================== State ==============================================
-
-/// The state of the machine at a given point in time.
-#[derive(Clone, Debug, Default, derive_more::Display, PartialEq, Eq, Hash)]
-#[display(
-    "State({} {})",
-    match &flags {
-        Some(f) => format!("{f:?}"),
-        None => "None".to_string(),
-    },
-    registers
-        .iter()
-        .filter(|(_, v)| !v.is_zero())
-        .map(|(r, v)| format!("{r:?}={v}"))
-        .collect::<Vec<_>>()
-        .join(" "),
-)]
-pub struct State<W: Word> {
-    /// This vector is always sorted by register.
-    /// Registers that are not present are not "live".
-    pub registers: Vec<(Register, W::Unsigned)>,
-    /// The value of the flags register. If None, flags is not "live".
-    pub flags: Option<FlagsBitField>,
-}
-
-impl<W: Word> State<W> {
-    /// Copies this state to another state object. Used to avoid clones, that in a loop, can
-    /// allocate more.
-    #[inline]
-    fn clone_to(&self, other: &mut Self) {
-        other.registers.clear();
-        other.registers.extend(&self.registers);
-        other.flags = self.flags;
-    }
-
-    fn reduce<WSmall: Word>(&self, reducer: &mut Reducer<W, WSmall>) -> State<WSmall> {
-        State {
-            registers: self
-                .registers
-                .iter()
-                .map(|(r, v)| (*r, reducer.reduce(*v, &Default::default())))
-                .collect(),
-            flags: self.flags,
-        }
-    }
-}
-
-impl<W: Word> isa::State<W> for State<W> {
-    fn get_register(&self, reg: Register) -> W::Unsigned {
-        for (r, v) in &self.registers {
-            if *r == reg {
-                return *v;
-            }
-        }
-        panic!("Register {reg:?} not found in state.");
-    }
-
-    fn set_register(&mut self, reg: Register, value: W::Unsigned) {
-        for (r, v) in &mut self.registers {
-            if *r == reg {
-                *v = value;
-                return;
-            }
-        }
-        self.registers.push((reg, value));
-        self.registers.sort_by_key(|(r, _)| *r);
-    }
-
-    fn get_flags(&self) -> FlagsBitField {
-        // self.flags.expect("Flags not set in state.")
-        self.flags.unwrap_or_default()
-    }
-
-    fn set_flags(&mut self, flags: FlagsBitField) {
-        self.flags = Some(flags);
-    }
-}
-
-impl<W: Word> collect_registers::State<W> for State<W> {
-    fn registers(&self) -> impl Iterator<Item = (Register, W::Unsigned)> {
-        self.registers.iter().cloned()
-    }
-}
-
-impl<W: Word> oracle::test_cases::State for State<W> {
-    fn clone_to(&self, output: &mut Self) {
-        self.clone_to(output);
-    }
-}
 
 // =========================================== Graph ==============================================
 
@@ -221,10 +128,7 @@ pub fn optimize<WT: Word, WS: Word>(
     let test_cases: Vec<(State<WT>, State<WT>)> = inputs
         .iter()
         .map(|input| {
-            let input: State<WT> = State {
-                registers: input.iter().map(|(r, v)| (*r, v.as_())).collect(),
-                flags: None,
-            };
+            let input = State::from((Flags::default(), input.iter().map(|(r, v)| (*r, v.as_()))));
             let mut output = input.clone();
             for inst in program {
                 inst.run(&mut output);
