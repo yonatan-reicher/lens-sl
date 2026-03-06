@@ -188,7 +188,7 @@ fn synthesize<WT: Word, W: Word>(
     // The forward and backward graphs start while having the empty program.
     let mut forward_graph = Graph::Leaf(Programs::program(vec![]));
     let mut backward_graph = Graph::Leaf(Programs::program(vec![]));
-    let enumeration_info = &EnumerationInfo::<W> {
+    let enumeration_info = &EnumerationInfo::Limited::<W> {
         registers,
         immediates,
     };
