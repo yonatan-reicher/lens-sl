@@ -1,7 +1,7 @@
 use crate::all_permutations::Iter as PermutationIter;
 use crate::bool::prelude::*;
 use crate::collect_registers;
-use crate::enumerate::{EnumerationInfo, Enumerator};
+use crate::enumerate::{EnumerationInfo, EnumerationInfoOptions, Enumerator};
 use crate::iter_slice_or_single::Iter as SliceOrSingle;
 use crate::oracle;
 use crate::reduce_bit_width::{ImmediateInfo, Reducer};
@@ -14,7 +14,6 @@ use arbitrary_int::traits::Integer;
 
 use derive_more::Display;
 
-use functionality::Pipe;
 use rustc_hash::FxHashMap;
 use smtlib::Storage;
 use smtlib::prelude::*;
@@ -522,19 +521,23 @@ impl<W: Word> State<W> {
         self.flags = None;
     }
 
-    pub fn all_each(mut f: impl FnMut(&Self)) {
+    pub fn all_each(ei: &EnumerationInfoOptions<Register>, mut f: impl FnMut(&Self)) {
         fn or_none<T: Clone>(
             i: impl Clone + Iterator<Item = T>,
         ) -> impl Clone + Iterator<Item = Option<T>> {
             [None].into_iter().chain(i.map(Some))
         }
 
-        let reg_value_iter = Register::ALL.map(|_| or_none(W::all()));
+        let registers = ei.into_iter().collect::<Box<[_]>>();
+        let reg_value_iter = registers
+            .iter()
+            .map(|_| or_none(W::all()))
+            .collect::<Box<[_]>>();
         let mut iter = PermutationIter::new(&reg_value_iter);
         let mut state = State::default();
         while let Some(reg_values) = iter.next_slice() {
             state.clear();
-            for (r, &v) in Register::all().zip(reg_values) {
+            for (r, &v) in registers.iter().cloned().zip(reg_values) {
                 if let Some(v) = v {
                     state.set_register(r, v);
                 }
@@ -797,11 +800,15 @@ pub struct BackwardMap<W: Word> {
 pub type Inputs<W> = Vec<State<W>>;
 
 impl<W: Word> BackwardMap<W> {
-    pub fn new() -> Self {
+    pub fn new(registers: &[Register]) -> Self {
         let mut ret = FxHashMap::default();
-        State::all_each(|input| {
+        let mut i = 0;
+        let ei = EnumerationInfoOptions::Limited(registers);
+        State::all_each(&ei, |input| {
+            dbg!(i);
+            i += 1;
             let mut output = State::default();
-            for inst in Enumerator::new().into_iter(&EnumerationInfo::Unlimited) {
+            for inst in Enumerator::new().into_iter(&EnumerationInfo::unlimited()) {
                 // Initial the output
                 input.clone_to(&mut output);
                 if inst.regs().any(|r| input.try_get_register(r).is_none()) {
@@ -919,7 +926,7 @@ impl<W: Word> Inst<W> {
         })
     }
 
-    pub fn regs(&self) -> impl Iterator<Item=Register> {
+    pub fn regs(&self) -> impl Iterator<Item = Register> {
         let mut ret = vec![];
         for (a, t) in self.args.iter().zip(self.op_code.arg_types()) {
             if t == ArgType::Reg {
