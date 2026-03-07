@@ -185,6 +185,26 @@ impl Flags<bool> {
         self.v = (op1_positive && op2_negative && signed_diff < 0.as_())
             || (op1_negative && op2_positive && signed_diff > 0.as_());
     }
+
+    #[rustfmt::skip]
+    pub const ALL: [Flags; 16 /* 2^4 */] = [
+        Flags { z: false, n: false, c: false, v: false },
+        Flags { z: true,  n: false, c: false, v: false },
+        Flags { z: false, n: true,  c: false, v: false },
+        Flags { z: true,  n: true,  c: false, v: false },
+        Flags { z: false, n: false, c: true,  v: false },
+        Flags { z: true,  n: false, c: true,  v: false },
+        Flags { z: false, n: true,  c: true,  v: false },
+        Flags { z: true,  n: true,  c: true,  v: false },
+        Flags { z: false, n: false, c: false, v: true  },
+        Flags { z: true,  n: false, c: false, v: true  },
+        Flags { z: false, n: true,  c: false, v: true  },
+        Flags { z: true,  n: true,  c: false, v: true  },
+        Flags { z: false, n: false, c: true,  v: true  },
+        Flags { z: true,  n: false, c: true,  v: true  },
+        Flags { z: false, n: true,  c: true,  v: true  },
+        Flags { z: true,  n: true,  c: true,  v: true  },
+    ];
 }
 
 impl Display for Flags<bool> {
