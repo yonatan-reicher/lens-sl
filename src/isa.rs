@@ -804,6 +804,10 @@ impl<W: Word> BackwardMap<W> {
             for inst in Enumerator::new().into_iter(&EnumerationInfo::Unlimited) {
                 // Initial the output
                 input.clone_to(&mut output);
+                if inst.regs().any(|r| input.try_get_register(r).is_none()) {
+                    // Instruction used registers which aren't live
+                    continue;
+                }
                 inst.run(&mut output);
                 // Store!
                 let inputs = ret.entry((inst, output.clone())).or_insert_with(Vec::new);
@@ -913,6 +917,16 @@ impl<W: Word> Inst<W> {
                 })
             })
         })
+    }
+
+    pub fn regs(&self) -> impl Iterator<Item=Register> {
+        let mut ret = vec![];
+        for (a, t) in self.args.iter().zip(self.op_code.arg_types()) {
+            if t == ArgType::Reg {
+                ret.push(Register(a.as_()));
+            }
+        }
+        ret.into_iter()
     }
 }
 
