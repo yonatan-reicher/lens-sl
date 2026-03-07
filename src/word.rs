@@ -101,7 +101,7 @@ impl Word for Word4 {
     }
 
     fn all() -> impl Clone + Iterator<Item = u4> {
-        (0..u8::from(u4::MAX)).map(Into::into)
+        (0..u4::MAX.as_::<u8>()).map(|x| x.as_())
     }
 }
 
