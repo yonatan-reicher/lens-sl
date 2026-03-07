@@ -83,8 +83,6 @@ where
         }
     }
 
-    /// Insert the given programs under the given set of states. The length of
-    /// the slice of output states must be of the same depth as the graph.
     pub fn insert(&mut self, output: S, progs: P) {
         debug_assert!(matches!(self, Graph::Nest(..)));
         match self {
