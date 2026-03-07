@@ -1,6 +1,7 @@
 use crate::all_permutations::Iter as PermutationIter;
 use crate::bool::prelude::*;
 use crate::collect_registers;
+use crate::enumerate::{EnumerationInfo, Enumerator};
 use crate::iter_slice_or_single::Iter as SliceOrSingle;
 use crate::oracle;
 use crate::reduce_bit_width::{ImmediateInfo, Reducer};
@@ -13,6 +14,8 @@ use arbitrary_int::traits::Integer;
 
 use derive_more::Display;
 
+use functionality::Pipe;
+use rustc_hash::FxHashMap;
 use smtlib::Storage;
 use smtlib::prelude::*;
 use smtlib::terms::Const;
@@ -346,6 +349,24 @@ impl Register {
     pub fn all() -> impl IntoIterator<Item = Register> + Iterator<Item = Register> {
         (0..Self::COUNT).map(Register)
     }
+    pub const ALL: [Register; Self::COUNT as usize] = [
+        Register(0),
+        Register(1),
+        Register(2),
+        Register(3),
+        Register(4),
+        Register(5),
+        Register(6),
+        Register(7),
+        Register(8),
+        Register(9),
+        Register(10),
+        Register(11),
+        Register(12),
+        Register(13),
+        Register(14),
+        Register(15),
+    ];
 }
 
 /// A single instruction.
@@ -493,6 +514,38 @@ impl<W: Word> State<W> {
                 .map(|(r, v)| (*r, reducer.reduce(*v, &Default::default())))
                 .collect(),
             flags: self.flags,
+        }
+    }
+    #[inline]
+    pub fn clear(&mut self) {
+        self.registers.clear();
+        self.flags = None;
+    }
+
+    pub fn all_each(mut f: impl FnMut(&Self)) {
+        fn or_none<T: Clone>(
+            i: impl Clone + Iterator<Item = T>,
+        ) -> impl Clone + Iterator<Item = Option<T>> {
+            [None].into_iter().chain(i.map(Some))
+        }
+
+        let reg_value_iter = Register::ALL.map(|_| or_none(W::all()));
+        let mut iter = PermutationIter::new(&reg_value_iter);
+        let mut state = State::default();
+        while let Some(reg_values) = iter.next_slice() {
+            state.clear();
+            for (r, &v) in Register::all().zip(reg_values) {
+                if let Some(v) = v {
+                    state.set_register(r, v);
+                }
+            }
+            // .flags = None
+            f(&state);
+            // .flags = Some(..)
+            for flags in Flags::ALL {
+                state.set_flags(flags.into());
+                f(&state)
+            }
         }
     }
 }
@@ -730,6 +783,42 @@ fn run_instruction_symbolic<W: Word>(inst: &Inst<W>, state: &mut SymbolicState<'
     }
 }
 
+/// A hash-map between instructions and output states to input states that send to the output. The
+/// states use a liveness mask to mark which registers are ignored, and they all ignore the
+/// condition flag. Currently, states also don't represent memory, so we don't need to worry about
+/// that.
+///
+/// About the condition flag again: all instructions in the map have a condition flag of always.
+#[derive(Clone, Debug)]
+pub struct BackwardMap<W: Word> {
+    pub map: FxHashMap<(Inst<W>, State<W>), Inputs<W>>,
+    empty_vec: Vec<State<W>>,
+}
+pub type Inputs<W> = Vec<State<W>>;
+
+impl<W: Word> BackwardMap<W> {
+    pub fn new() -> Self {
+        let mut ret = FxHashMap::default();
+        State::all_each(|input| {
+            let mut output = State::default();
+            for inst in Enumerator::new().into_iter(&EnumerationInfo::Unlimited) {
+                // Initial the output
+                input.clone_to(&mut output);
+                inst.run(&mut output);
+                // Store!
+                let inputs = ret.entry((inst, output.clone())).or_insert_with(Vec::new);
+                if !inputs.contains(input) {
+                    inputs.push(input.clone());
+                }
+            }
+        });
+        Self {
+            map: ret,
+            empty_vec: vec![],
+        }
+    }
+}
+
 impl<W: Word> Inst<W> {
     pub fn run(&self, state: &mut State<W>) {
         run_instruction(self, state)
@@ -737,6 +826,14 @@ impl<W: Word> Inst<W> {
 
     pub fn run_symbolic(&self, state: &mut SymbolicState<'_, W>) {
         run_instruction_symbolic(self, state)
+    }
+
+    pub fn run_backward<'a>(
+        &self,
+        state: State<W>,
+        bm: &'a BackwardMap<W>,
+    ) -> impl IntoIterator<Item = &'a State<W>> {
+        bm.map.get(&(*self, state)).unwrap_or(&bm.empty_vec)
     }
 
     fn to_string_impl(self) -> String {
