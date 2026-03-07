@@ -41,6 +41,8 @@ pub trait Word:
     fn new_bit_vec<'st>(st: &'st Storage, value: Self::Unsigned) -> Self::SymbolicBitVec<'st>;
 
     fn bit_vec_try_into(value: Self::SymbolicBitVec<'_>) -> Option<Self::Unsigned>;
+
+    fn all() -> impl Clone + Iterator<Item = Self::Unsigned>;
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -56,6 +58,10 @@ impl Word for Word64 {
 
     fn bit_vec_try_into(value: Self::SymbolicBitVec<'_>) -> Option<Self::Unsigned> {
         bit_vec_term_to_i128(value).map(|i| i as _)
+    }
+
+    fn all() -> impl Clone + Iterator<Item = u64> {
+        0..u64::MAX
     }
 }
 
@@ -73,6 +79,10 @@ impl Word for Word8 {
     fn bit_vec_try_into(value: Self::SymbolicBitVec<'_>) -> Option<Self::Unsigned> {
         bit_vec_term_to_i128(value).map(|i| i as _)
     }
+
+    fn all() -> impl Clone + Iterator<Item = u8> {
+        0..u8::MAX
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -88,6 +98,10 @@ impl Word for Word4 {
 
     fn bit_vec_try_into(value: Self::SymbolicBitVec<'_>) -> Option<Self::Unsigned> {
         bit_vec_term_to_i128(value).map(|i| i.as_())
+    }
+
+    fn all() -> impl Clone + Iterator<Item = u4> {
+        (0..u8::from(u4::MAX)).map(Into::into)
     }
 }
 
