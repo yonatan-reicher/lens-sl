@@ -13,7 +13,7 @@ pub trait Programs: Default + Into<Vec<Self::Program>> + Len {
 /// On the 0 < k ≤ n level, each edge with output_k connects to a sub-graph
 /// where all programs produce output_k on input_k.
 #[derive(Clone, Debug)]
-pub enum Graph<State, P: Programs> {
+pub enum ForwardGraph<State, P: Programs> {
     /// A 0-tests graph. Just a series of programs.
     Leaf(P),
     /// For the corresponding test case (input, output), each program in the
@@ -21,7 +21,7 @@ pub enum Graph<State, P: Programs> {
     Nest(FxHashMap<State, Self>),
 }
 
-impl<S, P: Programs> Graph<S, P>
+impl<S, P: Programs> ForwardGraph<S, P>
 where
     S: Eq + Hash + Clone,
 {
@@ -78,15 +78,15 @@ where
     /// The number of direct children in the tree.
     pub fn n_children(&self) -> usize {
         match self {
-            Graph::Leaf(_) => 0,
-            Graph::Nest(hash_map) => hash_map.len(),
+            ForwardGraph::Leaf(_) => 0,
+            ForwardGraph::Nest(hash_map) => hash_map.len(),
         }
     }
 
     /// Insert the given programs under the given set of states. The length of
     /// the slice of output states must be of the same depth as the graph.
     pub fn insert(&mut self, output: S, progs: P) {
-        debug_assert!(matches!(self, Graph::Nest(..)));
+        debug_assert!(matches!(self, ForwardGraph::Nest(..)));
         match self {
             Self::Leaf(..) => unreachable!(),
             Self::Nest(hash_map) => {
@@ -95,7 +95,7 @@ where
                     .entry(output.clone())
                     .or_insert_with(|| Self::Leaf(P::default()));
                 // It must be a leaf!
-                let Graph::Leaf(sub_graph_programs) = sub_graph_in_output else {
+                let ForwardGraph::Leaf(sub_graph_programs) = sub_graph_in_output else {
                     unreachable!();
                 };
                 // Insert
@@ -155,15 +155,15 @@ where
     }
 }
 
-impl<S, P> Graph<S, P>
+impl<S, P> ForwardGraph<S, P>
 where
     S: Eq + Hash + Display,
     P: Programs + Display,
 {
     pub fn pretty_print_lines(&self) -> Vec<String> {
         match self {
-            Graph::Leaf(programs) => programs.to_string().lines().map(String::from).collect(),
-            Graph::Nest(hash_map) => {
+            ForwardGraph::Leaf(programs) => programs.to_string().lines().map(String::from).collect(),
+            ForwardGraph::Nest(hash_map) => {
                 let mut lines = vec![];
                 for (state, sub_graph) in hash_map {
                     let sub_lines = sub_graph.pretty_print_lines();
@@ -184,7 +184,7 @@ where
 
 // ==================== Printing Stats ==========================================
 
-impl<S, P: Programs> Graph<S, P>
+impl<S, P: Programs> ForwardGraph<S, P>
 where
     S: Eq + Hash + Clone,
 {

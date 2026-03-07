@@ -29,7 +29,7 @@ type Program<W> = programs::Program<Inst<W>>;
 
 type Programs<W> = programs::Programs<Inst<W>>;
 
-type Graph<W> = graph::Graph<State<W>, Programs<W>>;
+type ForwardGraph<W> = graph::ForwardGraph<State<W>, Programs<W>>;
 
 // ========================================== Oracle ==============================================
 
@@ -186,8 +186,8 @@ fn synthesize<WT: Word, W: Word>(
     debug_printer: &impl DebugPrinter,
 ) -> Option<Program<WT>> {
     // The forward and backward graphs start while having the empty program.
-    let mut forward_graph = Graph::Leaf(Programs::program(vec![]));
-    let mut backward_graph = Graph::Leaf(Programs::program(vec![]));
+    let mut forward_graph = ForwardGraph::Leaf(Programs::program(vec![]));
+    let mut backward_graph = ForwardGraph::Leaf(Programs::program(vec![]));
     let enumeration_info = &EnumerationInfo::Limited::<W> {
         registers,
         immediates,
@@ -292,8 +292,8 @@ fn connect_and_refine<WT: Word, WS: Word>(
         impl Oracle<[Inst<WS>], State<WS>>,
         impl DebugPrinter,
     >,
-    forward_graph: &mut Graph<WS>,
-    backward_graph: &mut Graph<WS>,
+    forward_graph: &mut ForwardGraph<WS>,
+    backward_graph: &mut ForwardGraph<WS>,
     inst: Inst<WS>,
     // This is the index of the input/output pair we are currently trying to connect.
     k: usize,
@@ -302,7 +302,7 @@ fn connect_and_refine<WT: Word, WS: Word>(
     if k > globals.inputs.len() {
         let mut counter_example_added = false;
         match (&forward_graph, &backward_graph) {
-            (Graph::Leaf(prefixes), Graph::Leaf(postfixes)) => {
+            (ForwardGraph::Leaf(prefixes), ForwardGraph::Leaf(postfixes)) => {
                 let n_programs = prefixes.len() * postfixes.len();
                 let ret = debug_printer.visiting_leaf(n_programs, || {
                     // We found a class of candidate programs.
@@ -385,11 +385,11 @@ fn connect_and_refine<WT: Word, WS: Word>(
         }
     }
 
-    if matches!(forward_graph, Graph::Leaf(..)) {
+    if matches!(forward_graph, ForwardGraph::Leaf(..)) {
         build_forward(forward_graph, &globals.inputs[k - 1], debug_printer);
     }
 
-    if matches!(backward_graph, Graph::Leaf(..)) {
+    if matches!(backward_graph, ForwardGraph::Leaf(..)) {
         build_backward(backward_graph, &globals.outputs[k - 1], debug_printer);
     }
 
@@ -397,10 +397,10 @@ fn connect_and_refine<WT: Word, WS: Word>(
         .debug_printer
         .visiting_inner_node(forward_graph.n_children(), move || {
             // Must be nests, because build_forwards/backwards always turn leaves into nests.
-            let Graph::Nest(forward_outputs) = forward_graph else {
+            let ForwardGraph::Nest(forward_outputs) = forward_graph else {
                 panic!();
             };
-            let Graph::Nest(backward_outputs) = backward_graph else {
+            let ForwardGraph::Nest(backward_outputs) = backward_graph else {
                 panic!();
             };
 
@@ -432,21 +432,21 @@ fn connect_and_refine<WT: Word, WS: Word>(
 /// instruction forward. This is done for each program, and for each
 /// instruction.
 fn expand_forward<W: Word>(
-    graph: &mut Graph<W>,
+    graph: &mut ForwardGraph<W>,
     inputs: &[State<W>],
     ei: &EnumerationInfo<W>,
     debug_printer: &impl DebugPrinter,
 ) {
     fn inner<W: Word>(
-        graph: Graph<W>,
+        graph: ForwardGraph<W>,
         inputs: &[State<W>],
-        out: &mut Graph<W>,
+        out: &mut ForwardGraph<W>,
         ei: &EnumerationInfo<W>,
         debug_printer: &impl DebugPrinter,
     ) {
         match graph {
-            Graph::Leaf(programs) if programs.is_empty() => {}
-            Graph::Leaf(programs) => {
+            ForwardGraph::Leaf(programs) if programs.is_empty() => {}
+            ForwardGraph::Leaf(programs) => {
                 debug_printer.visiting_leaf(programs.len(), || {
                     // Calculate the outputs of the current programs.
                     // (All the programs in the same leaf have the same outputs)
@@ -476,7 +476,7 @@ fn expand_forward<W: Word>(
                     }
                 })
             }
-            Graph::Nest(hash_map) => debug_printer.visiting_inner_node(hash_map.len(), || {
+            ForwardGraph::Nest(hash_map) => debug_printer.visiting_inner_node(hash_map.len(), || {
                 for sub_graph in hash_map.into_values() {
                     inner(sub_graph, inputs, out, ei, debug_printer);
                 }
@@ -484,14 +484,14 @@ fn expand_forward<W: Word>(
         }
     }
 
-    let old_graph = std::mem::replace(graph, Graph::Nest(Default::default()));
+    let old_graph = std::mem::replace(graph, ForwardGraph::Nest(Default::default()));
     inner(old_graph, inputs, graph, ei, debug_printer);
 }
 
-fn expand_backward<W: Word>(_graph: &mut Graph<W>) {}
+fn expand_backward<W: Word>(_graph: &mut ForwardGraph<W>) {}
 
 fn build_forward<W: Word>(
-    graph: &mut Graph<W>,
+    graph: &mut ForwardGraph<W>,
     input: &State<W>,
     debug_printer: &impl DebugPrinter,
 ) {
@@ -503,7 +503,7 @@ fn build_forward<W: Word>(
 }
 
 fn build_backward<W: Word>(
-    graph: &mut Graph<W>,
+    graph: &mut ForwardGraph<W>,
     input: &State<W>,
     debug_printer: &impl DebugPrinter,
 ) {
@@ -515,19 +515,19 @@ fn build_backward<W: Word>(
 }
 
 fn build_forwards_or_backwards<W: Word>(
-    graph: &mut Graph<W>,
+    graph: &mut ForwardGraph<W>,
     input: &State<W>,
     debug_printer: &impl DebugPrinter,
     step: impl Fn(&Program<W>, &mut State<W>),
 ) {
-    debug_assert!(matches!(graph, Graph::Leaf(..)));
+    debug_assert!(matches!(graph, ForwardGraph::Leaf(..)));
     let n = graph.n_programs();
     debug_printer.building_inner_node(n, || {
         // Rebuild the graph.
         // TODO: We can probably avoid completely rebuilding by just removing and adding programs on
         // the same data-structure. This would reduce allocations, but you need to mark which programs
         // have been visited, or store them in a list.
-        let old_graph = std::mem::replace(graph, Graph::Nest(Default::default()));
+        let old_graph = std::mem::replace(graph, ForwardGraph::Nest(Default::default()));
         old_graph.for_each(&mut |programs| {
             programs.for_each_ref(&mut |program| {
                 debug_printer.building_program();
