@@ -395,7 +395,12 @@ fn connect_and_refine<WT: Word, WS: Word>(
     }
 
     if matches!(backward_graph, Graph::Leaf(..)) {
-        build_backward(backward_graph, &globals.outputs[k - 1], debug_printer);
+        build_backward(
+            backward_graph,
+            &globals.outputs[k - 1],
+            debug_printer,
+            &globals.backward_map,
+        );
     }
 
     globals
@@ -500,10 +505,11 @@ fn build_forward<W: Word>(
     input: &State<W>,
     debug_printer: &impl DebugPrinter,
 ) {
-    build_forwards_or_backwards(graph, input, debug_printer, |program, state| {
+    build_forwards_or_backwards(graph, input, debug_printer, |program, mut state| {
         for inst in program {
-            inst.run(state);
+            inst.run(&mut state);
         }
+        [state]
     });
 }
 
@@ -511,19 +517,30 @@ fn build_backward<W: Word>(
     graph: &mut Graph<W>,
     input: &State<W>,
     debug_printer: &impl DebugPrinter,
+    bm: &BackwardMap<W>,
 ) {
-    build_forwards_or_backwards::<W>(graph, input, debug_printer, |program, _state| {
-        for _inst in program.iter().rev() {
-            todo!("Backward execution not implemented yet.");
+    build_forwards_or_backwards(graph, input, debug_printer, |program, output| {
+        // A vector of reaching states, that we push backwards in time, one instruction at a time.
+        let mut states = vec![output];
+        let mut new_states = vec![];
+        for inst in program.iter().rev() {
+            for state in states.drain(..) {
+                for new_state in inst.run_backward(state, bm) {
+                    new_states.push(new_state.clone());
+                }
+            }
+            std::mem::swap(&mut states, &mut new_states);
+            debug_assert!(new_states.is_empty());
         }
+        states
     });
 }
 
-fn build_forwards_or_backwards<W: Word>(
+fn build_forwards_or_backwards<W: Word, StepRet: IntoIterator<Item = State<W>>>(
     graph: &mut Graph<W>,
     input: &State<W>,
     debug_printer: &impl DebugPrinter,
-    step: impl Fn(&Program<W>, &mut State<W>),
+    step: impl Fn(&Program<W>, State<W>) -> StepRet,
 ) {
     debug_assert!(matches!(graph, Graph::Leaf(..)));
     let n = graph.n_programs();
@@ -536,9 +553,9 @@ fn build_forwards_or_backwards<W: Word>(
         old_graph.for_each(&mut |programs| {
             programs.for_each_ref(&mut |program| {
                 debug_printer.building_program();
-                let mut output = input.clone();
-                step(&program, &mut output);
-                graph.insert(output, Programs::Program(program));
+                for output in step(&program, input.clone()) {
+                    graph.insert(output, Programs::Program(program.clone()));
+                }
             });
             // let program = programs
             //     .sample()
