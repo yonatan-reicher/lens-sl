@@ -5,7 +5,9 @@ use crate::collect_registers::Collector;
 use crate::debug_printer::DebugPrinter;
 use crate::enumerate::{EnumerationInfo, EnumerationInfoOptions, Enumerator};
 use crate::graph;
-use crate::isa::{Flags, Inst, Register, State, StateVars, SymbolicState, extend_program_for_each};
+use crate::isa::{
+    BackwardMap, Flags, Inst, Register, State, StateVars, SymbolicState, extend_program_for_each,
+};
 use crate::len::Len;
 use crate::oracle::{self, Oracle, SmtOracle};
 use crate::programs;
@@ -201,6 +203,7 @@ fn synthesize<WT: Word, W: Word>(
         backward_length: 0,
         extender: reducer,
         debug_printer,
+        backward_map: BackwardMap::new(registers),
     };
     // Generate a first input
     println!("Checking empty program");
@@ -276,6 +279,8 @@ struct Globals<
     backward_length: usize,
     extender: Reducer<WT, WS>,
     debug_printer: &'debug_printer DP,
+    /// Stores data needed for running instructions backwards in time.
+    backward_map: BackwardMap<WS>,
 }
 
 enum ProgramOrRetry<W: Word> {
