@@ -3,7 +3,7 @@
 
 use crate::collect_registers::Collector;
 use crate::debug_printer::DebugPrinter;
-use crate::enumerate::{EnumerationInfo, Enumerator};
+use crate::enumerate::{EnumerationInfo, EnumerationInfoOptions, Enumerator};
 use crate::graph;
 use crate::isa::{Flags, Inst, Register, State, StateVars, SymbolicState, extend_program_for_each};
 use crate::len::Len;
@@ -188,9 +188,9 @@ fn synthesize<WT: Word, W: Word>(
     // The forward and backward graphs start while having the empty program.
     let mut forward_graph = Graph::Leaf(Programs::program(vec![]));
     let mut backward_graph = Graph::Leaf(Programs::program(vec![]));
-    let enumeration_info = &EnumerationInfo::Limited::<W> {
-        registers,
-        immediates,
+    let enumeration_info = &EnumerationInfo::<W> {
+        registers: EnumerationInfoOptions::Limited(registers),
+        immediates: EnumerationInfoOptions::Limited(immediates),
     };
     let mut globals = Globals {
         oracle,
