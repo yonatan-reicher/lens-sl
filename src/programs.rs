@@ -7,7 +7,7 @@ use std::rc::Rc;
 pub type Program<I> = Vec<I>;
 
 /// See module documentation.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum Programs<I> {
     /// A single program.
     Program(Program<I>),
