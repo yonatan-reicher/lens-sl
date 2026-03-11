@@ -1,3 +1,5 @@
+// Imports
+
 use crate::all_permutations::Iter as PermutationIter;
 use crate::bool::prelude::*;
 use crate::collect_registers;
@@ -12,12 +14,17 @@ use std::ops::ControlFlow;
 
 use arbitrary_int::traits::Integer;
 
+// Derive macros
 use derive_more::Display;
+use serde::{Deserialize, Serialize};
 
 use rustc_hash::FxHashMap;
+
 use smtlib::Storage;
 use smtlib::prelude::*;
 use smtlib::terms::Const;
+
+// The actual code
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(test, derive(proptest_derive::Arbitrary))]
@@ -32,7 +39,9 @@ pub enum ArgType {
 
 /// In Arm, every instruction can be conditionally executed based on the state
 /// of the flags.
-#[derive(Copy, Clone, Debug, derive_more::Display, Default, PartialEq, Eq, Hash)]
+#[derive(
+    Copy, Clone, Debug, derive_more::Display, Default, PartialEq, Eq, Hash, Serialize, Deserialize,
+)]
 #[cfg_attr(test, derive(proptest_derive::Arbitrary))]
 #[display("{}", self.to_string())]
 pub enum CondCode {
@@ -275,7 +284,7 @@ macro_rules! define_instructions {
         $( | $op_code:ident | $arg1:ident | $arg2:ident | $arg3:ident | $str:literal |)+
     ) => {
         /// The operation codes supported by our ISA.
-        #[derive(Copy, Clone, Debug, derive_more::Display, PartialEq, Eq, Hash)]
+        #[derive(Copy, Clone, Debug, derive_more::Display, PartialEq, Eq, Hash, Serialize, Deserialize)]
         #[cfg_attr(test, derive(proptest_derive::Arbitrary))]
         #[display("{}", self.to_string())]
         pub enum OpCode {
@@ -336,6 +345,8 @@ define_instructions! {
     Hash,
     PartialOrd,
     Ord,
+    Serialize,
+    Deserialize,
 )]
 #[cfg_attr(test, derive(proptest_derive::Arbitrary))]
 #[debug("r{_0}")]
@@ -369,7 +380,7 @@ impl Register {
 }
 
 /// A single instruction.
-#[derive(derive_more::Debug, derive_more::Display, PartialEq, Eq, Hash)]
+#[derive(derive_more::Debug, derive_more::Display, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(test, derive(proptest_derive::Arbitrary))]
 #[debug("{op_code:?}{}{args:?}",
     match cond_code {
@@ -394,7 +405,7 @@ impl<W: Word> Clone for Inst<W> {
 }
 
 bitflags::bitflags! {
-    #[derive(Clone, Copy, Debug, Display, Default, PartialEq, Eq, Hash)]
+    #[derive(Clone, Copy, Debug, Display, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
     #[display("{}", Flags::from(*self))]
     pub struct FlagsBitField: u8 {
         /// Zero - is the result zero? Disregard overflow and carry.
@@ -454,7 +465,7 @@ impl proptest::arbitrary::Arbitrary for FlagsBitField {
 
 // =========================================== State ==============================================
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct State<W: Word> {
     // pub registers: [W::Unsigned; Register::COUNT as usize],
     // pub registers: Rc<[W::Unsigned; Register::COUNT as usize]>,
@@ -792,7 +803,7 @@ fn run_instruction_symbolic<W: Word>(inst: &Inst<W>, state: &mut SymbolicState<'
 /// that.
 ///
 /// About the condition flag again: all instructions in the map have a condition flag of always.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BackwardMap<W: Word> {
     pub map: FxHashMap<(Inst<W>, State<W>), Inputs<W>>,
     empty_vec: Vec<State<W>>,
@@ -800,12 +811,62 @@ pub struct BackwardMap<W: Word> {
 pub type Inputs<W> = Vec<State<W>>;
 
 impl<W: Word> BackwardMap<W> {
-    pub fn new(registers: &[Register]) -> Self {
+    pub fn new(registers: &[Register]) -> std::io::Result<Self>
+    where
+        Self: Serialize + for<'a> Deserialize<'a>,
+    {
+        let file_path = std::path::Path::new(".").join(Self::file_name(registers));
+        if file_path.exists() {
+            println!("loading backwards map from '{}'", file_path.display());
+            Self::load_from_file(file_path)
+        } else {
+            println!("creating backwards map");
+            let this = Self::new_recalculate(registers);
+            println!("saving backwards map to '{}'", file_path.display());
+            this.save_to_file(file_path)?;
+            Ok(this)
+        }
+    }
+
+    pub fn file_name(registers: &[Register]) -> String {
+        let mut ret = String::new();
+        ret.push_str("backward-map-");
+        ret.push_str(&W::Unsigned::BITS.to_string());
+        ret.push_str("bit");
+        for r in registers {
+            ret.push_str(&format!("-r{r}"));
+        }
+        ret.push_str(".postcard"); // This is the name of the format we use
+        ret
+    }
+
+    pub fn save_to_file(&self, path: impl AsRef<std::path::Path>) -> std::io::Result<()>
+    where
+        Self: Serialize,
+    {
+        let bytes = postcard::to_stdvec(self).map_err(std::io::Error::other)?;
+        std::fs::write(path, bytes)?;
+        Ok(())
+    }
+
+    pub fn load_from_file(path: impl AsRef<std::path::Path>) -> std::io::Result<Self>
+    where
+        Self: for<'a> Deserialize<'a>,
+    {
+        let bytes = std::fs::read(path)?;
+        let this = postcard::from_bytes(&bytes).map_err(std::io::Error::other)?;
+        Ok(this)
+    }
+
+    /// Build from scratch a new backwards behavior map.
+    pub fn new_recalculate(registers: &[Register]) -> Self {
         let mut ret = FxHashMap::default();
         let mut i = 0;
         let ei = EnumerationInfoOptions::Limited(registers);
         State::all_each(&ei, |input| {
-            dbg!(i);
+            if i % 100 == 0 {
+                dbg!(i);
+            }
             i += 1;
             let mut output = State::default();
             for inst in Enumerator::new().into_iter(&EnumerationInfo::unlimited()) {
@@ -843,7 +904,7 @@ impl<W: Word> Inst<W> {
         &self,
         state: State<W>,
         bm: &'a BackwardMap<W>,
-    ) -> impl IntoIterator<Item = &'a State<W>> {
+    ) -> impl IntoIterator<Item = &'a State<W>> + use<'a, W> {
         bm.map.get(&(*self, state)).unwrap_or(&bm.empty_vec)
     }
 

@@ -114,7 +114,7 @@ impl<W: Word> oracle::smt::Inst for Inst<W> {
 // This is the main function that gets exposed.
 /// `WT` for word size of the target program.
 /// `WS` for word size of the synthesis process.
-pub fn optimize<WT: Word, WS: Word>(
+pub fn optimize<WT: Word, WS: Word + serde::de::DeserializeOwned>(
     program: &[Inst<WT>],
     inputs: &[&[(Register, WT::Unsigned)]], // TODO: Return a program in Program<WT> instead...
     print_debuger: &impl DebugPrinter,
@@ -176,7 +176,7 @@ pub fn optimize<WT: Word, WS: Word>(
     )
 }
 
-fn synthesize<WT: Word, W: Word>(
+fn synthesize<WT: Word, W: Word + serde::de::DeserializeOwned>(
     registers: &[Register],
     immediates: &[W::Unsigned],
     oracle: impl Oracle<[Inst<WT>], State<WT>>,
@@ -203,7 +203,7 @@ fn synthesize<WT: Word, W: Word>(
         backward_length: 0,
         extender: reducer,
         debug_printer,
-        backward_map: BackwardMap::new(registers),
+        backward_map: BackwardMap::new(registers).unwrap(),
     };
     // Generate a first input
     println!("Checking empty program");
@@ -237,17 +237,17 @@ fn synthesize<WT: Word, W: Word>(
         }
         debug_printer.expanding(|| {
             // print_stats(&forward_graph, &backward_graph);
-            let should_exapnd_forward = true;
+            let should_exapnd_forward = globals.backward_length >= globals.forward_length;
             if should_exapnd_forward {
-                expand_forward(
-                    &mut forward_graph,
-                    &globals.inputs,
-                    enumeration_info,
-                    globals.debug_printer,
-                );
+                expand_forward(&mut forward_graph, enumeration_info, globals.debug_printer);
                 globals.forward_length += 1;
             } else {
-                expand_backward(&mut backward_graph);
+                expand_backward(
+                    &mut backward_graph,
+                    enumeration_info,
+                    globals.debug_printer,
+                    &globals.backward_map,
+                );
                 globals.backward_length += 1;
             }
             // print_stats(&forward_graph, &backward_graph);
@@ -443,62 +443,75 @@ fn connect_and_refine<WT: Word, WS: Word>(
 /// instruction.
 fn expand_forward<W: Word>(
     graph: &mut Graph<W>,
-    inputs: &[State<W>],
     ei: &EnumerationInfo<W>,
     debug_printer: &impl DebugPrinter,
 ) {
-    fn inner<W: Word>(
-        graph: Graph<W>,
-        inputs: &[State<W>],
-        out: &mut Graph<W>,
-        ei: &EnumerationInfo<W>,
+    expand_forward_or_backward(graph, ei, debug_printer, |mut state, inst| {
+        inst.run(&mut state);
+        [state]
+    })
+}
+
+fn expand_backward<W: Word>(
+    graph: &mut Graph<W>,
+    ei: &EnumerationInfo<W>,
+    debug_printer: &impl DebugPrinter,
+    bm: &BackwardMap<W>,
+) {
+    expand_forward_or_backward(graph, ei, debug_printer, |state, inst| {
+        inst.run_backward(state, bm).into_iter().cloned()
+    })
+}
+
+fn expand_forward_or_backward<W: Word, StepRet: IntoIterator<Item = State<W>>>(
+    graph: &mut Graph<W>,
+    ei: &EnumerationInfo<W>,
+    debug_printer: &impl DebugPrinter,
+    step: impl Fn(State<W>, Inst<W>) -> StepRet,
+) {
+    let old_graph = std::mem::replace(graph, Graph::Nest(Default::default()));
+    let mut out_states = vec![];
+    for inst in Enumerator::new().into_iter(ei) {
+        out_states.clear();
+        recurse(
+            &old_graph,
+            graph,
+            inst,
+            &mut out_states,
+            debug_printer,
+            &step,
+        );
+    }
+
+    fn recurse<W: Word, StepRet: IntoIterator<Item = State<W>>>(
+        old_graph: &Graph<W>,
+        new_graph: &mut Graph<W>,
+        inst: Inst<W>,
+        out_states: &mut Vec<State<W>>,
         debug_printer: &impl DebugPrinter,
+        step: &impl Fn(State<W>, Inst<W>) -> StepRet,
     ) {
-        match graph {
-            Graph::Leaf(programs) if programs.is_empty() => {}
-            Graph::Leaf(programs) => {
-                debug_printer.visiting_leaf(programs.len(), || {
-                    // Calculate the outputs of the current programs.
-                    // (All the programs in the same leaf have the same outputs)
-                    let program = programs
-                        .sample()
-                        .expect("programs should not be empty here.");
-                    let outputs: Vec<State<W>> = inputs
-                        .iter()
-                        .map(|input| {
-                            let mut state = input.clone();
-                            for inst in &program {
-                                inst.run(&mut state);
-                            }
-                            state
-                        })
-                        .collect();
-                    let mut outputs_after_inst = vec![];
-                    let programs = Rc::new(programs);
-                    for inst in Enumerator::new().into_iter(ei) {
-                        outputs_after_inst.clear();
-                        for output in &outputs {
-                            let mut next_state = output.clone();
-                            inst.run(&mut next_state);
-                            outputs_after_inst.push(next_state);
+        match old_graph {
+            graph::Graph::Leaf(programs) if programs.is_empty() => (),
+            graph::Graph::Leaf(programs) => debug_printer.visiting_leaf(programs.len(), || {
+                // TODO: remove this clone somehow!
+                let programs = Rc::new(programs.clone()).concat(inst);
+                new_graph.insert_all(out_states, programs);
+            }),
+            graph::Graph::Nest(hash_map) => {
+                debug_printer.visiting_inner_node(hash_map.len(), || {
+                    for (state, sub_graph) in hash_map.iter() {
+                        for out_state in step(state.clone(), inst) {
+                            out_states.push(out_state);
+                            recurse(sub_graph, new_graph, inst, out_states, debug_printer, step);
+                            out_states.pop();
                         }
-                        out.insert_all(&outputs_after_inst, programs.clone().concat(inst));
                     }
                 })
             }
-            Graph::Nest(hash_map) => debug_printer.visiting_inner_node(hash_map.len(), || {
-                for sub_graph in hash_map.into_values() {
-                    inner(sub_graph, inputs, out, ei, debug_printer);
-                }
-            }),
         }
     }
-
-    let old_graph = std::mem::replace(graph, Graph::Nest(Default::default()));
-    inner(old_graph, inputs, graph, ei, debug_printer);
 }
-
-fn expand_backward<W: Word>(_graph: &mut Graph<W>) {}
 
 fn build_forward<W: Word>(
     graph: &mut Graph<W>,

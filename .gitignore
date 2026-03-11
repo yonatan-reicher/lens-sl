@@ -4,3 +4,4 @@ cvc5.exe
 flamegraph.svg
 perf.data
 perf.data.old
+*.postcard
