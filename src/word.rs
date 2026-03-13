@@ -81,7 +81,7 @@ impl Word for Word64 {
     }
 
     fn all() -> impl Clone + Iterator<Item = u64> {
-        0..u64::MAX
+        0..=u64::MAX
     }
 }
 
@@ -101,7 +101,7 @@ impl Word for Word8 {
     }
 
     fn all() -> impl Clone + Iterator<Item = u8> {
-        0..u8::MAX
+        0..=u8::MAX
     }
 }
 
@@ -121,7 +121,7 @@ impl Word for Word4 {
     }
 
     fn all() -> impl Clone + Iterator<Item = u4> {
-        (0..u4::MAX.as_::<u8>()).map(|x| x.as_())
+        (0..=u4::MAX.as_::<u8>()).map(|x| x.as_())
     }
 }
 
