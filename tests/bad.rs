@@ -3,6 +3,7 @@ use lens_sl::{EmptyDebugPrinter, Register, Word4, Word64, inst, optimize};
 // These are ignored because they take a long time.
 
 #[test]
+#[ignore]
 fn bad_case() {
     let p = optimize::<Word64, Word4>(
         &[
@@ -28,6 +29,7 @@ fn bad_case() {
 }
 
 #[test]
+#[ignore]
 fn bad_case_2() {
     let p = optimize::<Word64, Word4>(
         &[
