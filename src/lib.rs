@@ -77,7 +77,7 @@ impl Direction {
 
 // Let's expose just the necessary items.
 
-pub use isa::{CondCode, Flags, FlagsBitField, Inst, OpCode, Register, State};
+pub use isa::{BackwardMap, CondCode, Flags, FlagsBitField, Inst, OpCode, Register, State};
 pub use main_loop::optimize;
 pub use word::{Word, Word4, Word8, Word64};
 pub use debug_printer::{DebugPrinter, EmptyDebugPrinter, DebugPrinterImpl};

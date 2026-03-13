@@ -4,7 +4,7 @@ use std::fmt::Debug;
 use std::pin::Pin;
 
 use smtlib::backend::cvc5_binary::Cvc5Binary;
-use smtlib::{Bool, Model, Solver, Storage};
+use smtlib::{Bool, Model, SatResultWithModel, Solver, Storage};
 
 pub struct SmtOracle<'st, I: Inst> {
     _st: Pin<Box<Storage>>,
@@ -37,23 +37,24 @@ impl<'st, I: Inst> Oracle<[I], I::State> for SmtOracle<'st, I> {
         // Clone these before borrowing self.solver mutably via scope.
         let initial_state = self.initial_state.clone();
         let expected_output = self.expected_final_state.clone();
+        // Open a solver scope to check the program in. This makes sure that everything we do in
+        // this function doesn't affect the next calls to this function.
         let result = self
             .solver
             .scope(|solver| {
                 let mut output = initial_state.clone().into();
                 I::run_symbolic(program, &mut output);
                 // Assert: candidate output != target output (look for a counter-example).
-                let f = I::state_neq(output, expected_output);
-                solver.assert(f)?;
+                solver.assert(I::state_neq(output, expected_output))?;
                 match solver.check_sat_with_model()? {
-                    smtlib::SatResultWithModel::Unsat => Ok(None),
-                    smtlib::SatResultWithModel::Sat(model) => {
+                    SatResultWithModel::Unsat => Ok(None),
+                    SatResultWithModel::Sat(model) => {
                         let input = I::extract_from_model(&model, initial_state);
                         let mut output = input.clone();
                         I::run(&self.target_program, &mut output);
                         Ok(Some((input, output)))
                     }
-                    smtlib::SatResultWithModel::Unknown => panic!("solver returned unknown"),
+                    SatResultWithModel::Unknown => panic!("solver returned unknown"),
                 }
             })
             .expect("solver error");
@@ -85,7 +86,7 @@ fn new_solver<'st>(st: &'st Storage) -> Solver<'st, Cvc5Binary> {
     solver
 }
 
-pub trait Inst: Sized {
+pub trait Inst: Sized + Debug {
     type State: Clone + Debug;
     /// A representation of the state as SMT constants.
     type StateVars<'st>: Clone + Debug + Into<Self::SymbolicState<'st>> + 'st;

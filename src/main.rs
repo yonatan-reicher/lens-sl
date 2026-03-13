@@ -1,4 +1,5 @@
-use lens_sl::DebugPrinterImpl;
+#[allow(unused_imports)]
+use lens_sl::{DebugPrinterImpl, EmptyDebugPrinter};
 #[allow(unused_imports)]
 use lens_sl::{Register, Word64, Word8, Word4, inst, optimize};
 
@@ -26,6 +27,7 @@ fn main() {
             &[(Register(0), 92), (Register(1), 11)],
         ],
         &DebugPrinterImpl::default(),
+        // &EmptyDebugPrinter,
     );
     let Some(p) = p else {
         println!("No equivalent program found");

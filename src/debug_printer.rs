@@ -1,3 +1,4 @@
+use crate::Direction;
 use std::fmt::{self, Display, Formatter};
 use std::sync::mpsc::{Receiver, RecvError, Sender, channel};
 use std::thread::{JoinHandle as ThreadHandle, spawn as spawn_thread};
@@ -15,7 +16,7 @@ pub trait DebugPrinter {
     /// sub-graphs and the outputs that all programs in each sub-graph gave.
     fn visiting_inner_node<T>(&self, n_sub_graphs: usize, action: impl FnOnce() -> T) -> T;
     /// Called when expanding the graph by one instruction forward.
-    fn expanding<T>(&self, action: impl FnOnce() -> T) -> T;
+    fn expanding<T>(&self, direction: Direction, action: impl FnOnce() -> T) -> T;
     fn found_counter_example(&self, input: String, output: String);
 }
 
@@ -31,7 +32,7 @@ impl DebugPrinter for EmptyDebugPrinter {
     fn building_inner_node<T>(&self, _: usize, f: impl FnOnce() -> T) -> T { f() }
     fn building_program(&self) {}
     fn visiting_inner_node<T>(&self, _: usize, f: impl FnOnce() -> T) -> T { f() }
-    fn expanding<T>(&self, f: impl FnOnce() -> T) -> T { f() }
+    fn expanding<T>(&self, _: Direction, f: impl FnOnce() -> T) -> T { f() }
     fn found_counter_example(&self, _: String, _: String) {}
 }
 
@@ -53,7 +54,7 @@ enum Msg {
     DoneBuildingInnerNode,
     VisitingInnerNode { n_sub_graphs: usize },
     DoneVisitingInnerNode,
-    Expanding,
+    Expanding(Direction),
     DoneExpanding,
     FoundCounterExample { input: String, output: String },
 }
@@ -117,8 +118,8 @@ impl DebugPrinter for DebugPrinterImpl {
         r
     }
 
-    fn expanding<T>(&self, f: impl FnOnce() -> T) -> T {
-        self.send(Msg::Expanding);
+    fn expanding<T>(&self, d: Direction, f: impl FnOnce() -> T) -> T {
+        self.send(Msg::Expanding(d));
         let r = f();
         self.send(Msg::DoneExpanding);
         r
@@ -146,7 +147,7 @@ fn io_thread_main(channel: Receiver<Msg>) -> impl FnOnce() {
             println!("{n_msgs_received} messages received.");
             // println!("Messages: {msg_queue:?}");
             println!("{state}");
-            std::thread::sleep(std::time::Duration::from_secs_f64(0.5));
+            std::thread::sleep(std::time::Duration::from_secs_f64(0.16));
         }
     }
 }
@@ -156,10 +157,11 @@ struct IoThreadState {
     pub total_messages_received: usize,
     pub node_stack: Vec<InnerNodeInfo>,
     pub leaf: Option<LeafInfo>,
-    pub expanding: bool,
+    pub expanding: Option<Direction>,
     pub building: Option<(usize, usize)>,
     pub counter_examples: Vec<(String, String)>,
     pub forward_length: usize,
+    pub backward_length: usize,
     pub program: Option<Vec<String>>,
     pub last_msg: Option<String>,
 }
@@ -209,12 +211,15 @@ impl Msg {
             Msg::DoneVisitingInnerNode => {
                 state.node_stack.pop();
             }
-            Msg::Expanding => {
+            Msg::Expanding(dir) => {
                 state.node_stack.clear();
-                state.expanding = true;
-                state.forward_length += 1;
+                state.expanding = Some(*dir);
+                match dir {
+                    Direction::Forward => state.forward_length += 1,
+                    Direction::Backward => state.backward_length += 1,
+                }
             }
-            Msg::DoneExpanding => state.expanding = false,
+            Msg::DoneExpanding => state.expanding = None,
             Msg::FoundCounterExample { input, output } => {
                 state.counter_examples.push((input.clone(), output.clone()));
             }
@@ -227,16 +232,18 @@ impl Display for IoThreadState {
         writeln!(f)?;
         writeln!(
             f,
-            "Forward Length is {}. Got {} messags so far.",
-            self.forward_length, self.total_messages_received
+            "Forward length is {}. Backward length is {}. Got {} messags so far.",
+            self.forward_length, self.backward_length, self.total_messages_received,
         )?;
         writeln!(
             f,
             "Last message received: {}",
             self.last_msg.as_deref().unwrap_or("nothing")
         )?;
-        if self.expanding {
-            writeln!(f, "Expanding...")?;
+        match self.expanding {
+            Some(Direction::Forward) => writeln!(f, "Expanding forward...")?,
+            Some(Direction::Backward) => writeln!(f, "Expanding backward...")?,
+            None => (),
         }
         if let Some((a, b)) = self.building {
             writeln!(f, "Building [{a}/{b}]")?;

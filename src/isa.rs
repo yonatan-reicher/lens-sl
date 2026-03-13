@@ -37,8 +37,9 @@ pub enum ArgType {
     Unused,
 }
 
-/// In Arm, every instruction can be conditionally executed based on the state
-/// of the flags.
+/// In Arm, every instruction can be conditionally executed based on the state of the flags.
+/// In the actual arm syntax, there are two more condition codes that we are missing, "HS" and
+/// "LO", but these are just synonyms for "CS" and "CC".
 #[derive(
     Copy, Clone, Debug, derive_more::Display, Default, PartialEq, Eq, Hash, Serialize, Deserialize,
 )]
@@ -46,8 +47,8 @@ pub enum ArgType {
 #[display("{}", self.to_string())]
 pub enum CondCode {
     /// Always (unconditional)
-    /// In real Arm, this is actually the 15th condition code, but for we put it
-    /// first because we want to enumerate it first.
+    /// In real Arm, this is actually the 15th condition code, but for we put it first because we
+    /// want to enumerate it first.
     #[default]
     Al,
     /// Equal - Z set
@@ -197,6 +198,7 @@ impl Flags<bool> {
             || (op1_negative && op2_positive && signed_diff > 0.as_());
     }
 
+    /// Contains all possible combinations of flags.
     #[rustfmt::skip]
     pub const ALL: [Flags; 16 /* 2^4 */] = [
         Flags { z: false, n: false, c: false, v: false },
@@ -467,31 +469,26 @@ impl proptest::arbitrary::Arbitrary for FlagsBitField {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct State<W: Word> {
-    // pub registers: [W::Unsigned; Register::COUNT as usize],
-    // pub registers: Rc<[W::Unsigned; Register::COUNT as usize]>,
-    /// This vector is always sorted by register. Registers that are not present are not "live".
+    /// This vector is always sorted by register. Registers that are zero are omitted.
+    /// TODO: Change this!
     pub registers: Vec<(Register, W::Unsigned)>,
-    pub flags: Option<FlagsBitField>,
+    pub flags: FlagsBitField,
 }
 
 impl<W: Word> State<W> {
-    pub fn try_get_register(&self, reg: Register) -> Option<W::Unsigned> {
-        for (r, v) in &self.registers {
-            if *r == reg {
-                return Some(*v);
-            }
-        }
-        None
-    }
     pub fn get_register(&self, reg: Register) -> W::Unsigned {
         for (r, v) in &self.registers {
             if *r == reg {
                 return *v;
             }
         }
-        panic!("Register {reg:?} not found in state.");
+        0.as_()
     }
     pub fn set_register(&mut self, reg: Register, x: W::Unsigned) {
+        if x.is_zero() {
+            self.registers.retain(|(r, _)| *r != reg);
+            return;
+        }
         for (r, v) in &mut self.registers {
             if *r == reg {
                 *v = x;
@@ -503,10 +500,10 @@ impl<W: Word> State<W> {
     }
     pub fn get_flags(&self) -> FlagsBitField {
         // self.flags.expect("Flags not set in state.")
-        self.flags.unwrap_or_default()
+        self.flags
     }
     pub fn set_flags(&mut self, flags: FlagsBitField) {
-        self.flags = Some(flags)
+        self.flags = flags
     }
     /// Copies this state to another state object. Used to avoid clones, that in a loop, can
     /// allocate more.
@@ -529,33 +526,28 @@ impl<W: Word> State<W> {
     #[inline]
     pub fn clear(&mut self) {
         self.registers.clear();
-        self.flags = None;
+        self.flags = FlagsBitField::empty();
     }
 
     pub fn all_each(ei: &EnumerationInfoOptions<Register>, mut f: impl FnMut(&Self)) {
-        fn or_none<T: Clone>(
-            i: impl Clone + Iterator<Item = T>,
-        ) -> impl Clone + Iterator<Item = Option<T>> {
-            [None].into_iter().chain(i.map(Some))
-        }
+        // fn or_none<T: Clone>(
+        //     i: impl Clone + Iterator<Item = T>,
+        // ) -> impl Clone + Iterator<Item = Option<T>> {
+        //     [None].into_iter().chain(i.map(Some))
+        // }
 
         let registers = ei.into_iter().collect::<Box<[_]>>();
         let reg_value_iter = registers
             .iter()
-            .map(|_| or_none(W::all()))
+            .map(|_| W::all())
             .collect::<Box<[_]>>();
         let mut iter = PermutationIter::new(&reg_value_iter);
         let mut state = State::default();
         while let Some(reg_values) = iter.next_slice() {
             state.clear();
             for (r, &v) in registers.iter().cloned().zip(reg_values) {
-                if let Some(v) = v {
-                    state.set_register(r, v);
-                }
+                state.set_register(r, v);
             }
-            // .flags = None
-            f(&state);
-            // .flags = Some(..)
             for flags in Flags::ALL {
                 state.set_flags(flags.into());
                 f(&state)
@@ -586,10 +578,8 @@ impl<W: Word> Display for State<W> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(f, "{}", self.get_flags())?;
         for r in Register::all() {
-            let v = self.try_get_register(r);
-            if let Some(v) = v
-                && !v.is_zero()
-            {
+            let v = self.get_register(r);
+            if !v.is_zero() {
                 write!(f, " {r}={v:>2}")?;
             }
         }
@@ -807,6 +797,9 @@ fn run_instruction_symbolic<W: Word>(inst: &Inst<W>, state: &mut SymbolicState<'
 pub struct BackwardMap<W: Word> {
     pub map: FxHashMap<(Inst<W>, State<W>), Inputs<W>>,
     empty_vec: Vec<State<W>>,
+    // The registers to consider when indexing into the map. These are the registers that are
+    // "live" in the states, and other registers should be ignored.
+    registers: Vec<Register>,
 }
 pub type Inputs<W> = Vec<State<W>>;
 
@@ -818,12 +811,17 @@ impl<W: Word> BackwardMap<W> {
         let file_path = std::path::Path::new(".").join(Self::file_name(registers));
         if file_path.exists() {
             println!("loading backwards map from '{}'", file_path.display());
-            Self::load_from_file(file_path)
+            let f = std::fs::File::open(file_path)?;
+            let reader = std::io::BufReader::new(&f);
+            Self::load(reader)
         } else {
             println!("creating backwards map");
+            let f = std::fs::File::create(&file_path)?;
             let this = Self::new_recalculate(registers);
             println!("saving backwards map to '{}'", file_path.display());
-            this.save_to_file(file_path)?;
+            let mut writer = std::io::BufWriter::new(&f);
+            this.save(&mut writer)?;
+            std::io::Write::flush(&mut writer)?;
             Ok(this)
         }
     }
@@ -834,27 +832,26 @@ impl<W: Word> BackwardMap<W> {
         ret.push_str(&W::Unsigned::BITS.to_string());
         ret.push_str("bit");
         for r in registers {
-            ret.push_str(&format!("-r{r}"));
+            ret.push_str(&format!("-{r}"));
         }
         ret.push_str(".postcard"); // This is the name of the format we use
         ret
     }
 
-    pub fn save_to_file(&self, path: impl AsRef<std::path::Path>) -> std::io::Result<()>
+    pub fn save(&self, w: impl std::io::Write) -> std::io::Result<()>
     where
         Self: Serialize,
     {
-        let bytes = postcard::to_stdvec(self).map_err(std::io::Error::other)?;
-        std::fs::write(path, bytes)?;
+        postcard::to_io(self, w).map_err(std::io::Error::other)?;
         Ok(())
     }
 
-    pub fn load_from_file(path: impl AsRef<std::path::Path>) -> std::io::Result<Self>
+    pub fn load(r: impl std::io::Read) -> std::io::Result<Self>
     where
         Self: for<'a> Deserialize<'a>,
     {
-        let bytes = std::fs::read(path)?;
-        let this = postcard::from_bytes(&bytes).map_err(std::io::Error::other)?;
+        let mut buf = [0; 1024 * 1024];
+        let (this, _) = postcard::from_io((r, &mut buf)).map_err(std::io::Error::other)?;
         Ok(this)
     }
 
@@ -869,13 +866,12 @@ impl<W: Word> BackwardMap<W> {
             }
             i += 1;
             let mut output = State::default();
-            for inst in Enumerator::new().into_iter(&EnumerationInfo::unlimited()) {
-                // Initial the output
+            let ei = EnumerationInfo {
+                registers: EnumerationInfoOptions::Limited(registers),
+                immediates: EnumerationInfoOptions::Unlimited,
+            };
+            for inst in Enumerator::new().into_iter(&ei) {
                 input.clone_to(&mut output);
-                if inst.regs().any(|r| input.try_get_register(r).is_none()) {
-                    // Instruction used registers which aren't live
-                    continue;
-                }
                 inst.run(&mut output);
                 // Store!
                 let inputs = ret.entry((inst, output.clone())).or_insert_with(Vec::new);
@@ -887,7 +883,21 @@ impl<W: Word> BackwardMap<W> {
         Self {
             map: ret,
             empty_vec: vec![],
+            registers: registers.to_vec(),
         }
+    }
+}
+
+impl<W: Word> std::ops::Index<(Inst<W>, State<W>)> for BackwardMap<W> {
+    type Output = [State<W>];
+
+    fn index(&self, (inst, mut state): (Inst<W>, State<W>)) -> &Self::Output {
+        // Clear the registers that don't matter.
+        state.registers.retain(|(r, _)| self.registers.contains(r));
+        self.map
+            .get(&(inst, state))
+            .map(|v| v.as_slice())
+            .unwrap_or(&self.empty_vec)
     }
 }
 
@@ -905,7 +915,7 @@ impl<W: Word> Inst<W> {
         state: State<W>,
         bm: &'a BackwardMap<W>,
     ) -> impl IntoIterator<Item = &'a State<W>> + use<'a, W> {
-        bm.map.get(&(*self, state)).unwrap_or(&bm.empty_vec)
+        &bm[(*self, state)]
     }
 
     fn to_string_impl(self) -> String {
@@ -1136,5 +1146,97 @@ mod tests {
         assert!(flags.n);
         assert!(flags.c);
         assert!(flags.v);
+    }
+
+    #[test]
+    fn test_backward_map_some_not_empty() {
+        type W = Word4;
+        let bm = BackwardMap::<W>::new_recalculate(&[Register(1)]);
+        let mut n_empty = 0;
+        bm.map.iter().for_each(|((inst, state), inputs)| {
+            println!("Instruction: {inst}, Output State: {state}");
+            println!("Input States:");
+            inputs.iter().for_each(|input| print!("  {input}"));
+            println!();
+            if inputs.is_empty() {
+                n_empty += 1;
+            }
+        });
+        println!("Number of entries with empty input states: {n_empty}");
+        assert!(n_empty < bm.map.len());
+    }
+
+    #[test]
+    fn test_backward_map() {
+        type W = Word4;
+        let bm = BackwardMap::<W>::new_recalculate(&[Register(1)]);
+        let inst = inst!(AddI, 1.as_(), 1.as_(), 5.as_());
+        let mut output = State::<W>::default();
+        output.set_register(Register(1), 12.as_());
+        output.set_register(Register(2), 6.as_());
+        output.set_flags(Flags {
+            z: false,
+            n: true,
+            c: false,
+            v: true,
+        }.into());
+        let inputs = inst
+            .run_backward(output, &bm)
+            .into_iter()
+            .collect::<Vec<_>>();
+        dbg!(&inputs);
+        assert_eq!(inputs.len(), 16);
+    }
+
+    #[test]
+    fn run_nop_backwards_one_option() {
+        type W = Word4;
+        let bm = BackwardMap::<W>::new_recalculate(&[Register(1)]);
+        let inst = inst!(Nop,);
+        let mut output = State::<W>::default();
+        output.set_register(Register(1), 12.as_());
+        output.set_register(Register(2), 6.as_());
+        output.set_flags(Flags {
+            z: false,
+            n: true,
+            c: false,
+            v: true,
+        }.into());
+        let inputs = inst
+            .run_backward(output, &bm)
+            .into_iter()
+            .collect::<Vec<_>>();
+        dbg!(&inputs);
+        assert_eq!(inputs.len(), 1);
+    }
+
+    #[test]
+    #[ignore]
+    fn backwards_map_specific_state() {
+        type W = Word4;
+        let bm = BackwardMap::<W>::new(&[Register(0), Register(1)]).unwrap();
+        let mut state = State::<W>::default();
+        state.set_register(Register(0), 15.as_());
+        state.set_register(Register(1), 15.as_());
+        state.set_flags(Flags {
+            z: false,
+            n: true,
+            c: false,
+            v: true,
+        }.into());
+        let ei = EnumerationInfo {
+            registers: EnumerationInfoOptions::Limited(&[Register(0), Register(1)]),
+            immediates: EnumerationInfoOptions::Limited(&[0.as_(), 1.as_(), 5.as_()]),
+        };
+        for inst in Enumerator::new().into_iter(&ei) {
+            let x = &bm[(inst, state.clone())];
+            println!("Instruction: {inst}, Output State: {state}");
+            println!("Input States: {x:?}");
+            if !x.is_empty() {
+                println!("Found non-empty input states for this instruction and output state!");
+                return;
+            }
+        }
+        panic!("No instruction produced non-empty input states for the given output state!");
     }
 }

@@ -187,15 +187,6 @@ impl Default for Enumerator {
     }
 }
 
-impl<'a, W: Word> EnumerationInfo<'a, W> {
-    pub fn unlimited() -> Self {
-        Self {
-            registers: EnumerationInfoOptions::Unlimited,
-            immediates: EnumerationInfoOptions::Unlimited,
-        }
-    }
-}
-
 impl<'a> IntoIterator for EnumerationInfoOptions<'a, Register> {
     type Item = Register;
     type IntoIter = std::iter::Copied<std::slice::Iter<'a, Register>>;
