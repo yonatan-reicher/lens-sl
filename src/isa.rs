@@ -1,6 +1,9 @@
+// Imports
+
 use crate::all_permutations::Iter as PermutationIter;
 use crate::bool::prelude::*;
 use crate::collect_registers;
+use crate::enumerate::{EnumerationInfo, EnumerationInfoOptions, Enumerator};
 use crate::iter_slice_or_single::Iter as SliceOrSingle;
 use crate::oracle;
 use crate::reduce_bit_width::{ImmediateInfo, Reducer};
@@ -11,11 +14,17 @@ use std::ops::ControlFlow;
 
 use arbitrary_int::traits::Integer;
 
+// Derive macros
 use derive_more::Display;
+use serde::{Deserialize, Serialize};
+
+use rustc_hash::FxHashMap;
 
 use smtlib::Storage;
 use smtlib::prelude::*;
 use smtlib::terms::Const;
+
+// The actual code
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(test, derive(proptest_derive::Arbitrary))]
@@ -28,15 +37,18 @@ pub enum ArgType {
     Unused,
 }
 
-/// In Arm, every instruction can be conditionally executed based on the state
-/// of the flags.
-#[derive(Copy, Clone, Debug, derive_more::Display, Default, PartialEq, Eq, Hash)]
+/// In Arm, every instruction can be conditionally executed based on the state of the flags.
+/// In the actual arm syntax, there are two more condition codes that we are missing, "HS" and
+/// "LO", but these are just synonyms for "CS" and "CC".
+#[derive(
+    Copy, Clone, Debug, derive_more::Display, Default, PartialEq, Eq, Hash, Serialize, Deserialize,
+)]
 #[cfg_attr(test, derive(proptest_derive::Arbitrary))]
 #[display("{}", self.to_string())]
 pub enum CondCode {
     /// Always (unconditional)
-    /// In real Arm, this is actually the 15th condition code, but for we put it
-    /// first because we want to enumerate it first.
+    /// In real Arm, this is actually the 15th condition code, but for we put it first because we
+    /// want to enumerate it first.
     #[default]
     Al,
     /// Equal - Z set
@@ -185,6 +197,27 @@ impl Flags<bool> {
         self.v = (op1_positive && op2_negative && signed_diff < 0.as_())
             || (op1_negative && op2_positive && signed_diff > 0.as_());
     }
+
+    /// Contains all possible combinations of flags.
+    #[rustfmt::skip]
+    pub const ALL: [Flags; 16 /* 2^4 */] = [
+        Flags { z: false, n: false, c: false, v: false },
+        Flags { z: true,  n: false, c: false, v: false },
+        Flags { z: false, n: true,  c: false, v: false },
+        Flags { z: true,  n: true,  c: false, v: false },
+        Flags { z: false, n: false, c: true,  v: false },
+        Flags { z: true,  n: false, c: true,  v: false },
+        Flags { z: false, n: true,  c: true,  v: false },
+        Flags { z: true,  n: true,  c: true,  v: false },
+        Flags { z: false, n: false, c: false, v: true  },
+        Flags { z: true,  n: false, c: false, v: true  },
+        Flags { z: false, n: true,  c: false, v: true  },
+        Flags { z: true,  n: true,  c: false, v: true  },
+        Flags { z: false, n: false, c: true,  v: true  },
+        Flags { z: true,  n: false, c: true,  v: true  },
+        Flags { z: false, n: true,  c: true,  v: true  },
+        Flags { z: true,  n: true,  c: true,  v: true  },
+    ];
 }
 
 impl Display for Flags<bool> {
@@ -201,7 +234,7 @@ impl Display for Flags<bool> {
 }
 
 impl CondCode {
-    pub const COUNT: u8 = 6;
+    pub const COUNT: u8 = 15;
 
     pub const fn to_string(&self) -> &'static str {
         match self {
@@ -253,7 +286,7 @@ macro_rules! define_instructions {
         $( | $op_code:ident | $arg1:ident | $arg2:ident | $arg3:ident | $str:literal |)+
     ) => {
         /// The operation codes supported by our ISA.
-        #[derive(Copy, Clone, Debug, derive_more::Display, PartialEq, Eq, Hash)]
+        #[derive(Copy, Clone, Debug, derive_more::Display, PartialEq, Eq, Hash, Serialize, Deserialize)]
         #[cfg_attr(test, derive(proptest_derive::Arbitrary))]
         #[display("{}", self.to_string())]
         pub enum OpCode {
@@ -314,6 +347,8 @@ define_instructions! {
     Hash,
     PartialOrd,
     Ord,
+    Serialize,
+    Deserialize,
 )]
 #[cfg_attr(test, derive(proptest_derive::Arbitrary))]
 #[debug("r{_0}")]
@@ -326,10 +361,28 @@ impl Register {
     pub fn all() -> impl IntoIterator<Item = Register> + Iterator<Item = Register> {
         (0..Self::COUNT).map(Register)
     }
+    pub const ALL: [Register; Self::COUNT as usize] = [
+        Register(0),
+        Register(1),
+        Register(2),
+        Register(3),
+        Register(4),
+        Register(5),
+        Register(6),
+        Register(7),
+        Register(8),
+        Register(9),
+        Register(10),
+        Register(11),
+        Register(12),
+        Register(13),
+        Register(14),
+        Register(15),
+    ];
 }
 
 /// A single instruction.
-#[derive(derive_more::Debug, derive_more::Display, PartialEq, Eq, Hash)]
+#[derive(derive_more::Debug, derive_more::Display, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(test, derive(proptest_derive::Arbitrary))]
 #[debug("{op_code:?}{}{args:?}",
     match cond_code {
@@ -354,7 +407,7 @@ impl<W: Word> Clone for Inst<W> {
 }
 
 bitflags::bitflags! {
-    #[derive(Clone, Copy, Debug, Display, Default, PartialEq, Eq, Hash)]
+    #[derive(Clone, Copy, Debug, Display, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
     #[display("{}", Flags::from(*self))]
     pub struct FlagsBitField: u8 {
         /// Zero - is the result zero? Disregard overflow and carry.
@@ -414,33 +467,28 @@ impl proptest::arbitrary::Arbitrary for FlagsBitField {
 
 // =========================================== State ==============================================
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct State<W: Word> {
-    // pub registers: [W::Unsigned; Register::COUNT as usize],
-    // pub registers: Rc<[W::Unsigned; Register::COUNT as usize]>,
-    /// This vector is always sorted by register. Registers that are not present are not "live".
+    /// This vector is always sorted by register. Registers that are zero are omitted.
+    /// TODO: Change this!
     pub registers: Vec<(Register, W::Unsigned)>,
-    pub flags: Option<FlagsBitField>,
+    pub flags: FlagsBitField,
 }
 
 impl<W: Word> State<W> {
-    pub fn try_get_register(&self, reg: Register) -> Option<W::Unsigned> {
-        for (r, v) in &self.registers {
-            if *r == reg {
-                return Some(*v);
-            }
-        }
-        None
-    }
     pub fn get_register(&self, reg: Register) -> W::Unsigned {
         for (r, v) in &self.registers {
             if *r == reg {
                 return *v;
             }
         }
-        panic!("Register {reg:?} not found in state.");
+        0.as_()
     }
     pub fn set_register(&mut self, reg: Register, x: W::Unsigned) {
+        if x.is_zero() {
+            self.registers.retain(|(r, _)| *r != reg);
+            return;
+        }
         for (r, v) in &mut self.registers {
             if *r == reg {
                 *v = x;
@@ -452,10 +500,10 @@ impl<W: Word> State<W> {
     }
     pub fn get_flags(&self) -> FlagsBitField {
         // self.flags.expect("Flags not set in state.")
-        self.flags.unwrap_or_default()
+        self.flags
     }
     pub fn set_flags(&mut self, flags: FlagsBitField) {
-        self.flags = Some(flags)
+        self.flags = flags
     }
     /// Copies this state to another state object. Used to avoid clones, that in a loop, can
     /// allocate more.
@@ -473,6 +521,37 @@ impl<W: Word> State<W> {
                 .map(|(r, v)| (*r, reducer.reduce(*v, &Default::default())))
                 .collect(),
             flags: self.flags,
+        }
+    }
+    #[inline]
+    pub fn clear(&mut self) {
+        self.registers.clear();
+        self.flags = FlagsBitField::empty();
+    }
+
+    pub fn all_each(ei: &EnumerationInfoOptions<Register>, mut f: impl FnMut(&Self)) {
+        // fn or_none<T: Clone>(
+        //     i: impl Clone + Iterator<Item = T>,
+        // ) -> impl Clone + Iterator<Item = Option<T>> {
+        //     [None].into_iter().chain(i.map(Some))
+        // }
+
+        let registers = ei.into_iter().collect::<Box<[_]>>();
+        let reg_value_iter = registers
+            .iter()
+            .map(|_| W::all())
+            .collect::<Box<[_]>>();
+        let mut iter = PermutationIter::new(&reg_value_iter);
+        let mut state = State::default();
+        while let Some(reg_values) = iter.next_slice() {
+            state.clear();
+            for (r, &v) in registers.iter().cloned().zip(reg_values) {
+                state.set_register(r, v);
+            }
+            for flags in Flags::ALL {
+                state.set_flags(flags.into());
+                f(&state)
+            }
         }
     }
 }
@@ -499,10 +578,8 @@ impl<W: Word> Display for State<W> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(f, "{}", self.get_flags())?;
         for r in Register::all() {
-            let v = self.try_get_register(r);
-            if let Some(v) = v
-                && !v.is_zero()
-            {
+            let v = self.get_register(r);
+            if !v.is_zero() {
                 write!(f, " {r}={v:>2}")?;
             }
         }
@@ -710,6 +787,120 @@ fn run_instruction_symbolic<W: Word>(inst: &Inst<W>, state: &mut SymbolicState<'
     }
 }
 
+/// A hash-map between instructions and output states to input states that send to the output. The
+/// states use a liveness mask to mark which registers are ignored, and they all ignore the
+/// condition flag. Currently, states also don't represent memory, so we don't need to worry about
+/// that.
+///
+/// About the condition flag again: all instructions in the map have a condition flag of always.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BackwardMap<W: Word> {
+    pub map: FxHashMap<(Inst<W>, State<W>), Inputs<W>>,
+    empty_vec: Vec<State<W>>,
+    // The registers to consider when indexing into the map. These are the registers that are
+    // "live" in the states, and other registers should be ignored.
+    registers: Vec<Register>,
+}
+pub type Inputs<W> = Vec<State<W>>;
+
+impl<W: Word> BackwardMap<W> {
+    pub fn new(registers: &[Register]) -> std::io::Result<Self>
+    where
+        Self: Serialize + for<'a> Deserialize<'a>,
+    {
+        let file_path = std::path::Path::new(".").join(Self::file_name(registers));
+        if file_path.exists() {
+            println!("loading backwards map from '{}'", file_path.display());
+            let f = std::fs::File::open(file_path)?;
+            let reader = std::io::BufReader::new(&f);
+            Self::load(reader)
+        } else {
+            println!("creating backwards map");
+            let f = std::fs::File::create(&file_path)?;
+            let this = Self::new_recalculate(registers);
+            println!("saving backwards map to '{}'", file_path.display());
+            let mut writer = std::io::BufWriter::new(&f);
+            this.save(&mut writer)?;
+            std::io::Write::flush(&mut writer)?;
+            Ok(this)
+        }
+    }
+
+    pub fn file_name(registers: &[Register]) -> String {
+        let mut ret = String::new();
+        ret.push_str("backward-map-");
+        ret.push_str(&W::Unsigned::BITS.to_string());
+        ret.push_str("bit");
+        for r in registers {
+            ret.push_str(&format!("-{r}"));
+        }
+        ret.push_str(".postcard"); // This is the name of the format we use
+        ret
+    }
+
+    pub fn save(&self, w: impl std::io::Write) -> std::io::Result<()>
+    where
+        Self: Serialize,
+    {
+        postcard::to_io(self, w).map_err(std::io::Error::other)?;
+        Ok(())
+    }
+
+    pub fn load(r: impl std::io::Read) -> std::io::Result<Self>
+    where
+        Self: for<'a> Deserialize<'a>,
+    {
+        let mut buf = [0; 1024 * 1024];
+        let (this, _) = postcard::from_io((r, &mut buf)).map_err(std::io::Error::other)?;
+        Ok(this)
+    }
+
+    /// Build from scratch a new backwards behavior map.
+    pub fn new_recalculate(registers: &[Register]) -> Self {
+        let mut ret = FxHashMap::default();
+        let mut i = 0;
+        let ei = EnumerationInfoOptions::Limited(registers);
+        State::all_each(&ei, |input| {
+            if i % 100 == 0 {
+                dbg!(i);
+            }
+            i += 1;
+            let mut output = State::default();
+            let ei = EnumerationInfo {
+                registers: EnumerationInfoOptions::Limited(registers),
+                immediates: EnumerationInfoOptions::Unlimited,
+            };
+            for inst in Enumerator::new().into_iter(&ei) {
+                input.clone_to(&mut output);
+                inst.run(&mut output);
+                // Store!
+                let inputs = ret.entry((inst, output.clone())).or_insert_with(Vec::new);
+                if !inputs.contains(input) {
+                    inputs.push(input.clone());
+                }
+            }
+        });
+        Self {
+            map: ret,
+            empty_vec: vec![],
+            registers: registers.to_vec(),
+        }
+    }
+}
+
+impl<W: Word> std::ops::Index<(Inst<W>, State<W>)> for BackwardMap<W> {
+    type Output = [State<W>];
+
+    fn index(&self, (inst, mut state): (Inst<W>, State<W>)) -> &Self::Output {
+        // Clear the registers that don't matter.
+        state.registers.retain(|(r, _)| self.registers.contains(r));
+        self.map
+            .get(&(inst, state))
+            .map(|v| v.as_slice())
+            .unwrap_or(&self.empty_vec)
+    }
+}
+
 impl<W: Word> Inst<W> {
     pub fn run(&self, state: &mut State<W>) {
         run_instruction(self, state)
@@ -717,6 +908,14 @@ impl<W: Word> Inst<W> {
 
     pub fn run_symbolic(&self, state: &mut SymbolicState<'_, W>) {
         run_instruction_symbolic(self, state)
+    }
+
+    pub fn run_backward<'a>(
+        &self,
+        state: State<W>,
+        bm: &'a BackwardMap<W>,
+    ) -> impl IntoIterator<Item = &'a State<W>> + use<'a, W> {
+        &bm[(*self, state)]
     }
 
     fn to_string_impl(self) -> String {
@@ -796,6 +995,16 @@ impl<W: Word> Inst<W> {
                 })
             })
         })
+    }
+
+    pub fn regs(&self) -> impl Iterator<Item = Register> {
+        let mut ret = vec![];
+        for (a, t) in self.args.iter().zip(self.op_code.arg_types()) {
+            if t == ArgType::Reg {
+                ret.push(Register(a.as_()));
+            }
+        }
+        ret.into_iter()
     }
 }
 
@@ -937,5 +1146,97 @@ mod tests {
         assert!(flags.n);
         assert!(flags.c);
         assert!(flags.v);
+    }
+
+    #[test]
+    fn test_backward_map_some_not_empty() {
+        type W = Word4;
+        let bm = BackwardMap::<W>::new_recalculate(&[Register(1)]);
+        let mut n_empty = 0;
+        bm.map.iter().for_each(|((inst, state), inputs)| {
+            println!("Instruction: {inst}, Output State: {state}");
+            println!("Input States:");
+            inputs.iter().for_each(|input| print!("  {input}"));
+            println!();
+            if inputs.is_empty() {
+                n_empty += 1;
+            }
+        });
+        println!("Number of entries with empty input states: {n_empty}");
+        assert!(n_empty < bm.map.len());
+    }
+
+    #[test]
+    fn test_backward_map() {
+        type W = Word4;
+        let bm = BackwardMap::<W>::new_recalculate(&[Register(1)]);
+        let inst = inst!(AddI, 1.as_(), 1.as_(), 5.as_());
+        let mut output = State::<W>::default();
+        output.set_register(Register(1), 12.as_());
+        output.set_register(Register(2), 6.as_());
+        output.set_flags(Flags {
+            z: false,
+            n: true,
+            c: false,
+            v: true,
+        }.into());
+        let inputs = inst
+            .run_backward(output, &bm)
+            .into_iter()
+            .collect::<Vec<_>>();
+        dbg!(&inputs);
+        assert_eq!(inputs.len(), 16);
+    }
+
+    #[test]
+    fn run_nop_backwards_one_option() {
+        type W = Word4;
+        let bm = BackwardMap::<W>::new_recalculate(&[Register(1)]);
+        let inst = inst!(Nop,);
+        let mut output = State::<W>::default();
+        output.set_register(Register(1), 12.as_());
+        output.set_register(Register(2), 6.as_());
+        output.set_flags(Flags {
+            z: false,
+            n: true,
+            c: false,
+            v: true,
+        }.into());
+        let inputs = inst
+            .run_backward(output, &bm)
+            .into_iter()
+            .collect::<Vec<_>>();
+        dbg!(&inputs);
+        assert_eq!(inputs.len(), 1);
+    }
+
+    #[test]
+    #[ignore]
+    fn backwards_map_specific_state() {
+        type W = Word4;
+        let bm = BackwardMap::<W>::new(&[Register(0), Register(1)]).unwrap();
+        let mut state = State::<W>::default();
+        state.set_register(Register(0), 15.as_());
+        state.set_register(Register(1), 15.as_());
+        state.set_flags(Flags {
+            z: false,
+            n: true,
+            c: false,
+            v: true,
+        }.into());
+        let ei = EnumerationInfo {
+            registers: EnumerationInfoOptions::Limited(&[Register(0), Register(1)]),
+            immediates: EnumerationInfoOptions::Limited(&[0.as_(), 1.as_(), 5.as_()]),
+        };
+        for inst in Enumerator::new().into_iter(&ei) {
+            let x = &bm[(inst, state.clone())];
+            println!("Instruction: {inst}, Output State: {state}");
+            println!("Input States: {x:?}");
+            if !x.is_empty() {
+                println!("Found non-empty input states for this instruction and output state!");
+                return;
+            }
+        }
+        panic!("No instruction produced non-empty input states for the given output state!");
     }
 }

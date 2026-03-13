@@ -6,8 +6,10 @@ pub trait Len {
 }
 
 // Implement for references
+use std::rc::Rc;
 #[rustfmt::skip] impl<T: Len> Len for &T {     fn len(&self) -> usize{ T::len(self) } }
 #[rustfmt::skip] impl<T: Len> Len for &mut T { fn len(&self) -> usize{ T::len(self) } }
+#[rustfmt::skip] impl<T: Len> Len for Rc<T> { fn len(&self) -> usize{ T::len(self) } }
 
 // Implement for common types
 use rustc_hash::FxHashMap;

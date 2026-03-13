@@ -3,9 +3,9 @@ use std::fmt::Display;
 use std::hash::Hash;
 use crate::len::Len;
 
-pub trait Programs: Default + Into<Vec<Self::Program>> + Len {
+pub trait Programs: Default + Len {
     type Program;
-    fn extend(&mut self, other: Self);
+    fn extend(&mut self, other: &Self);
 }
 
 /// A search graph for programs and their outputs on some test cases.
@@ -13,7 +13,7 @@ pub trait Programs: Default + Into<Vec<Self::Program>> + Len {
 /// On the 0 < k ≤ n level, each edge with output_k connects to a sub-graph
 /// where all programs produce output_k on input_k.
 #[derive(Clone, Debug)]
-pub enum Graph<State, P: Programs> {
+pub enum Graph<State, P> {
     /// A 0-tests graph. Just a series of programs.
     Leaf(P),
     /// For the corresponding test case (input, output), each program in the
@@ -61,16 +61,15 @@ where
     }
 
     /// Returns the maximum depth of the graph.
-    pub fn depth(&self) -> usize {
+    pub fn depth(&self) -> Option<usize> {
         match self {
-            Self::Leaf(_) => 0,
+            Self::Leaf(_) => Some(0),
             Self::Nest(hash_map) => {
                 hash_map
                     .values()
-                    .map(|sub_graph| sub_graph.depth())
+                    .filter_map(|sub_graph| sub_graph.depth())
                     .max()
-                    .unwrap()
-                    + 1
+                    .map(|d| d + 1)
             }
         }
     }
@@ -83,9 +82,7 @@ where
         }
     }
 
-    /// Insert the given programs under the given set of states. The length of
-    /// the slice of output states must be of the same depth as the graph.
-    pub fn insert(&mut self, output: S, progs: P) {
+    pub fn insert(&mut self, output: S, progs: &P) {
         debug_assert!(matches!(self, Graph::Nest(..)));
         match self {
             Self::Leaf(..) => unreachable!(),
@@ -106,7 +103,7 @@ where
 
     /// Insert the given programs under the given set of states. The length of
     /// the slice of output states must be of the same depth as the graph.
-    pub fn insert_all(&mut self, outputs: &[S], progs: P) {
+    pub fn insert_all(&mut self, outputs: &[S], progs: &P) {
         match self {
             Self::Leaf(programs) => {
                 debug_assert!(outputs.is_empty());
@@ -115,7 +112,7 @@ where
             Self::Nest(hash_map) => {
                 let [output, rest @ ..] = outputs else {
                     println!(
-                        "Graph depth: {}, outputs length: {}",
+                        "Graph depth: {:?}, outputs length: {}",
                         self.depth(),
                         outputs.len()
                     );
@@ -208,17 +205,56 @@ where
         print_row!["Name", "Depth", "Nodes", "Leaves", "Programs"];
         print_row![
             "Forward",
-            forward_graph.depth(),
+            forward_graph.depth().map(|x| x as i64).unwrap_or(-1),
             forward_graph.n_nodes(),
             forward_graph.n_leaves(),
             forward_graph.n_programs(),
         ];
         print_row![
             "Backward",
-            backward_graph.depth(),
+            backward_graph.depth().map(|x| x as i64).unwrap_or(-1),
             backward_graph.n_nodes(),
             backward_graph.n_leaves(),
             backward_graph.n_programs(),
         ];
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    impl Programs for Vec<&str> {
+        type Program = String;
+        fn extend(&mut self, other: &Self) {
+            self.extend_from_slice(other);
+        }
+    }
+
+    #[test]
+    fn insert_actually_modifies_graph() {
+        let mut graph = Graph::Nest(Default::default());
+        graph.insert("output1", &vec!["prog1"]);
+        graph.insert("output2", &vec!["prog2"]);
+        assert_eq!(graph.n_programs(), 2);
+        assert_eq!(graph.n_leaves(), 2);
+    }
+
+    #[test]
+    fn insert_combines_when_it_should() {
+        let mut graph = Graph::Nest(Default::default());
+        graph.insert("output1", &vec!["prog1"]);
+        graph.insert("output1", &vec!["prog2"]);
+        assert_eq!(graph.n_programs(), 2);
+        assert_eq!(graph.n_leaves(), 1);
+    }
+
+    #[test]
+    fn insert_all_with_empty_slice() {
+        let mut graph: Graph<&str, Vec<&str>> = Graph::Leaf(vec![]);
+        graph.insert_all(&[], &vec!["prog1"]);
+        graph.insert_all(&[], &vec!["prog2"]);
+        assert_eq!(graph.n_programs(), 2);
+        assert_eq!(graph.n_leaves(), 1);
     }
 }

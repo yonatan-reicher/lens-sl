@@ -9,11 +9,31 @@ use crate::smtlib_utils::{BitVecExt, bit_vec_term_to_i128};
 use smtlib::terms::{IntoWithStorage, StaticSorted};
 use smtlib::{BitVec, Storage};
 
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+
 pub trait Word:
-    Sized + Clone + Copy + Debug + Default + PartialEq + Eq + PartialOrd + Ord + Hash + 'static
+    Sized + Clone + Copy + Debug + Default + PartialEq + Eq + PartialOrd + Ord + Hash + Serialize + /* DeserializeOwned + */ 'static
 {
-    type Signed: Sized + Debug + Default + Display + Hash + SignedInteger + WordOps + 'static;
-    type Unsigned: Sized + Debug + Default + Display + Hash + UnsignedInteger + WordOps + 'static;
+    type Signed: Sized
+        + Debug
+        + Default
+        + Display
+        + Hash
+        + SignedInteger
+        + WordOps
+        + Serialize
+        + DeserializeOwned
+        + 'static;
+    type Unsigned: Sized
+        + Debug
+        + Default
+        + Display
+        + Hash
+        + UnsignedInteger
+        + WordOps
+        + Serialize
+        + DeserializeOwned
+        + 'static;
 
     type SymbolicBitVec<'st>: Add<Output = Self::SymbolicBitVec<'st>>
         + BitAnd<Output = Self::SymbolicBitVec<'st>>
@@ -41,9 +61,11 @@ pub trait Word:
     fn new_bit_vec<'st>(st: &'st Storage, value: Self::Unsigned) -> Self::SymbolicBitVec<'st>;
 
     fn bit_vec_try_into(value: Self::SymbolicBitVec<'_>) -> Option<Self::Unsigned>;
+
+    fn all() -> impl Clone + Iterator<Item = Self::Unsigned>;
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Word64;
 impl Word for Word64 {
     type Unsigned = u64;
@@ -57,9 +79,13 @@ impl Word for Word64 {
     fn bit_vec_try_into(value: Self::SymbolicBitVec<'_>) -> Option<Self::Unsigned> {
         bit_vec_term_to_i128(value).map(|i| i as _)
     }
+
+    fn all() -> impl Clone + Iterator<Item = u64> {
+        0..=u64::MAX
+    }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Word8;
 impl Word for Word8 {
     type Unsigned = u8;
@@ -73,9 +99,13 @@ impl Word for Word8 {
     fn bit_vec_try_into(value: Self::SymbolicBitVec<'_>) -> Option<Self::Unsigned> {
         bit_vec_term_to_i128(value).map(|i| i as _)
     }
+
+    fn all() -> impl Clone + Iterator<Item = u8> {
+        0..=u8::MAX
+    }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Word4;
 impl Word for Word4 {
     type Unsigned = u4;
@@ -88,6 +118,10 @@ impl Word for Word4 {
 
     fn bit_vec_try_into(value: Self::SymbolicBitVec<'_>) -> Option<Self::Unsigned> {
         bit_vec_term_to_i128(value).map(|i| i.as_())
+    }
+
+    fn all() -> impl Clone + Iterator<Item = u4> {
+        (0..=u4::MAX.as_::<u8>()).map(|x| x.as_())
     }
 }
 

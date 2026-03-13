@@ -2,6 +2,7 @@
 
 use crate::isa::{ArgType, CondCode, Inst, OpCode, Register};
 use crate::word::prelude::*;
+use std::fmt::Debug;
 
 /// Enumerates over the instruction space. Needs an `EnumerationInfo` borrow in
 /// order to actually enumerate. Does not go over all actual instructions, as
@@ -21,9 +22,17 @@ pub struct Enumerator {
 #[derive(Clone, Copy, derive_more::Debug)]
 pub struct EnumerationInfo<'a, W: Word> {
     /// The registers to use. Must not be empty.
-    pub registers: &'a [Register],
+    pub registers: EnumerationInfoOptions<'a, Register>,
     /// The immediates to use. Must not be empty.
-    pub immediates: &'a [W::Unsigned],
+    pub immediates: EnumerationInfoOptions<'a, W::Unsigned>,
+}
+
+#[derive(Clone, Copy, derive_more::Debug)]
+pub enum EnumerationInfoOptions<'a, T> {
+    /// The options will be given from this slice.
+    Limited(&'a [T]),
+    /// The enumerated options will be every register and immediate!
+    Unlimited,
 }
 
 fn debug_assert_arg_in_range(arg: usize) {
@@ -34,14 +43,17 @@ fn debug_assert_arg_in_range(arg: usize) {
 }
 
 fn debug_assert_valid_enumeration_info<W: Word>(ei: &EnumerationInfo<W>) {
-    debug_assert!(
-        !ei.registers.is_empty(),
-        "enumeration info registers mut not be empty! {ei:?}"
-    );
-    debug_assert!(
-        !ei.immediates.is_empty(),
-        "enumeration info immediates slice must not be empty! {ei:?}"
-    );
+    fn validate_options<T: Debug>(e: &EnumerationInfoOptions<T>, name: &'static str) {
+        match e {
+            EnumerationInfoOptions::Limited(slice) => debug_assert!(
+                !slice.is_empty(),
+                "enumeration info {name} slice must not be empty! {e:?}"
+            ),
+            EnumerationInfoOptions::Unlimited => (),
+        }
+    }
+    validate_options(&ei.registers, "registers");
+    validate_options(&ei.immediates, "immediates");
 }
 
 impl Enumerator {
@@ -63,21 +75,32 @@ impl Enumerator {
         // Take the index, and index into the correct array.
         let i = self.arg_indices[arg];
         match self.arg_types()[arg] {
-            ArgType::Reg => ei.registers[i].0.as_(),
-            ArgType::Imm => ei.immediates[i],
+            ArgType::Reg => match &ei.registers {
+                EnumerationInfoOptions::Limited(r) => r[i].0.as_(),
+                EnumerationInfoOptions::Unlimited => (i as u64).as_(),
+            },
+            ArgType::Imm => match &ei.immediates {
+                EnumerationInfoOptions::Limited(im) => im[i],
+                EnumerationInfoOptions::Unlimited => (i as u64).as_(),
+            },
             ArgType::Unused => 0.as_(),
         }
     }
 
-    /// Returns the length of the array that the given argument index indexes
-    /// into.
-    fn arg_len<W: Word>(&self, arg: usize, ei: &EnumerationInfo<W>) -> usize {
+    /// Returns the length of the array that the given argument index indexes into.
+    fn arg_max<W: Word>(&self, arg: usize, ei: &EnumerationInfo<W>) -> usize {
         debug_assert_arg_in_range(arg);
         debug_assert_valid_enumeration_info(ei);
         match self.arg_types()[arg] {
-            ArgType::Reg => ei.registers.len(),
-            ArgType::Imm => ei.immediates.len(),
-            ArgType::Unused => 1,
+            ArgType::Reg => match &ei.registers {
+                EnumerationInfoOptions::Limited(r) => r.len() - 1,
+                EnumerationInfoOptions::Unlimited => Register::COUNT as usize - 1,
+            },
+            ArgType::Imm => match &ei.immediates {
+                EnumerationInfoOptions::Limited(i) => i.len() - 1,
+                EnumerationInfoOptions::Unlimited => W::Unsigned::MAX.as_::<u64>() as usize,
+            },
+            ArgType::Unused => 0,
         }
     }
 
@@ -121,12 +144,13 @@ impl Enumerator {
     fn advance_arg<W: Word>(&mut self, arg: usize, ei: &EnumerationInfo<W>) -> Option<()> {
         debug_assert_arg_in_range(arg);
         debug_assert_valid_enumeration_info(ei);
-        let len = self.arg_len(arg, ei);
-        let next = self.arg_indices[arg] + 1;
-        if len <= next {
+        let max = self.arg_max(arg, ei);
+        let current = self.arg_indices[arg];
+        debug_assert!(current <= max);
+        if current == max {
             return None;
         }
-        self.arg_indices[arg] = next;
+        self.arg_indices[arg] = current + 1;
         Some(())
     }
 
@@ -160,6 +184,18 @@ impl Enumerator {
 impl Default for Enumerator {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl<'a> IntoIterator for EnumerationInfoOptions<'a, Register> {
+    type Item = Register;
+    type IntoIter = std::iter::Copied<std::slice::Iter<'a, Register>>;
+    fn into_iter(self) -> Self::IntoIter {
+        use EnumerationInfoOptions::{Limited, Unlimited};
+        match self {
+            Limited(items) => items.iter().copied(),
+            Unlimited => Register::ALL.as_slice().iter().copied(),
+        }
     }
 }
 
@@ -205,24 +241,28 @@ mod tests {
     #[test]
     pub fn test_count() {
         let v = to_vec(&EnumerationInfo::<Word8> {
-            registers: &[Register(2)],
-            immediates: &[42],
+            registers: EnumerationInfoOptions::Limited(&[Register(2)]),
+            immediates: EnumerationInfoOptions::Limited(&[42]),
         });
         assert_eq!(v.len(), OpCode::COUNT as usize * CondCode::COUNT as usize);
     }
 
     #[property_test(config = ProptestConfig { cases: 20, ..ProptestConfig::default() })]
     fn all_registers_and_immediates_appear(
-        #[strategy = prop::collection::hash_set(any::<Register>(), 1..15)]
-        registers: HashSet<Register>,
-        #[strategy = prop::collection::hash_set(0..100u8, 1..15)]
-        immediates: HashSet<u8>,
+        #[strategy = prop::collection::hash_set(any::<Register>(), 1..15)] registers: HashSet<
+            Register,
+        >,
+        #[strategy = prop::collection::hash_set(0..100u8, 1..15)] immediates: HashSet<u8>,
     ) {
         prop_assume!(!registers.is_empty());
         prop_assume!(!immediates.is_empty());
         let ei = EnumerationInfo::<Word8> {
-            registers: &registers.iter().copied().collect::<Box<[_]>>(),
-            immediates: &immediates.iter().copied().collect::<Box<[_]>>(),
+            registers: EnumerationInfoOptions::Limited(
+                &registers.iter().copied().collect::<Box<[_]>>(),
+            ),
+            immediates: EnumerationInfoOptions::Limited(
+                &immediates.iter().copied().collect::<Box<[_]>>(),
+            ),
         };
         let registers_used: std::collections::HashSet<_> = Enumerator::new()
             .into_iter(&ei)
@@ -258,5 +298,38 @@ mod tests {
             .collect::<std::collections::HashSet<_>>();
         prop_assert_eq!(registers_used, registers);
         prop_assert_eq!(immediates_used, immediates);
+    }
+
+    #[test]
+    fn enumeration_info_unlimited_range_is_full() {
+        let v = to_vec(&EnumerationInfo::<Word4> {
+            registers: EnumerationInfoOptions::Unlimited,
+            immediates: EnumerationInfoOptions::Unlimited,
+        });
+        let registers = v
+            .iter()
+            .filter_map(|x| {
+                if x.op_code.arg_types()[0] == ArgType::Reg {
+                    Some(Register(x.args[0].as_()))
+                } else {
+                    None
+                }
+            })
+            .collect::<std::collections::HashSet<_>>();
+        let immediates = v
+            .iter()
+            .filter_map(|x| {
+                // For now, immediates appear mostly on the second argument
+                if x.op_code.arg_types()[2] == ArgType::Imm {
+                    Some(x.args[2])
+                } else {
+                    None
+                }
+            })
+            .collect::<std::collections::HashSet<_>>();
+        dbg!(&registers);
+        dbg!(&immediates);
+        assert_eq!(registers.len(), Register::COUNT as usize);
+        assert_eq!(immediates.len(), u4::MAX.as_::<u64>() as usize + 1);
     }
 }
