@@ -232,7 +232,7 @@ impl Display for Flags<bool> {
 }
 
 impl CondCode {
-    pub const COUNT: u8 = 6;
+    pub const COUNT: u8 = 15;
 
     pub const fn to_string(&self) -> &'static str {
         match self {
