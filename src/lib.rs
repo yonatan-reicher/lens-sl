@@ -56,6 +56,25 @@ mod bool;
 /// Defines a trait for things which have length
 mod len;
 
+#[derive(Clone, Copy, Debug, derive_more::Display, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Direction {
+    #[display("forward")]
+    Forward,
+    #[display("backward")]
+    Backward,
+}
+
+impl Direction {
+    pub const fn from_is_forward(is_forward: bool) -> Self {
+        if is_forward {
+            Self::Forward
+        } else {
+            Self::Backward
+        }
+    }
+}
+
+
 // Let's expose just the necessary items.
 
 pub use isa::{CondCode, Flags, FlagsBitField, Inst, OpCode, Register, State};
