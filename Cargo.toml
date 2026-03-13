@@ -30,3 +30,13 @@ opt-level = 3
 
 [profile.test.package.rand_chacha]
 opt-level = 3
+
+[profile.test.package.postcard]
+opt-level = 3
+[profile.dev.package.postcard]
+opt-level = 3
+
+[profile.test.package.serde]
+opt-level = 3
+[profile.dev.package.serde]
+opt-level = 3
