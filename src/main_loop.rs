@@ -3,7 +3,7 @@
 
 use crate::Direction;
 use crate::collect_registers::Collector;
-use crate::debug_printer::DebugPrinter;
+use crate::tui::DebugPrinter;
 use crate::enumerate::{EnumerationInfo, EnumerationInfoOptions, Enumerator};
 use crate::graph;
 use crate::isa::{
