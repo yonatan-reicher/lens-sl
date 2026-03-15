@@ -543,10 +543,7 @@ impl<W: Word> State<W> {
         // }
 
         let registers = ei.into_iter().collect::<Box<[_]>>();
-        let reg_value_iter = registers
-            .iter()
-            .map(|_| W::all())
-            .collect::<Box<[_]>>();
+        let reg_value_iter = registers.iter().map(|_| W::all()).collect::<Box<[_]>>();
         let mut iter = PermutationIter::new(&reg_value_iter);
         let mut state = State::default();
         while let Some(reg_values) = iter.next_slice() {
@@ -1180,12 +1177,15 @@ mod tests {
         let mut output = State::<W>::default();
         output.set_register(Register(1), 12.as_());
         output.set_register(Register(2), 6.as_());
-        output.set_flags(Flags {
-            z: false,
-            n: true,
-            c: false,
-            v: true,
-        }.into());
+        output.set_flags(
+            Flags {
+                z: false,
+                n: true,
+                c: false,
+                v: true,
+            }
+            .into(),
+        );
         let inputs = inst
             .run_backward(output, &bm)
             .into_iter()
@@ -1202,12 +1202,15 @@ mod tests {
         let mut output = State::<W>::default();
         output.set_register(Register(1), 12.as_());
         output.set_register(Register(2), 6.as_());
-        output.set_flags(Flags {
-            z: false,
-            n: true,
-            c: false,
-            v: true,
-        }.into());
+        output.set_flags(
+            Flags {
+                z: false,
+                n: true,
+                c: false,
+                v: true,
+            }
+            .into(),
+        );
         let inputs = inst
             .run_backward(output, &bm)
             .into_iter()
@@ -1224,12 +1227,15 @@ mod tests {
         let mut state = State::<W>::default();
         state.set_register(Register(0), 15.as_());
         state.set_register(Register(1), 15.as_());
-        state.set_flags(Flags {
-            z: false,
-            n: true,
-            c: false,
-            v: true,
-        }.into());
+        state.set_flags(
+            Flags {
+                z: false,
+                n: true,
+                c: false,
+                v: true,
+            }
+            .into(),
+        );
         let ei = EnumerationInfo {
             registers: EnumerationInfoOptions::Limited(&[Register(0), Register(1)]),
             immediates: EnumerationInfoOptions::Limited(&[0.as_(), 1.as_(), 5.as_()]),
