@@ -560,17 +560,6 @@ fn build_forwards_or_backwards<W: Word, StepRet: IntoIterator<Item = State<W>>>(
                 graph.insert(output, &programs);
             }
         });
-        // let program = programs
-        //     .sample()
-        //     .expect("programs should not be empty here.");
-        // my_outputs.clear();
-        // dbg!(programs.len());
-        // for i in initial_states {
-        //     let mut my_output = i.clone();
-        //     step(&program, &mut my_output);
-        //     my_outputs.push(my_output);
-        // }
-        // graph.insert_all(&my_outputs, programs);
     });
 }
 
