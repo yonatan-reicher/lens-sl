@@ -1,7 +1,7 @@
+use crate::len::Len;
 use rustc_hash::FxHashMap;
 use std::fmt::Display;
 use std::hash::Hash;
-use crate::len::Len;
 
 pub trait Programs: Default + Len {
     type Program;
@@ -64,13 +64,11 @@ where
     pub fn depth(&self) -> Option<usize> {
         match self {
             Self::Leaf(_) => Some(0),
-            Self::Nest(hash_map) => {
-                hash_map
-                    .values()
-                    .filter_map(|sub_graph| sub_graph.depth())
-                    .max()
-                    .map(|d| d + 1)
-            }
+            Self::Nest(hash_map) => hash_map
+                .values()
+                .filter_map(|sub_graph| sub_graph.depth())
+                .max()
+                .map(|d| d + 1),
         }
     }
 
@@ -117,14 +115,6 @@ where
                     let p = std::mem::replace(self, Graph::Nest(Default::default())).flatten();
                     *self = Self::Leaf(p);
                     return self.insert_all(outputs, progs);
-                    println!(
-                        "Graph depth: {:?}, outputs length: {}",
-                        self.depth(),
-                        outputs.len()
-                    );
-                    panic!(
-                        "Mismatched graph depth and outputs length: graph depth > outputs length"
-                    );
                 };
                 hash_map
                     .entry(output.clone())
