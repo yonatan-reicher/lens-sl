@@ -555,9 +555,9 @@ fn build_forwards_or_backwards<W: Word, StepRet: IntoIterator<Item = State<W>>>(
     let old_graph = std::mem::replace(graph, Graph::Nest(Default::default()));
     old_graph.for_each(&mut |programs| {
         programs.each(|program| {
+            let programs: Rc<Programs<W>> = Rc::new(program.iter().cloned().collect());
             for output in step(&program, input.clone()) {
-                let program: Programs<W> = program.iter().cloned().collect();
-                graph.insert(output, &Rc::new(program));
+                graph.insert(output, &programs);
             }
         });
         // let program = programs
