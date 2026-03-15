@@ -240,6 +240,8 @@ impl<S> IndexMut<Direction> for IoThreadState<S> {
     }
 }
 
+// How the TUI actually looks
+
 impl<S: Display> Display for IoThreadState<S> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         // Iteration 4. Phase Expand Forward.
