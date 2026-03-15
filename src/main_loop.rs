@@ -218,9 +218,9 @@ fn synthesize<WT: Word, W: Word + serde::de::DeserializeOwned>(
             globals.outputs.push(out);
         }
     }
+    tui.report_graph(Direction::Forward, &forward_graph);
+    tui.report_graph(Direction::Backward, &backward_graph);
     loop {
-        tui.report_graph(Direction::Forward, &forward_graph);
-        tui.report_graph(Direction::Backward, &backward_graph);
         tui.searching();
         for (i, inst) in Enumerator::new().into_iter(enumeration_info).enumerate() {
             tui.progress(i, globals.total_instructions);
@@ -240,13 +240,13 @@ fn synthesize<WT: Word, W: Word + serde::de::DeserializeOwned>(
             }
         }
         tui.progress(globals.total_instructions, globals.total_instructions);
+        tui.report_graph(Direction::Forward, &forward_graph);
+        tui.report_graph(Direction::Backward, &backward_graph);
         if globals.forward_length + globals.backward_length + 1 == original_length - 1 {
             return None;
         }
         let should_expand_forward = 3 * globals.backward_length + 1 >= globals.forward_length;
         let direction = Direction::from_is_forward(should_expand_forward);
-        tui.report_graph(Direction::Forward, &forward_graph);
-        tui.report_graph(Direction::Backward, &backward_graph);
         tui.expanding(direction);
         if should_expand_forward {
             expand_forward(
@@ -256,6 +256,7 @@ fn synthesize<WT: Word, W: Word + serde::de::DeserializeOwned>(
                 globals.total_instructions,
             );
             globals.forward_length += 1;
+            tui.report_graph(Direction::Forward, &forward_graph);
         } else {
             expand_backward(
                 &mut backward_graph,
@@ -265,6 +266,7 @@ fn synthesize<WT: Word, W: Word + serde::de::DeserializeOwned>(
                 &globals.backward_map,
             );
             globals.backward_length += 1;
+            tui.report_graph(Direction::Backward, &backward_graph);
         }
         // print_stats(&forward_graph, &backward_graph);
     }
