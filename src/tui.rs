@@ -149,6 +149,7 @@ struct IoThreadState<State> {
 struct GraphState {
     layers: Vec<LayerInfo>,
     n_progs: usize,
+    min_depth: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -249,26 +250,23 @@ impl<S: Display> Display for IoThreadState<S> {
         writeln!(f)?;
         // Lengths 3, 2.
         writeln!(f, "Lengths {}, {}.", self.forward_len, self.backward_len)?;
-        // Last message received Hello World.
-        writeln!(
-            f,
-            "Last message received {}",
-            self.last_msg.as_deref().unwrap_or("None")
-        )?;
+        writeln!(f)?;
         //   1      254     1024   52682
         //   · ───── · ───── · ───── ◆    1189402
         for d in [Direction::Forward, Direction::Backward] {
             let graph = &self[d];
             for l in graph.layers.iter() {
-                write!(f, "{:^5}   ", l.n_nodes)?;
+                write!(f, "{:^6}  ", l.n_nodes)?;
             }
             writeln!(f)?;
             write!(f, " ")?;
             for (i, _) in graph.layers.iter().enumerate() {
-                if i < graph.layers.len() - 1 {
-                    write!(f, " · ─────")?;
-                } else {
+                if i == graph.layers.len() - 1 {
                     writeln!(f, " ◆  {}", graph.n_progs)?;
+                } else if i == graph.min_depth {
+                    write!(f, " ◆ ─────")?;
+                } else {
+                    write!(f, " · ─────")?;
                 }
             }
         }
@@ -278,8 +276,8 @@ impl<S: Display> Display for IoThreadState<S> {
             let total_seconds = t.as_secs_f64();
             let total_minutes = t.as_secs() / 60;
             let seconds = total_seconds - total_minutes as f64 * 60.0;
-            let t = format!("{total_minutes}m {seconds}s");
-            writeln!(f, "  Iteration {i} Phase {p} - {}", t)?;
+            let t = format!("{total_minutes}m {seconds:.4}s");
+            writeln!(f, "  Iteration {i} Phase {:<15}   {}", p.to_string(), t)?;
         }
         writeln!(f)?;
         writeln!(f, "Counter Examples:")?;
@@ -288,6 +286,17 @@ impl<S: Display> Display for IoThreadState<S> {
             let o = o.to_string();
             writeln!(f, "  {i:<38} {o:<38}")?;
         }
+        writeln!(f)?;
+        writeln!(
+            f,
+            "Last message received {}.",
+            self.last_msg.as_deref().unwrap_or("None")
+        )?;
+        writeln!(
+            f,
+            "Total messages received {}.",
+            self.total_messages_received
+        )?;
         Ok(())
     }
 }
@@ -313,6 +322,7 @@ impl<'g, S, P: Len> From<&'g Graph<S, P>> for GraphState {
         let mut ret = GraphState {
             layers: vec![],
             n_progs: 0,
+            min_depth: usize::MAX,
         };
         recurse(g, &mut ret, 0);
         return ret;
@@ -325,6 +335,7 @@ impl<'g, S, P: Len> From<&'g Graph<S, P>> for GraphState {
             match g {
                 Graph::Leaf(p) => {
                     ret.n_progs += p.len();
+                    ret.min_depth = ret.min_depth.min(depth);
                 }
                 Graph::Nest(hash_map) => {
                     for sub_graph in hash_map.values() {
