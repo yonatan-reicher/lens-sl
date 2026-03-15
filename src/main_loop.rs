@@ -543,9 +543,7 @@ fn build_backward<W: Word>(graph: &mut Graph<W>, input: &State<W>, bm: &Backward
             }
             std::mem::swap(&mut states, &mut new_states);
             debug_assert!(new_states.is_empty());
-            debug_assert!(!states.is_empty());
         }
-        debug_assert!(!states.is_empty());
         states
     });
 }
