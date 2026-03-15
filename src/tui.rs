@@ -1,66 +1,67 @@
 use crate::Direction;
-use std::fmt::{self, Display, Formatter};
+use crate::len::Len;
+use derive_more::Display;
+use std::fmt::{self, Debug, Display, Formatter};
+use std::ops::{Index, IndexMut};
 use std::sync::mpsc::{Receiver, RecvError, Sender, channel};
 use std::thread::{JoinHandle as ThreadHandle, spawn as spawn_thread};
+use std::time::{Duration, Instant};
 
 // ====== The Interface ======
 
-pub trait DebugPrinter {
-    /// Called when reaching a leaf, a set of programs that pass all the current counter-examples.
-    fn visiting_leaf<T>(&self, n_programs: usize, action: impl FnOnce() -> T) -> T;
-    fn visiting_program<T>(&self, program: Vec<String>, action: impl FnOnce() -> T) -> T;
-    /// Called when building a part of the graph (calculating new outputs).
-    fn building_inner_node<T>(&self, n_programs: usize, action: impl FnOnce() -> T) -> T;
-    fn building_program(&self);
-    /// Called when reaching an inner node, which is associated with some input and holds the
-    /// sub-graphs and the outputs that all programs in each sub-graph gave.
-    fn visiting_inner_node<T>(&self, n_sub_graphs: usize, action: impl FnOnce() -> T) -> T;
+/// State - state of the ISA, from the graph
+pub trait TuiHook<Graph, State> {
+    // Phases
+    fn searching(&self);
+    fn expanding(&self, direction: Direction);
+    fn progress(&self, a: usize, b: usize);
+    // Graph
+    fn report_graph(&self, which_graph: Direction, graph: Graph);
     /// Called when expanding the graph by one instruction forward.
-    fn expanding<T>(&self, direction: Direction, action: impl FnOnce() -> T) -> T;
-    fn found_counter_example(&self, input: String, output: String);
+    fn found_counter_example(&self, input: State, output: State);
 }
 
 // ====== Null Implementation ======
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct EmptyDebugPrinter;
+pub struct NoTui;
 
 #[rustfmt::skip]
-impl DebugPrinter for EmptyDebugPrinter {
-    fn visiting_leaf<T>(&self, _: usize, f: impl FnOnce() -> T) -> T { f() }
-    fn visiting_program<T>(&self, _: Vec<String>, f: impl FnOnce() -> T) -> T { f() }
-    fn building_inner_node<T>(&self, _: usize, f: impl FnOnce() -> T) -> T { f() }
-    fn building_program(&self) {}
-    fn visiting_inner_node<T>(&self, _: usize, f: impl FnOnce() -> T) -> T { f() }
-    fn expanding<T>(&self, _: Direction, f: impl FnOnce() -> T) -> T { f() }
-    fn found_counter_example(&self, _: String, _: String) {}
+impl<G, S> TuiHook<G, S> for NoTui {
+    // Phases
+    fn searching(&self) {}
+    fn expanding(&self, _: Direction) {}
+    fn progress(&self, _: usize, _: usize) {}
+    // Graph
+    fn report_graph(&self, _: Direction, _: G) {}
+    /// Called when expanding the graph by one instruction forward.
+    fn found_counter_example(&self, _: S, _: S) {}
 }
 
 // ====== Actual Implementation ======
 
-pub struct DebugPrinterImpl {
+pub struct Tui<State> {
     _io_thread: ThreadHandle<()>,
-    channel: Sender<Msg>,
+    channel: Sender<Msg<State>>,
 }
 
 #[derive(Debug)]
-enum Msg {
-    VisitingLeaf { n_programs: usize },
-    DoneVisitingLeaf,
-    VisitingProgram(Vec<String>),
-    DoneVisitingProgram,
-    BuildingInnerNode { n_programs: usize },
-    BuildingProgram,
-    DoneBuildingInnerNode,
-    VisitingInnerNode { n_sub_graphs: usize },
-    DoneVisitingInnerNode,
-    Expanding(Direction),
-    DoneExpanding,
-    FoundCounterExample { input: String, output: String },
+enum Msg<State> {
+    // Phases
+    Searching(Instant),
+    Expanding(Direction, Instant),
+    Progress(usize, usize),
+    // Graph
+    GraphState(Direction, GraphState),
+    /// Called when expanding the graph by one instruction forward.
+    FoundCounterExample(State, State),
 }
 
-impl DebugPrinterImpl {
-    fn send(&self, msg: Msg) {
+impl<State> Tui<State> {
+    fn send(&self, msg: Msg<State>)
+    where
+        State: Debug,
+    {
         match self.channel.send(msg) {
             Ok(()) => (),
             Err(std::sync::mpsc::SendError(msg)) => {
@@ -74,7 +75,7 @@ impl DebugPrinterImpl {
     }
 }
 
-impl Default for DebugPrinterImpl {
+impl<State: Debug + Display + Send + 'static> Default for Tui<State> {
     fn default() -> Self {
         let (sender, receiver) = channel();
         let io_thread = spawn_thread(io_thread_main(receiver));
@@ -85,66 +86,42 @@ impl Default for DebugPrinterImpl {
     }
 }
 
-impl DebugPrinter for DebugPrinterImpl {
-    fn visiting_leaf<T>(&self, n_programs: usize, f: impl FnOnce() -> T) -> T {
-        self.send(Msg::VisitingLeaf { n_programs });
-        let r = f();
-        self.send(Msg::DoneVisitingLeaf);
-        r
+impl<Graph, State: Debug> TuiHook<Graph, State> for Tui<State>
+where
+    Graph: Into<GraphState>,
+{
+    // Phases
+    fn searching(&self) {
+        self.send(Msg::Searching(Instant::now()));
     }
-
-    fn visiting_program<T>(&self, program: Vec<String>, f: impl FnOnce() -> T) -> T {
-        self.send(Msg::VisitingProgram(program));
-        let r = f();
-        self.send(Msg::DoneVisitingProgram);
-        r
+    fn expanding(&self, direction: Direction) {
+        self.send(Msg::Expanding(direction, Instant::now()));
     }
-
-    fn building_inner_node<T>(&self, n_programs: usize, f: impl FnOnce() -> T) -> T {
-        self.send(Msg::BuildingInnerNode { n_programs });
-        let r = f();
-        self.send(Msg::DoneBuildingInnerNode);
-        r
+    fn progress(&self, a: usize, b: usize) {
+        self.send(Msg::Progress(a, b))
     }
-
-    fn building_program(&self) {
-        self.send(Msg::BuildingProgram);
+    // Graph
+    fn report_graph(&self, d: Direction, g: Graph) {
+        self.send(Msg::GraphState(d, g.into()));
     }
-
-    fn visiting_inner_node<T>(&self, n_sub_graphs: usize, f: impl FnOnce() -> T) -> T {
-        self.send(Msg::VisitingInnerNode { n_sub_graphs });
-        let r = f();
-        self.send(Msg::DoneVisitingInnerNode);
-        r
-    }
-
-    fn expanding<T>(&self, d: Direction, f: impl FnOnce() -> T) -> T {
-        self.send(Msg::Expanding(d));
-        let r = f();
-        self.send(Msg::DoneExpanding);
-        r
-    }
-
-    fn found_counter_example(&self, input: String, output: String) {
-        self.send(Msg::FoundCounterExample { input, output });
+    /// Called when expanding the graph by one instruction forward.
+    fn found_counter_example(&self, input: State, output: State) {
+        self.send(Msg::FoundCounterExample(input, output));
     }
 }
 
-fn io_thread_main(channel: Receiver<Msg>) -> impl FnOnce() {
+fn io_thread_main<State: Debug + Display>(channel: Receiver<Msg<State>>) -> impl FnOnce() {
     move || {
         let mut state = IoThreadState::default();
         let mut msg_queue = vec![];
         loop {
-            msg_queue.clear();
             get_all_messages_or_block(&channel, &mut msg_queue).unwrap_or_else(|err| {
                 panic!("{err}");
             });
-            let n_msgs_received = msg_queue.len();
-            for msg in &msg_queue {
+            for msg in msg_queue.drain(..) {
                 msg.run(&mut state)
             }
             clear_screen();
-            println!("{n_msgs_received} messages received.");
             // println!("Messages: {msg_queue:?}");
             println!("{state}");
             std::thread::sleep(std::time::Duration::from_secs_f64(0.16));
@@ -152,121 +129,163 @@ fn io_thread_main(channel: Receiver<Msg>) -> impl FnOnce() {
     }
 }
 
-#[derive(Debug, Default)]
-struct IoThreadState {
+#[derive(Debug)]
+struct IoThreadState<State> {
+    pub iteration: usize,
+    pub phase: Option<(Phase, Instant)>,
+    pub progress: (usize, usize),
+    pub phases: Vec<(Phase, usize, Duration)>,
+    pub forward_graph: GraphState,
+    pub backward_graph: GraphState,
+    pub forward_len: usize,
+    pub backward_len: usize,
+    pub counter_examples: Vec<(State, State)>,
+    // Just for debugging
     pub total_messages_received: usize,
-    pub node_stack: Vec<InnerNodeInfo>,
-    pub leaf: Option<LeafInfo>,
-    pub expanding: Option<Direction>,
-    pub building: Option<(usize, usize)>,
-    pub counter_examples: Vec<(String, String)>,
-    pub forward_length: usize,
-    pub backward_length: usize,
-    pub program: Option<Vec<String>>,
     pub last_msg: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-struct InnerNodeInfo {
-    n_sub_graphs: usize,
-    /// Includes the currently visited sub-graph.
-    n_sub_graphs_visited: usize,
+#[derive(Debug, Default)]
+struct GraphState {
+    layers: Vec<LayerInfo>,
+    n_progs: usize,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-struct LeafInfo {
-    n_programs: usize,
+#[derive(Clone, Debug)]
+struct LayerInfo {
+    /// The amount of nodes in the layer.
+    n_nodes: usize,
 }
 
-impl Msg {
-    pub fn run(&self, state: &mut IoThreadState) {
+#[derive(Clone, Copy, Debug, Display, PartialEq, Eq, Hash)]
+pub enum Phase {
+    #[display("Search")]
+    Search,
+    #[display("Expand {_0}")]
+    Expand(Direction),
+}
+
+impl<State> Msg<State> {
+    pub fn run(self, state: &mut IoThreadState<State>)
+    where
+        State: Debug,
+    {
         state.total_messages_received += 1;
         state.last_msg = Some(format!("{self:?}"));
         match self {
-            &Msg::VisitingLeaf { n_programs } => {
-                state.leaf = Some(LeafInfo { n_programs });
-                if let Some(node) = state.node_stack.last_mut() {
-                    node.n_sub_graphs_visited += 1;
-                }
-            }
-            Msg::DoneVisitingLeaf => state.leaf = None,
-            Msg::VisitingProgram(p) => state.program = Some(p.clone()),
-            Msg::DoneVisitingProgram => state.program = None,
-            &Msg::BuildingInnerNode { n_programs } => state.building = Some((1, n_programs)),
-            Msg::BuildingProgram => {
-                if let Some((a, _)) = &mut state.building {
-                    *a += 1;
-                }
-            }
-            Msg::DoneBuildingInnerNode => state.building = None,
-            &Msg::VisitingInnerNode { n_sub_graphs } => {
-                if let Some(node) = state.node_stack.last_mut() {
-                    node.n_sub_graphs_visited += 1;
-                }
-                state.node_stack.push(InnerNodeInfo {
-                    n_sub_graphs,
-                    n_sub_graphs_visited: 0,
-                });
-            }
-            Msg::DoneVisitingInnerNode => {
-                state.node_stack.pop();
-            }
-            Msg::Expanding(dir) => {
-                state.node_stack.clear();
-                state.expanding = Some(*dir);
-                match dir {
-                    Direction::Forward => state.forward_length += 1,
-                    Direction::Backward => state.backward_length += 1,
-                }
-            }
-            Msg::DoneExpanding => state.expanding = None,
-            Msg::FoundCounterExample { input, output } => {
-                state.counter_examples.push((input.clone(), output.clone()));
+            Msg::Searching(t) => state.push_phase(Phase::Search, t),
+            Msg::Expanding(dir, t) => state.push_phase(Phase::Expand(dir), t),
+            Msg::Progress(a, b) => state.progress = (a, b),
+            Msg::GraphState(d, graph_state) => state[d] = graph_state,
+            Msg::FoundCounterExample(input, output) => {
+                state.counter_examples.push((input, output));
             }
         }
     }
 }
 
-impl Display for IoThreadState {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        writeln!(f)?;
-        writeln!(
-            f,
-            "Forward length is {}. Backward length is {}. Got {} messags so far.",
-            self.forward_length, self.backward_length, self.total_messages_received,
-        )?;
-        writeln!(
-            f,
-            "Last message received: {}",
-            self.last_msg.as_deref().unwrap_or("nothing")
-        )?;
-        match self.expanding {
-            Some(Direction::Forward) => writeln!(f, "Expanding forward...")?,
-            Some(Direction::Backward) => writeln!(f, "Expanding backward...")?,
-            None => (),
-        }
-        if let Some((a, b)) = self.building {
-            writeln!(f, "Building [{a}/{b}]")?;
-        }
-        for &InnerNodeInfo {
-            n_sub_graphs,
-            n_sub_graphs_visited,
-        } in &self.node_stack
-        {
-            writeln!(f, "◆ [{n_sub_graphs_visited}/{n_sub_graphs}]")?;
-        }
-        if let Some(LeafInfo { n_programs }) = self.leaf {
-            writeln!(f, "Looking at a leaf with {n_programs} programs.")?;
-        }
-        if let Some(program) = &self.program {
-            writeln!(f, "Looking at the program:")?;
-            for l in program {
-                writeln!(f, "  {l}")?;
+impl<State> IoThreadState<State> {
+    fn push_phase(&mut self, p: Phase, t: Instant) {
+        if let Some((prev_p, prev_t)) = self.phase {
+            let dur = t - prev_t;
+            self.phases.push((prev_p, self.iteration, dur));
+            match prev_p {
+                Phase::Search => (),
+                Phase::Expand(Direction::Forward) => self.forward_len += 1,
+                Phase::Expand(Direction::Backward) => self.backward_len += 1,
             }
+        }
+        self.phase = Some((p, t));
+        if p == Phase::Search {
+            self.iteration += 1;
+        }
+    }
+}
+
+impl<State> Default for IoThreadState<State> {
+    fn default() -> Self {
+        Self {
+            iteration: Default::default(),
+            phase: Default::default(),
+            progress: (0, 1),
+            phases: Default::default(),
+            forward_graph: Default::default(),
+            backward_graph: Default::default(),
+            forward_len: 0,
+            backward_len: 0,
+            counter_examples: Default::default(),
+            total_messages_received: Default::default(),
+            last_msg: Default::default(),
+        }
+    }
+}
+
+impl<S> Index<Direction> for IoThreadState<S> {
+    type Output = GraphState;
+    fn index(&self, d: Direction) -> &Self::Output {
+        match d {
+            Direction::Forward => &self.forward_graph,
+            Direction::Backward => &self.backward_graph,
+        }
+    }
+}
+
+impl<S> IndexMut<Direction> for IoThreadState<S> {
+    fn index_mut(&mut self, d: Direction) -> &mut Self::Output {
+        match d {
+            Direction::Forward => &mut self.forward_graph,
+            Direction::Backward => &mut self.backward_graph,
+        }
+    }
+}
+
+impl<S: Display> Display for IoThreadState<S> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        // Iteration 4. Phase Expand Forward.
+        write!(f, "Iteration {}.", self.iteration)?;
+        if let Some((p, _)) = self.phase {
+            write!(f, " Phase {p} [{}/{}].", self.progress.0, self.progress.1)?;
+        }
+        writeln!(f)?;
+        // Lengths 3, 2.
+        writeln!(f, "Lengths {}, {}.", self.forward_len, self.backward_len)?;
+        // Last message received Hello World.
+        writeln!(
+            f,
+            "Last message received {}",
+            self.last_msg.as_deref().unwrap_or("None")
+        )?;
+        //   1      254     1024   52682
+        //   · ───── · ───── · ───── ◆    1189402
+        for d in [Direction::Forward, Direction::Backward] {
+            let graph = &self[d];
+            for l in graph.layers.iter() {
+                write!(f, "{:^5}   ", l.n_nodes)?;
+            }
+            writeln!(f)?;
+            write!(f, " ")?;
+            for (i, _) in graph.layers.iter().enumerate() {
+                if i < graph.layers.len() - 1 {
+                    write!(f, " · ─────")?;
+                } else {
+                    writeln!(f, " ◆  {}", graph.n_progs)?;
+                }
+            }
+        }
+        writeln!(f)?;
+        writeln!(f, "Times:")?;
+        for (p, i, t) in &self.phases {
+            let total_seconds = t.as_secs_f64();
+            let total_minutes = t.as_secs() / 60;
+            let seconds = total_seconds - total_minutes as f64 * 60.0;
+            let t = format!("{total_minutes}m {seconds}s");
+            writeln!(f, "  Iteration {i} Phase {p} - {}", t)?;
         }
         writeln!(f)?;
         writeln!(f, "Counter Examples:")?;
         for (i, o) in &self.counter_examples {
+            let i = i.to_string();
+            let o = o.to_string();
             writeln!(f, "  {i:<38} {o:<38}")?;
         }
         Ok(())
@@ -286,4 +305,33 @@ fn get_all_messages_or_block<T>(channel: &Receiver<T>, out: &mut Vec<T>) -> Resu
 fn clear_screen() {
     print!("{}[2J", 27 as char);
     print!("{esc}[2J{esc}[1;1H", esc = 27 as char);
+}
+
+use crate::graph::Graph;
+impl<'g, S, P: Len> From<&'g Graph<S, P>> for GraphState {
+    fn from(g: &'g Graph<S, P>) -> Self {
+        let mut ret = GraphState {
+            layers: vec![],
+            n_progs: 0,
+        };
+        recurse(g, &mut ret, 0);
+        return ret;
+
+        fn recurse<S, P: Len>(g: &Graph<S, P>, ret: &mut GraphState, depth: usize) {
+            if ret.layers.len() <= depth {
+                ret.layers.push(LayerInfo { n_nodes: 0 });
+            }
+            ret.layers[depth].n_nodes += 1;
+            match g {
+                Graph::Leaf(p) => {
+                    ret.n_progs += p.len();
+                }
+                Graph::Nest(hash_map) => {
+                    for sub_graph in hash_map.values() {
+                        recurse(sub_graph, ret, depth + 1)
+                    }
+                }
+            }
+        }
+    }
 }

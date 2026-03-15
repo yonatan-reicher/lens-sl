@@ -1,5 +1,5 @@
 #[allow(unused_imports)]
-use lens_sl::{DebugPrinterImpl, EmptyDebugPrinter};
+use lens_sl::{Tui, NoTui};
 #[allow(unused_imports)]
 use lens_sl::{Register, Word64, Word8, Word4, inst, optimize};
 
@@ -26,7 +26,7 @@ fn main() {
             &[(Register(0), 93), (Register(1), 1)],
             &[(Register(0), 92), (Register(1), 11)],
         ],
-        &DebugPrinterImpl::default(),
+        &Tui::default(),
         // &EmptyDebugPrinter,
     );
     let Some(p) = p else {

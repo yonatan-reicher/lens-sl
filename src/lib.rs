@@ -59,9 +59,9 @@ mod pretty_print;
 
 #[derive(Clone, Copy, Debug, derive_more::Display, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Direction {
-    #[display("forward")]
+    #[display("Forward")]
     Forward,
-    #[display("backward")]
+    #[display("Backward")]
     Backward,
 }
 
@@ -81,4 +81,4 @@ impl Direction {
 pub use isa::{BackwardMap, CondCode, Flags, FlagsBitField, Inst, OpCode, Register, State};
 pub use main_loop::optimize;
 pub use word::{Word, Word4, Word8, Word64};
-pub use tui::{DebugPrinter, EmptyDebugPrinter, DebugPrinterImpl};
+pub use tui::{TuiHook, NoTui, Tui};
