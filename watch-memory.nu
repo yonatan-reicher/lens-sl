@@ -5,10 +5,11 @@
 loop {
     let x = ps
         | sort-by mem --reverse
-        | where name in [lens-sl, cvc5]
+        # | where name in [lens-sl, cvc5]
+        | where name in [lens-sl]
         | group-by name
         | update cells { reject name ppid virtual }
     clear
-    $x | table --expand | print
+    $x | table --expand -d 5 --theme none | print
     sleep 0.2sec
 }
