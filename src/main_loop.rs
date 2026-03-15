@@ -500,8 +500,7 @@ fn expand_forward_or_backward<W: Word, StepRet: IntoIterator<Item = State<W>>>(
             Graph::Leaf(programs) if programs.is_empty() => (),
             Graph::Leaf(programs) => {
                 let programs = Rc::new(programs.clone().concat(inst));
-                // new_graph.insert_all(out_states, programs);
-                new_graph.insert_all(&[], &programs);
+                new_graph.insert_all(out_states, &programs);
             }
             // Graph::Leaf(programs) => debug_printer.visiting_leaf(programs.len(), || {
             //     // TODO: remove this clone somehow!
