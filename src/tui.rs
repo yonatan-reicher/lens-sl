@@ -286,7 +286,7 @@ impl<S: Display> Display for IoThreadState<S> {
         for (i, o) in &self.counter_examples {
             let i = i.to_string();
             let o = o.to_string();
-            writeln!(f, "  {i:<38} {o:<38}")?;
+            writeln!(f, "  {i:<28} {o:<28}")?;
         }
         writeln!(f)?;
         writeln!(
