@@ -281,9 +281,9 @@ impl CondCode {
 /// This macro will let us define our ISA as a table.
 macro_rules! define_instructions {
     (
-        | OpCode | Arg 1 | Arg 2 | Arg 3 | String |
+        | OpCode | Arg 1 | Arg 2 | Arg 3 | String | Commutative |
         $(-)+
-        $( | $op_code:ident | $arg1:ident | $arg2:ident | $arg3:ident | $str:literal |)+
+        $( | $op_code:ident | $arg1:ident | $arg2:ident | $arg3:ident | $str:literal | $com:literal | )+
     ) => {
         /// The operation codes supported by our ISA.
         #[derive(Copy, Clone, Debug, derive_more::Display, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -315,24 +315,30 @@ macro_rules! define_instructions {
 
             /// The number of op-codes.
             pub const COUNT: u8 = Self::ALL.len() as u8;
+
+            pub fn commutative(&self) -> bool {
+                match self {
+                    $( OpCode::$op_code => $com, )+
+                }
+            }
         }
     };
 }
 
 define_instructions! {
-    | OpCode  | Arg 1  | Arg 2  | Arg 3  | String |
-    -----------------------------------------------
-    | Nop     | Unused | Unused | Unused | "nop"  |
-    | Add     | Reg    | Reg    | Reg    | "add"  |
-    | AddI    | Reg    | Reg    | Imm    | "add"  |
-    | Sub     | Reg    | Reg    | Reg    | "sub"  |
-    | SubI    | Reg    | Reg    | Imm    | "sub"  |
-    | And     | Reg    | Reg    | Reg    | "and"  |
-    | Eor     | Reg    | Reg    | Reg    | "eor"  |
-    | Mov     | Reg    | Reg    | Unused | "mov"  |
-    | MovI    | Reg    | Imm    | Unused | "mov"  |
-    | Mul     | Reg    | Reg    | Reg    | "mul"  |
-    | Orr     | Reg    | Reg    | Reg    | "orr"  |
+    | OpCode  | Arg 1  | Arg 2  | Arg 3  | String | Commutative |
+    -------------------------------------------------------------
+    | Nop     | Unused | Unused | Unused | "nop"  |    true     |
+    | Add     | Reg    | Reg    | Reg    | "add"  |    true     |
+    | AddI    | Reg    | Reg    | Imm    | "add"  |    false    |
+    | Sub     | Reg    | Reg    | Reg    | "sub"  |    false    |
+    | SubI    | Reg    | Reg    | Imm    | "sub"  |    false    |
+    | And     | Reg    | Reg    | Reg    | "and"  |    true     |
+    | Eor     | Reg    | Reg    | Reg    | "eor"  |    true     |
+    | Mov     | Reg    | Reg    | Unused | "mov"  |    false    |
+    | MovI    | Reg    | Imm    | Unused | "mov"  |    false    |
+    | Mul     | Reg    | Reg    | Reg    | "mul"  |    true     |
+    | Orr     | Reg    | Reg    | Reg    | "orr"  |    true     |
 }
 
 /// A number representing a register.
