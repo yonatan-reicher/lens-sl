@@ -245,7 +245,7 @@ fn synthesize<WT: Word, W: Word + serde::de::DeserializeOwned>(
         if globals.forward_length + globals.backward_length + 1 == original_length - 1 {
             return None;
         }
-        let should_expand_forward = 3 * globals.backward_length + 1 >= globals.forward_length;
+        let should_expand_forward = 2 * globals.backward_length >= globals.forward_length;
         let direction = Direction::from_is_forward(should_expand_forward);
         tui.expanding(direction);
         if should_expand_forward {
