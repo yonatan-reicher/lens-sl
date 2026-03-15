@@ -26,8 +26,7 @@ fn main() {
             &[(Register(0), 93), (Register(1), 1)],
             &[(Register(0), 92), (Register(1), 11)],
         ],
-        &Tui::default(),
-        // &EmptyDebugPrinter,
+        &Tui::default(), // */ &NoTui,
     );
     let Some(p) = p else {
         println!("No equivalent program found");
