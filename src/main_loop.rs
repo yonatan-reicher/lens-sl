@@ -502,12 +502,6 @@ fn expand_forward_or_backward<W: Word, StepRet: IntoIterator<Item = State<W>>>(
                 let programs = Rc::new(programs.clone().concat(inst));
                 new_graph.insert_all(out_states, &programs);
             }
-            // Graph::Leaf(programs) => debug_printer.visiting_leaf(programs.len(), || {
-            //     // TODO: remove this clone somehow!
-            //     let programs = Rc::new(programs.clone().concat(inst));
-            //     // new_graph.insert_all(out_states, programs);
-            //     new_graph.insert_all(&[], &programs);
-            // }),
             Graph::Nest(hash_map) => {
                 for (state, sub_graph) in hash_map.iter() {
                     for out_state in step(state.clone(), inst) {
