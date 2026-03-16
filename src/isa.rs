@@ -477,32 +477,16 @@ impl proptest::arbitrary::Arbitrary for FlagsBitField {
 pub struct State<W: Word> {
     /// This vector is always sorted by register. Registers that are zero are omitted.
     /// TODO: Change this!
-    pub registers: Vec<(Register, W::Unsigned)>,
     pub flags: FlagsBitField,
+    pub registers: [W::Unsigned; Register::COUNT as usize],
 }
 
 impl<W: Word> State<W> {
     pub fn get_register(&self, reg: Register) -> W::Unsigned {
-        for (r, v) in &self.registers {
-            if *r == reg {
-                return *v;
-            }
-        }
-        0.as_()
+        self.registers[reg.0 as usize]
     }
     pub fn set_register(&mut self, reg: Register, x: W::Unsigned) {
-        if x.is_zero() {
-            self.registers.retain(|(r, _)| *r != reg);
-            return;
-        }
-        for (r, v) in &mut self.registers {
-            if *r == reg {
-                *v = x;
-                return;
-            }
-        }
-        self.registers.push((reg, x));
-        self.registers.sort_by_key(|(r, _)| *r);
+        self.registers[reg.0 as usize] = x;
     }
     pub fn get_flags(&self) -> FlagsBitField {
         // self.flags.expect("Flags not set in state.")
@@ -515,23 +499,20 @@ impl<W: Word> State<W> {
     /// allocate more.
     #[inline]
     pub fn clone_to(&self, other: &mut Self) {
-        other.registers.clear();
-        other.registers.extend(&self.registers);
+        other.registers = self.registers;
         other.flags = self.flags;
     }
     pub fn reduce<WSmall: Word>(&self, reducer: &mut Reducer<W, WSmall>) -> State<WSmall> {
         State {
             registers: self
                 .registers
-                .iter()
-                .map(|(r, v)| (*r, reducer.reduce(*v, &Default::default())))
-                .collect(),
+                .map(|v| reducer.reduce(v, &Default::default())),
             flags: self.flags,
         }
     }
     #[inline]
     pub fn clear(&mut self) {
-        self.registers.clear();
+        self.registers = [0.as_(); _];
         self.flags = FlagsBitField::empty();
     }
 
@@ -593,7 +574,7 @@ impl<W: Word> Display for State<W> {
 impl<W: Word> collect_registers::State<W> for State<W> {
     fn registers(&self) -> impl Iterator<Item = (Register, W::Unsigned)> {
         Register::all().filter_map(|r| {
-            if self.registers.iter().any(|(r0, _)| *r0 == r) {
+            if !self.get_register(r).is_zero() {
                 Some((r, self.get_register(r)))
             } else {
                 None
@@ -896,7 +877,11 @@ impl<W: Word> std::ops::Index<(Inst<W>, State<W>)> for BackwardMap<W> {
 
     fn index(&self, (inst, mut state): (Inst<W>, State<W>)) -> &Self::Output {
         // Clear the registers that don't matter.
-        state.registers.retain(|(r, _)| self.registers.contains(r));
+        for r in Register::all() {
+            if !self.registers.contains(&r) {
+                state.set_register(r, 0.as_());
+            }
+        }
         self.map
             .get(&(inst, state))
             .map(|v| v.as_slice())
