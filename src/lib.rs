@@ -16,7 +16,7 @@ mod enumerate;
 mod oracle;
 /// This module collects registers that we consider for synthesis.
 mod collect_registers;
-mod debug_printer;
+mod tui;
 /// Main loop where the big picture stuff happens.
 mod main_loop;
 
@@ -58,9 +58,9 @@ mod len;
 
 #[derive(Clone, Copy, Debug, derive_more::Display, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Direction {
-    #[display("forward")]
+    #[display("Forward")]
     Forward,
-    #[display("backward")]
+    #[display("Backward")]
     Backward,
 }
 
@@ -80,4 +80,4 @@ impl Direction {
 pub use isa::{BackwardMap, CondCode, Flags, FlagsBitField, Inst, OpCode, Register, State};
 pub use main_loop::optimize;
 pub use word::{Word, Word4, Word8, Word64};
-pub use debug_printer::{DebugPrinter, EmptyDebugPrinter, DebugPrinterImpl};
+pub use tui::{TuiHook, NoTui, Tui};

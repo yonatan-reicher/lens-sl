@@ -1,7 +1,7 @@
+use crate::len::Len;
 use rustc_hash::FxHashMap;
 use std::fmt::Display;
 use std::hash::Hash;
-use crate::len::Len;
 
 pub trait Programs: Default + Len {
     type Program;
@@ -64,13 +64,11 @@ where
     pub fn depth(&self) -> Option<usize> {
         match self {
             Self::Leaf(_) => Some(0),
-            Self::Nest(hash_map) => {
-                hash_map
-                    .values()
-                    .filter_map(|sub_graph| sub_graph.depth())
-                    .max()
-                    .map(|d| d + 1)
-            }
+            Self::Nest(hash_map) => hash_map
+                .values()
+                .filter_map(|sub_graph| sub_graph.depth())
+                .max()
+                .map(|d| d + 1),
         }
     }
 
@@ -106,19 +104,17 @@ where
     pub fn insert_all(&mut self, outputs: &[S], progs: &P) {
         match self {
             Self::Leaf(programs) => {
-                debug_assert!(outputs.is_empty());
+                if !outputs.is_empty() && programs.is_empty() {
+                    *self = Self::Nest(FxHashMap::default());
+                    return self.insert_all(outputs, progs);
+                }
                 programs.extend(progs);
             }
             Self::Nest(hash_map) => {
                 let [output, rest @ ..] = outputs else {
-                    println!(
-                        "Graph depth: {:?}, outputs length: {}",
-                        self.depth(),
-                        outputs.len()
-                    );
-                    panic!(
-                        "Mismatched graph depth and outputs length: graph depth > outputs length"
-                    );
+                    let p = std::mem::replace(self, Graph::Nest(Default::default())).flatten();
+                    *self = Self::Leaf(p);
+                    return self.insert_all(outputs, progs);
                 };
                 hash_map
                     .entry(output.clone())
@@ -127,6 +123,23 @@ where
                         _ => Self::Nest(Default::default()),
                     })
                     .insert_all(rest, progs);
+            }
+        }
+    }
+
+    pub fn flatten(self) -> P {
+        match self {
+            Graph::Leaf(p) => p,
+            Graph::Nest(map) => {
+                let mut ret = None;
+                for sub_graph in map.into_values() {
+                    let p1 = sub_graph.flatten();
+                    match &mut ret {
+                        None => ret = Some(p1),
+                        Some(p) => p.extend(&p1),
+                    }
+                }
+                ret.unwrap()
             }
         }
     }

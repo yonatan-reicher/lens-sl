@@ -1,4 +1,4 @@
-use lens_sl::{EmptyDebugPrinter, Register, Word4, Word64, inst, optimize};
+use lens_sl::{NoTui, Register, Word4, Word64, inst, optimize};
 
 // These are ignored because they take a long time.
 
@@ -23,7 +23,7 @@ fn bad_case() {
             &[(Register(0), 0), (Register(3), 0)],
             &[(Register(0), 1), (Register(3), 0)],
         ],
-        &EmptyDebugPrinter,
+        &NoTui,
     );
     assert_eq!(p, None);
 }
@@ -40,7 +40,7 @@ fn bad_case_2() {
             inst!(AddI Eq, 1, 0, 1),
         ],
         &[&[(Register(0), 0), (Register(1), 0)]],
-        &EmptyDebugPrinter,
+        &NoTui,
     );
     assert_eq!(
         p,

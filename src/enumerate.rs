@@ -158,7 +158,9 @@ impl Enumerator {
         debug_assert_valid_enumeration_info(ei);
         if self.advance_arg(0, ei).is_none() {
             self.arg_indices[0] = 0;
-            if self.advance_arg(1, ei).is_none() {
+            if self.advance_arg(1, ei).is_none()
+                || (self.op_code.commutative() && self.arg_indices[1] > self.arg_indices[2])
+            {
                 self.arg_indices[1] = 0;
                 if self.advance_arg(2, ei).is_none() {
                     self.arg_indices[2] = 0;
@@ -220,6 +222,8 @@ impl<'a, W: Word> Iterator for Iter<'a, W> {
 
 #[cfg(test)]
 mod tests {
+    use crate::inst;
+
     use super::*;
     use proptest::prelude::*;
     use proptest::property_test;
@@ -331,5 +335,15 @@ mod tests {
         dbg!(&immediates);
         assert_eq!(registers.len(), Register::COUNT as usize);
         assert_eq!(immediates.len(), u4::MAX.as_::<u64>() as usize + 1);
+    }
+
+    #[test]
+    fn commutatives_are_half_trimmed() {
+        let v = to_vec(&EnumerationInfo::<Word4> {
+            registers: EnumerationInfoOptions::Unlimited,
+            immediates: EnumerationInfoOptions::Unlimited,
+        });
+        assert!(v.contains(&inst![Add, 1.as_(), 3.as_(), 5.as_()]));
+        assert!(!v.contains(&inst![Add, 1.as_(), 5.as_(), 3.as_()]));
     }
 }

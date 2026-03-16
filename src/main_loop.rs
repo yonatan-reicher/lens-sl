@@ -3,7 +3,6 @@
 
 use crate::Direction;
 use crate::collect_registers::Collector;
-use crate::debug_printer::DebugPrinter;
 use crate::enumerate::{EnumerationInfo, EnumerationInfoOptions, Enumerator};
 use crate::graph;
 use crate::isa::{
@@ -13,6 +12,7 @@ use crate::len::Len;
 use crate::oracle::{self, Oracle, SmtOracle};
 use crate::programs;
 use crate::reduce_bit_width::Reducer;
+use crate::tui::TuiHook;
 use crate::word::prelude::*;
 
 // std imports
@@ -118,7 +118,7 @@ impl<W: Word> oracle::smt::Inst for Inst<W> {
 pub fn optimize<WT: Word, WS: Word + serde::de::DeserializeOwned>(
     program: &[Inst<WT>],
     inputs: &[&[(Register, WT::Unsigned)]], // TODO: Return a program in Program<WT> instead...
-    print_debuger: &impl DebugPrinter,
+    tui: &impl for<'g> TuiHook<&'g Graph<WS>, State<WS>>,
 ) -> Option<Program<WT>> {
     let mut reducer = Reducer::<WT, WS>::default();
     let mut reduced_program = Vec::with_capacity(program.len());
@@ -173,7 +173,7 @@ pub fn optimize<WT: Word, WS: Word + serde::de::DeserializeOwned>(
         oracle_reduced,
         reducer,
         program.len(),
-        print_debuger,
+        tui,
     )
 }
 
@@ -186,7 +186,7 @@ fn synthesize<WT: Word, W: Word + serde::de::DeserializeOwned>(
     // The length of the original program.
     // In the future, this could be max_cost.
     original_length: usize,
-    debug_printer: &impl DebugPrinter,
+    tui: &impl for<'a> TuiHook<&'a Graph<W>, State<W>>,
 ) -> Option<Program<WT>> {
     // The forward and backward graphs start while having the empty program.
     let empty_program = Rc::new(Programs::empty_program());
@@ -204,21 +204,27 @@ fn synthesize<WT: Word, W: Word + serde::de::DeserializeOwned>(
         forward_length: 0,
         backward_length: 0,
         extender: reducer,
-        debug_printer,
+        tui,
         backward_map: BackwardMap::new(registers).unwrap(),
+        total_instructions: Enumerator::new().into_iter(enumeration_info).count(),
     };
     // Generate a first input
     println!("Checking empty program");
     match globals.oracle_reduced.check_program(&[]) {
         Ok(()) => return Some(vec![]), // Turns out it's actually the empty program 🤷
         Err((inp, out)) => {
-            debug_printer.found_counter_example(inp.to_string(), out.to_string());
+            tui.found_counter_example(inp.clone(), out.clone());
             globals.inputs.push(inp);
             globals.outputs.push(out);
         }
     }
+    tui.report_graph(Direction::Forward, &forward_graph);
+    tui.report_graph(Direction::Backward, &backward_graph);
     loop {
-        for inst in Enumerator::new().into_iter(enumeration_info) {
+        // ------------------------------ Search Phase --------------------------------------------
+        tui.searching();
+        for (i, inst) in Enumerator::new().into_iter(enumeration_info).enumerate() {
+            tui.progress(i, globals.total_instructions);
             let res = connect_and_refine::<WT, W>(
                 &mut globals,
                 &mut forward_graph,
@@ -234,26 +240,37 @@ fn synthesize<WT: Word, W: Word + serde::de::DeserializeOwned>(
                 ConnectAndRefineResult::Continue => {}
             }
         }
+        // ------------------------------ Expand Phase --------------------------------------------
+        tui.progress(globals.total_instructions, globals.total_instructions);
+        tui.report_graph(Direction::Forward, &forward_graph);
+        tui.report_graph(Direction::Backward, &backward_graph);
         if globals.forward_length + globals.backward_length + 1 == original_length - 1 {
             return None;
         }
-        let should_expand_forward = 3 * globals.backward_length + 3 >= globals.forward_length;
+        let should_expand_forward = 2 * globals.backward_length >= globals.forward_length;
         let direction = Direction::from_is_forward(should_expand_forward);
-        debug_printer.expanding(direction, || {
-            if should_expand_forward {
-                expand_forward(&mut forward_graph, enumeration_info, globals.debug_printer);
-                globals.forward_length += 1;
-            } else {
-                expand_backward(
-                    &mut backward_graph,
-                    enumeration_info,
-                    globals.debug_printer,
-                    &globals.backward_map,
-                );
-                globals.backward_length += 1;
-            }
-            // print_stats(&forward_graph, &backward_graph);
-        });
+        tui.expanding(direction);
+        if should_expand_forward {
+            expand_forward(
+                &mut forward_graph,
+                enumeration_info,
+                globals.tui,
+                globals.total_instructions,
+            );
+            globals.forward_length += 1;
+            tui.report_graph(Direction::Forward, &forward_graph);
+        } else {
+            expand_backward(
+                &mut backward_graph,
+                enumeration_info,
+                globals.tui,
+                globals.total_instructions,
+                &globals.backward_map,
+            );
+            globals.backward_length += 1;
+            tui.report_graph(Direction::Backward, &backward_graph);
+        }
+        // print_stats(&forward_graph, &backward_graph);
     }
 }
 
@@ -264,12 +281,12 @@ enum ConnectAndRefineResult<W: Word> {
 
 /// WT - word for the target program. WS - word for the synthesis process.
 struct Globals<
-    'debug_printer,
+    'tui,
     WT: Word,
     WS: Word,
     OT: Oracle<[Inst<WT>], State<WT>>,
     OS: Oracle<[Inst<WS>], State<WS>>,
-    DP: DebugPrinter,
+    TUI: for<'g> TuiHook<&'g Graph<WS>, State<WS>>,
 > {
     oracle: OT,
     /// The oracle that checks program in the reduced word size.
@@ -280,9 +297,11 @@ struct Globals<
     forward_length: usize,
     backward_length: usize,
     extender: Reducer<WT, WS>,
-    debug_printer: &'debug_printer DP,
+    tui: &'tui TUI,
     /// Stores data needed for running instructions backwards in time.
     backward_map: BackwardMap<WS>,
+    /// The total instructions we are enumerating
+    total_instructions: usize,
 }
 
 enum ProgramOrRetry<W: Word> {
@@ -297,7 +316,7 @@ fn connect_and_refine<WT: Word, WS: Word>(
         WS,
         impl Oracle<[Inst<WT>], State<WT>>,
         impl Oracle<[Inst<WS>], State<WS>>,
-        impl DebugPrinter,
+        impl for<'a> TuiHook<&'a Graph<WS>, State<WS>>,
     >,
     forward_graph: &mut Graph<WS>,
     backward_graph: &mut Graph<WS>,
@@ -305,19 +324,17 @@ fn connect_and_refine<WT: Word, WS: Word>(
     // This is the index of the input/output pair we are currently trying to connect.
     k: usize,
 ) -> ConnectAndRefineResult<WT> {
-    let debug_printer = globals.debug_printer;
+    let tui = globals.tui;
     if k > globals.inputs.len() {
         let mut counter_example_added = false;
         match (&forward_graph, &backward_graph) {
             (Graph::Leaf(prefixes), Graph::Leaf(postfixes)) => {
-                let n_programs = prefixes.len() * postfixes.len();
-                let ret = debug_printer.visiting_leaf(n_programs, || {
+                let ret = {
                     // We found a class of candidate programs.
                     // Try each one. If one works, return it. If none work, adds all counter-examples.
                     // First, make a buffer to hold the program.
                     let program_length = globals.forward_length + 1 + globals.backward_length;
-                    let mut program =
-                        Vec::with_capacity(program_length);
+                    let mut program = Vec::with_capacity(program_length);
                     prefixes.try_each(|prefix| {
                         debug_assert_eq!(prefix.len(), globals.forward_length);
                         postfixes.try_each(|postfix| {
@@ -327,8 +344,6 @@ fn connect_and_refine<WT: Word, WS: Word>(
                             program.extend(prefix.iter());
                             program.push(inst);
                             program.extend(postfix.iter());
-                            let s = program.iter().map(|i| format!("{i}")).collect();
-                            debug_printer.visiting_program(s, ||{
                             match globals.oracle_reduced.check_program(&program) {
                                 // Found!
                                 Ok(()) => extend_program_for_each(
@@ -345,9 +360,9 @@ fn connect_and_refine<WT: Word, WS: Word>(
                                     },
                                 ),
                                 Err((inp, out)) => {
-                                    debug_printer.found_counter_example(
-                                        inp.to_string(),
-                                        out.to_string(),
+                                    tui.found_counter_example(
+                                        inp.clone(),
+                                        out.clone(),
                                     );
                                     let mut actual = inp.clone();
                                     program.iter().for_each(|i| i.run(&mut actual));
@@ -362,10 +377,9 @@ fn connect_and_refine<WT: Word, WS: Word>(
                                     Break(ProgramOrRetry::Retry)
                                 }
                             }
-                            })
                         })
                     })
-                });
+                };
                 match ret {
                     Break(ProgramOrRetry::Program(prog)) => {
                         return ConnectAndRefineResult::Found(prog);
@@ -393,51 +407,40 @@ fn connect_and_refine<WT: Word, WS: Word>(
     }
 
     if matches!(forward_graph, Graph::Leaf(..)) {
-        build_forward(forward_graph, &globals.inputs[k - 1], debug_printer);
+        build_forward(forward_graph, &globals.inputs[k - 1]);
     }
 
     if matches!(backward_graph, Graph::Leaf(..)) {
         build_backward(
             backward_graph,
             &globals.outputs[k - 1],
-            debug_printer,
             &globals.backward_map,
         );
     }
 
-    globals
-        .debug_printer
-        .visiting_inner_node(forward_graph.n_children(), move || {
-            // Must be nests, because build_forwards/backwards always turn leaves into nests.
-            let Graph::Nest(forward_outputs) = forward_graph else {
-                panic!();
-            };
-            let Graph::Nest(backward_outputs) = backward_graph else {
-                panic!();
-            };
+    // Must be nests, because build_forwards/backwards always turn leaves into nests.
+    let Graph::Nest(forward_outputs) = forward_graph else {
+        panic!();
+    };
+    let Graph::Nest(backward_outputs) = backward_graph else {
+        panic!();
+    };
 
-            let mut next = State::default();
-            for (forward_output, forward_subgraph) in forward_outputs {
-                forward_output.clone_to(&mut next);
-                inst.run(&mut next);
-                if let Some(backward_subgraph) = backward_outputs.get_mut(&next) {
-                    let res = connect_and_refine(
-                        globals,
-                        forward_subgraph,
-                        backward_subgraph,
-                        inst,
-                        k + 1,
-                    );
-                    match res {
-                        ConnectAndRefineResult::Found(prog) => {
-                            return ConnectAndRefineResult::Found(prog);
-                        }
-                        ConnectAndRefineResult::Continue => {}
-                    }
+    let mut next = State::default();
+    for (forward_output, forward_subgraph) in forward_outputs {
+        forward_output.clone_to(&mut next);
+        inst.run(&mut next);
+        if let Some(backward_subgraph) = backward_outputs.get_mut(&next) {
+            let res = connect_and_refine(globals, forward_subgraph, backward_subgraph, inst, k + 1);
+            match res {
+                ConnectAndRefineResult::Found(prog) => {
+                    return ConnectAndRefineResult::Found(prog);
                 }
+                ConnectAndRefineResult::Continue => {}
             }
-            ConnectAndRefineResult::Continue
-        })
+        }
+    }
+    ConnectAndRefineResult::Continue
 }
 
 /// Go through each program prefix in the graph, and expand it by one
@@ -446,9 +449,10 @@ fn connect_and_refine<WT: Word, WS: Word>(
 fn expand_forward<W: Word>(
     graph: &mut Graph<W>,
     ei: &EnumerationInfo<W>,
-    debug_printer: &impl DebugPrinter,
+    tui: &impl for<'g> TuiHook<&'g Graph<W>, State<W>>,
+    total_inst: usize,
 ) {
-    expand_forward_or_backward(graph, ei, debug_printer, |mut state, inst| {
+    expand_forward_or_backward(graph, ei, tui, total_inst, |mut state, inst| {
         inst.run(&mut state);
         [state]
     })
@@ -457,10 +461,11 @@ fn expand_forward<W: Word>(
 fn expand_backward<W: Word>(
     graph: &mut Graph<W>,
     ei: &EnumerationInfo<W>,
-    debug_printer: &impl DebugPrinter,
+    tui: &impl for<'g> TuiHook<&'g Graph<W>, State<W>>,
+    total_inst: usize,
     bm: &BackwardMap<W>,
 ) {
-    expand_forward_or_backward(graph, ei, debug_printer, |state, inst| {
+    expand_forward_or_backward(graph, ei, tui, total_inst, |state, inst| {
         inst.run_backward(state, bm).into_iter().cloned()
     });
 }
@@ -468,7 +473,8 @@ fn expand_backward<W: Word>(
 fn expand_forward_or_backward<W: Word, StepRet: IntoIterator<Item = State<W>>>(
     graph: &mut Graph<W>,
     ei: &EnumerationInfo<W>,
-    debug_printer: &impl DebugPrinter,
+    tui: &impl for<'g> TuiHook<&'g Graph<W>, State<W>>,
+    total_inst: usize,
     step: impl Fn(State<W>, Inst<W>) -> StepRet,
 ) {
     // let old_graph = std::mem::replace(graph, Graph::Nest(Default::default()));
@@ -477,17 +483,12 @@ fn expand_forward_or_backward<W: Word, StepRet: IntoIterator<Item = State<W>>>(
     let mut out_states = vec![];
     // TODO: I think this would be faster if we iterate through the graph only once, and have this
     // for loop on each leaf. Or maybe, iterate on like a 100 instructions at once.
-    for inst in Enumerator::new().into_iter(ei) {
+    for (i, inst) in Enumerator::new().into_iter(ei).enumerate() {
+        tui.progress(i, total_inst);
         out_states.clear();
-        recurse(
-            &old_graph,
-            graph,
-            inst,
-            &mut out_states,
-            debug_printer,
-            &step,
-        );
+        recurse(&old_graph, graph, inst, &mut out_states, &step);
     }
+    tui.progress(total_inst, total_inst);
     debug_assert_ne!(graph.n_programs(), 0);
 
     fn recurse<W: Word, StepRet: IntoIterator<Item = State<W>>>(
@@ -495,41 +496,29 @@ fn expand_forward_or_backward<W: Word, StepRet: IntoIterator<Item = State<W>>>(
         new_graph: &mut Graph<W>,
         inst: Inst<W>,
         out_states: &mut Vec<State<W>>,
-        debug_printer: &impl DebugPrinter,
         step: &impl Fn(State<W>, Inst<W>) -> StepRet,
     ) {
         match old_graph {
             Graph::Leaf(programs) if programs.is_empty() => (),
             Graph::Leaf(programs) => {
                 let programs = Rc::new(programs.clone().concat(inst));
-                // new_graph.insert_all(out_states, programs);
-                new_graph.insert_all(&[], &programs);
+                new_graph.insert_all(out_states, &programs);
             }
-            // Graph::Leaf(programs) => debug_printer.visiting_leaf(programs.len(), || {
-            //     // TODO: remove this clone somehow!
-            //     let programs = Rc::new(programs.clone().concat(inst));
-            //     // new_graph.insert_all(out_states, programs);
-            //     new_graph.insert_all(&[], &programs);
-            // }),
-            Graph::Nest(hash_map) => debug_printer.visiting_inner_node(hash_map.len(), || {
+            Graph::Nest(hash_map) => {
                 for (state, sub_graph) in hash_map.iter() {
                     for out_state in step(state.clone(), inst) {
                         out_states.push(out_state);
-                        recurse(sub_graph, new_graph, inst, out_states, debug_printer, step);
+                        recurse(sub_graph, new_graph, inst, out_states, step);
                         out_states.pop();
                     }
                 }
-            }),
+            }
         }
     }
 }
 
-fn build_forward<W: Word>(
-    graph: &mut Graph<W>,
-    input: &State<W>,
-    debug_printer: &impl DebugPrinter,
-) {
-    build_forwards_or_backwards(graph, input, debug_printer, |program, mut state| {
+fn build_forward<W: Word>(graph: &mut Graph<W>, input: &State<W>) {
+    build_forwards_or_backwards(graph, input, |program, mut state| {
         for inst in program {
             inst.run(&mut state);
         }
@@ -537,13 +526,8 @@ fn build_forward<W: Word>(
     });
 }
 
-fn build_backward<W: Word>(
-    graph: &mut Graph<W>,
-    input: &State<W>,
-    debug_printer: &impl DebugPrinter,
-    bm: &BackwardMap<W>,
-) {
-    build_forwards_or_backwards(graph, input, debug_printer, |program, output| {
+fn build_backward<W: Word>(graph: &mut Graph<W>, input: &State<W>, bm: &BackwardMap<W>) {
+    build_forwards_or_backwards(graph, input, |program, output| {
         // A vector of reaching states, that we push backwards in time, one instruction at a time.
         let mut states = vec![output];
         let mut new_states = vec![];
@@ -555,9 +539,7 @@ fn build_backward<W: Word>(
             }
             std::mem::swap(&mut states, &mut new_states);
             debug_assert!(new_states.is_empty());
-            debug_assert!(!states.is_empty());
         }
-        debug_assert!(!states.is_empty());
         states
     });
 }
@@ -565,36 +547,20 @@ fn build_backward<W: Word>(
 fn build_forwards_or_backwards<W: Word, StepRet: IntoIterator<Item = State<W>>>(
     graph: &mut Graph<W>,
     input: &State<W>,
-    debug_printer: &impl DebugPrinter,
     step: impl Fn(&Program<W>, State<W>) -> StepRet,
 ) {
     debug_assert!(matches!(graph, Graph::Leaf(..)));
-    let n = graph.n_programs();
-    debug_printer.building_inner_node(n, || {
-        // Rebuild the graph.
-        // TODO: We can probably avoid completely rebuilding by just removing and adding programs on
-        // the same data-structure. This would reduce allocations, but you need to mark which programs
-        // have been visited, or store them in a list.
-        let old_graph = std::mem::replace(graph, Graph::Nest(Default::default()));
-        old_graph.for_each(&mut |programs| {
-            programs.each(|program| {
-                debug_printer.building_program();
-                for output in step(&program, input.clone()) {
-                    let program: Programs<W> = program.iter().cloned().collect();
-                    graph.insert(output, &Rc::new(program));
-                }
-            });
-            // let program = programs
-            //     .sample()
-            //     .expect("programs should not be empty here.");
-            // my_outputs.clear();
-            // dbg!(programs.len());
-            // for i in initial_states {
-            //     let mut my_output = i.clone();
-            //     step(&program, &mut my_output);
-            //     my_outputs.push(my_output);
-            // }
-            // graph.insert_all(&my_outputs, programs);
+    // Rebuild the graph.
+    // TODO: We can probably avoid completely rebuilding by just removing and adding programs on
+    // the same data-structure. This would reduce allocations, but you need to mark which programs
+    // have been visited, or store them in a list.
+    let old_graph = std::mem::replace(graph, Graph::Nest(Default::default()));
+    old_graph.for_each(&mut |programs| {
+        programs.each(|program| {
+            let programs: Rc<Programs<W>> = Rc::new(program.iter().cloned().collect());
+            for output in step(&program, input.clone()) {
+                graph.insert(output, &programs);
+            }
         });
     });
 }
@@ -608,7 +574,7 @@ fn has_counter_example_been_seen<WT: Word, WS: Word>(
         WS,
         impl Oracle<[Inst<WT>], State<WT>>,
         impl Oracle<[Inst<WS>], State<WS>>,
-        impl DebugPrinter,
+        impl for<'g> TuiHook<&'g Graph<WS>, State<WS>>,
     >,
     inp: &State<WS>,
     out: &State<WS>,
