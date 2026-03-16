@@ -221,6 +221,7 @@ fn synthesize<WT: Word, W: Word + serde::de::DeserializeOwned>(
     tui.report_graph(Direction::Forward, &forward_graph);
     tui.report_graph(Direction::Backward, &backward_graph);
     loop {
+        // ------------------------------ Search Phase --------------------------------------------
         tui.searching();
         for (i, inst) in Enumerator::new().into_iter(enumeration_info).enumerate() {
             tui.progress(i, globals.total_instructions);
@@ -239,6 +240,7 @@ fn synthesize<WT: Word, W: Word + serde::de::DeserializeOwned>(
                 ConnectAndRefineResult::Continue => {}
             }
         }
+        // ------------------------------ Expand Phase --------------------------------------------
         tui.progress(globals.total_instructions, globals.total_instructions);
         tui.report_graph(Direction::Forward, &forward_graph);
         tui.report_graph(Direction::Backward, &backward_graph);
