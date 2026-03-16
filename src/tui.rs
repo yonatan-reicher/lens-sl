@@ -149,6 +149,7 @@ struct IoThreadState<State> {
 struct GraphState {
     layers: Vec<LayerInfo>,
     n_progs: usize,
+    n_leaves: usize,
     min_depth: usize,
 }
 
@@ -264,7 +265,11 @@ impl<S: Display> Display for IoThreadState<S> {
             write!(f, " ")?;
             for (i, _) in graph.layers.iter().enumerate() {
                 if i == graph.layers.len() - 1 {
-                    writeln!(f, " ◆  {}", graph.n_progs)?;
+                    writeln!(
+                        f,
+                        " ◆    {} programs  {} leaves",
+                        graph.n_progs, graph.n_leaves
+                    )?;
                 } else if i == graph.min_depth {
                     write!(f, " ◆ ─────")?;
                 } else {
@@ -324,6 +329,7 @@ impl<'g, S, P: Len> From<&'g Graph<S, P>> for GraphState {
         let mut ret = GraphState {
             layers: vec![],
             n_progs: 0,
+            n_leaves: 0,
             min_depth: usize::MAX,
         };
         recurse(g, &mut ret, 0);
@@ -337,6 +343,7 @@ impl<'g, S, P: Len> From<&'g Graph<S, P>> for GraphState {
             match g {
                 Graph::Leaf(p) => {
                     ret.n_progs += p.len();
+                    ret.n_leaves += 1;
                     ret.min_depth = ret.min_depth.min(depth);
                 }
                 Graph::Nest(hash_map) => {
