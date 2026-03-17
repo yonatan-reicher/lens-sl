@@ -1,4 +1,3 @@
-use arbitrary_int::traits::Integer;
 use lens_sl::*;
 
 // This binary runs arm programs for us
@@ -10,12 +9,12 @@ type W = Word4;
 
 fn main() {
     let program: &[Inst<W>] = &[
-        inst!(AddI, 0.as_(), 0.as_(), 5.as_()),
-        inst!(Orr, 0.as_(), 1.as_(), 0.as_()),
+        inst!(AddI, 0, 0, 5),
+        inst!(Orr, 0, 1, 0),
     ];
     let mut initial_state = State::default();
-    initial_state.set_register(Register(0), 6.as_());
-    initial_state.set_register(Register(1), 13.as_());
+    initial_state.set_register(Register(0), 6.into());
+    initial_state.set_register(Register(1), 13.into());
     println!("Initial state: {initial_state}");
     let mut state = initial_state;
     let mut i = 0;

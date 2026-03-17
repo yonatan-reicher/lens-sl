@@ -1,5 +1,6 @@
 // Imports
 
+use crate::all::All;
 use crate::all_permutations::Iter as PermutationIter;
 use crate::bool::prelude::*;
 use crate::collect_registers;
@@ -12,11 +13,12 @@ use crate::word::prelude::*;
 use std::fmt::Debug;
 use std::ops::ControlFlow;
 
-use arbitrary_int::traits::Integer;
-
 // Derive macros
 use derive_more::Display;
 use serde::{Deserialize, Serialize};
+
+#[cfg(test)]
+use proptest::prelude::*;
 
 use rustc_hash::FxHashMap;
 
@@ -121,12 +123,7 @@ impl<'st> From<Flags<Const<'st, SmtBool<'st>>>> for Flags<SmtBool<'st>> {
 }
 
 impl<'st> Flags<SmtBool<'st>> {
-    fn update_from_add<W: Word>(
-        &mut self,
-        op1: W::SymbolicBitVec<'st>,
-        op2: W::SymbolicBitVec<'st>,
-        enabled: SmtBool<'st>,
-    ) {
+    fn update_from_add<W: SmtWord<'st>>(&mut self, op1: W, op2: W, enabled: SmtBool<'st>) {
         let sum = op1 + op2;
         self.z = enabled.if_then_else(sum.is_zero(), self.z);
         self.n = enabled.if_then_else(sum.is_negative(), self.n);
@@ -139,12 +136,7 @@ impl<'st> Flags<SmtBool<'st>> {
         );
     }
 
-    fn update_from_sub<W: Word>(
-        &mut self,
-        op1: W::SymbolicBitVec<'st>,
-        op2: W::SymbolicBitVec<'st>,
-        enabled: SmtBool<'st>,
-    ) {
+    fn update_from_sub<W: SmtWord<'st>>(&mut self, op1: W, op2: W, enabled: SmtBool<'st>) {
         let diff = op1.sub(op2);
         self.z = enabled.if_then_else(diff.is_zero(), self.z);
         self.n = enabled.if_then_else(diff.is_negative(), self.n);
@@ -162,40 +154,33 @@ impl<'st> Flags<SmtBool<'st>> {
 }
 
 impl Flags<bool> {
-    fn update_from_add<W: Word>(&mut self, op1: W::Unsigned, op2: W::Unsigned, enabled: bool) {
+    fn update_from_add<W: Word>(&mut self, op1: W, op2: W, enabled: bool) {
         if !enabled {
             return;
         }
-        let unsigned_sum = op1.wrapping_add(op2);
-        let signed_sum: W::Signed = unsigned_sum.as_();
-        self.z = unsigned_sum.is_zero();
-        self.n = signed_sum < 0.as_();
-        self.c = unsigned_sum < op1;
-        let signed_op1: W::Signed = op1.as_();
-        let signed_op2: W::Signed = op2.as_();
-        let both_positive = signed_op1 > 0.as_() && signed_op2 > 0.as_();
-        let both_negative = signed_op1 < 0.as_() && signed_op2 < 0.as_();
-        self.v =
-            (both_positive && signed_sum < signed_op1) || (both_negative && signed_sum > 0.as_());
+        let sum = op1 + op2;
+        self.z = sum.is_zero();
+        self.n = sum.signed_negative();
+        self.c = sum < op1;
+        let both_positive = op1.signed_positive() && op2.signed_positive();
+        let both_negative = op1.signed_negative() && op2.signed_negative();
+        self.v = (both_positive && sum.signed_lt(op1)) || (both_negative && sum.signed_positive());
     }
 
-    fn update_from_sub<W: Word>(&mut self, op1: W::Unsigned, op2: W::Unsigned, enabled: bool) {
+    fn update_from_sub<W: Word>(&mut self, op1: W, op2: W, enabled: bool) {
         if !enabled {
             return;
         }
-        let unsigned_diff = op1.wrapping_sub(op2);
-        let signed_diff: W::Signed = unsigned_diff.as_();
-        self.z = unsigned_diff.is_zero();
-        self.n = signed_diff < 0.as_();
+        let diff = op1 - op2;
+        self.z = diff.is_zero();
+        self.n = diff.signed_negative();
         self.c = op1 >= op2;
-        let signed_op1: W::Signed = op1.as_();
-        let signed_op2: W::Signed = op2.as_();
-        let op1_positive = signed_op1 > 0.as_();
-        let op2_negative = signed_op2 < 0.as_();
-        let op1_negative = signed_op1 < 0.as_();
-        let op2_positive = signed_op2 > 0.as_();
-        self.v = (op1_positive && op2_negative && signed_diff < 0.as_())
-            || (op1_negative && op2_positive && signed_diff > 0.as_());
+        let op1_positive = op1.signed_positive();
+        let op2_negative = op2.signed_negative();
+        let op1_negative = op1.signed_negative();
+        let op2_positive = op2.signed_positive();
+        self.v = (op1_positive && op2_negative && diff.signed_negative())
+            || (op1_negative && op2_positive && diff.signed_positive());
     }
 
     /// Contains all possible combinations of flags.
@@ -356,10 +341,19 @@ define_instructions! {
     Serialize,
     Deserialize,
 )]
-#[cfg_attr(test, derive(proptest_derive::Arbitrary))]
 #[debug("r{_0}")]
 #[display("r{_0}")]
-pub struct Register(pub u8);
+pub struct Register(pub u8); // TODO: Change to Word4
+
+#[cfg(test)]
+impl Arbitrary for Register {
+    type Parameters = ();
+    type Strategy = prop::strategy::Map<std::ops::Range<u8>, fn(u8) -> Register>;
+
+    fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
+        (0..Register::COUNT).prop_map(Register)
+    }
+}
 
 impl Register {
     /// TODO: Does Lens only use the regular 16 registers?
@@ -387,8 +381,14 @@ impl Register {
     ];
 }
 
+impl<W: Word> From<W> for Register {
+    fn from(x: W) -> Self {
+        Register(x.into_word::<Word8>().into())
+    }
+}
+
 /// A single instruction.
-#[derive(derive_more::Debug, derive_more::Display, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(derive_more::Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(test, derive(proptest_derive::Arbitrary))]
 #[debug("{op_code:?}{}{args:?}",
     match cond_code {
@@ -396,11 +396,10 @@ impl Register {
         _ => format!("{cond_code:?}"),
     }
 )]
-#[display("{}", self.to_string_impl())]
-pub struct Inst<W: Word> {
+pub struct Inst<W> {
     pub op_code: OpCode,
     pub cond_code: CondCode,
-    pub args: [W::Unsigned; 3],
+    pub args: [W; 3],
 }
 
 // Implementing `Clone` and `Copy` manually instead of by `derive` because `derive` adds
@@ -474,18 +473,18 @@ impl proptest::arbitrary::Arbitrary for FlagsBitField {
 // =========================================== State ==============================================
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct State<W: Word> {
+pub struct State<W> {
     /// This vector is always sorted by register. Registers that are zero are omitted.
     /// TODO: Change this!
     pub flags: FlagsBitField,
-    pub registers: [W::Unsigned; Register::COUNT as usize],
+    pub registers: [W; Register::COUNT as usize],
 }
 
-impl<W: Word> State<W> {
-    pub fn get_register(&self, reg: Register) -> W::Unsigned {
+impl<W: Copy> State<W> {
+    pub fn get_register(&self, reg: Register) -> W {
         self.registers[reg.0 as usize]
     }
-    pub fn set_register(&mut self, reg: Register, x: W::Unsigned) {
+    pub fn set_register(&mut self, reg: Register, x: W) {
         self.registers[reg.0 as usize] = x;
     }
     pub fn get_flags(&self) -> FlagsBitField {
@@ -502,7 +501,9 @@ impl<W: Word> State<W> {
         other.registers = self.registers;
         other.flags = self.flags;
     }
-    pub fn reduce<WSmall: Word>(&self, reducer: &mut Reducer<W, WSmall>) -> State<WSmall> {
+    pub fn reduce<WSmall: Word>(&self, reducer: &mut Reducer<W, WSmall>) -> State<WSmall>
+        where W: Word
+    {
         State {
             registers: self
                 .registers
@@ -511,12 +512,14 @@ impl<W: Word> State<W> {
         }
     }
     #[inline]
-    pub fn clear(&mut self) {
-        self.registers = [0.as_(); _];
+    pub fn clear(&mut self) where W: Default {
+        self.registers = [W::default(); _];
         self.flags = FlagsBitField::empty();
     }
 
-    pub fn all_each(ei: &EnumerationInfoOptions<Register>, mut f: impl FnMut(&Self)) {
+    pub fn all_each(ei: &EnumerationInfoOptions<Register>, mut f: impl FnMut(&Self))
+        where W: All + Default, W::Iter: Clone
+    {
         // fn or_none<T: Clone>(
         //     i: impl Clone + Iterator<Item = T>,
         // ) -> impl Clone + Iterator<Item = Option<T>> {
@@ -543,7 +546,7 @@ impl<W: Word> State<W> {
 impl<W: Word, F, I> From<(F, I)> for State<W>
 where
     F: Into<Flags>,
-    I: IntoIterator<Item = (Register, W::Unsigned)>,
+    I: IntoIterator<Item = (Register, W)>,
 {
     fn from((f, i): (F, I)) -> Self {
         let mut ret = Self::default();
@@ -572,7 +575,7 @@ impl<W: Word> Display for State<W> {
 }
 
 impl<W: Word> collect_registers::State<W> for State<W> {
-    fn registers(&self) -> impl Iterator<Item = (Register, W::Unsigned)> {
+    fn registers(&self) -> impl Iterator<Item = (Register, W)> {
         Register::all().filter_map(|r| {
             if !self.get_register(r).is_zero() {
                 Some((r, self.get_register(r)))
@@ -590,16 +593,16 @@ impl<W: Word> oracle::test_cases::State for State<W> {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct StateVars<'st, W: Word> {
-    pub registers: [Const<'st, W::SymbolicBitVec<'st>>; Register::COUNT as usize],
+pub struct StateVars<'st, W> {
+    pub registers: [Const<'st, W>; Register::COUNT as usize],
     pub flags: Flags<Const<'st, SmtBool<'st>>>,
 }
 
-impl<'st, W: Word> StateVars<'st, W> {
+impl<'st, W: SmtWord<'st>> StateVars<'st, W> {
     pub fn new(st: &'st Storage, name: &str) -> Self {
         Self {
             registers: std::array::from_fn(|i| {
-                W::SymbolicBitVec::new_const(st, &format!("{name}_r{i}"))
+                W::new_const(st, &format!("{name}_r{i}"))
             }),
             flags: Flags::new(st, name),
         }
@@ -617,14 +620,15 @@ impl<'st> Flags<Const<'st, SmtBool<'st>>> {
     }
 }
 
+// TODO: Unify with [State]
 #[derive(Clone, Copy, Debug)]
-pub struct SymbolicState<'st, W: Word> {
-    pub registers: [W::SymbolicBitVec<'st>; Register::COUNT as usize],
+pub struct SymbolicState<'st, W> {
+    pub registers: [W; Register::COUNT as usize],
     pub flags: Flags<SmtBool<'st>>,
     // TODO: Live mask
 }
 
-impl<'st, W: Word> From<StateVars<'st, W>> for SymbolicState<'st, W> {
+impl<'st, W: SmtWord<'st>> From<StateVars<'st, W>> for SymbolicState<'st, W> {
     fn from(value: StateVars<'st, W>) -> Self {
         Self {
             registers: value.registers.map(Into::into),
@@ -633,7 +637,7 @@ impl<'st, W: Word> From<StateVars<'st, W>> for SymbolicState<'st, W> {
     }
 }
 
-impl<'st, W: Word> SymbolicState<'st, W> {
+impl<'st, W: SmtWord<'st>> SymbolicState<'st, W> {
     pub fn eq(&self, other: Self) -> SmtBool<'st> {
         let regs = self.registers.iter().zip(other.registers);
         let regs_eq = regs
@@ -647,27 +651,20 @@ impl<'st, W: Word> SymbolicState<'st, W> {
 fn run_instruction<W: Word>(inst: &Inst<W>, state: &mut State<W>) {
     /// Get a register value.
     macro_rules! r {
-        ($i:literal u) => {{
+        ($i:literal) => {{
             debug_assert!($i < 3);
             debug_assert!(inst.op_code.arg_types()[$i] == ArgType::Reg);
-            let r = Register(inst.args[$i].as_());
+            let r = Register(inst.args[$i].into_word::<Word8>().into());
             state.get_register(r)
-        }};
-        ($i:literal i) => {{
-            let r: W::Signed = r![$i u].as_();
-            r
         }};
     }
     /// Set a register value.
     macro_rules! set {
-        (r![$i:literal u] <- $value:expr) => {{
+        (r![$i:literal] <- $value:expr) => {{
             debug_assert!($i < 3);
             debug_assert!(inst.op_code.arg_types()[$i] == ArgType::Reg);
-            let r = Register(inst.args[$i].as_());
+            let r = Register(inst.args[$i].into_word::<Word8>().into());
             state.set_register(r, $value)
-        }};
-        (r![$i:literal i] <- $value:expr) => {{
-            set!(r![$i u] <- $value.as_())
         }};
         (flags <- $f:ident( $($e:expr),* )) => {{
             let mut flags: Flags = state.get_flags().into();
@@ -677,11 +674,7 @@ fn run_instruction<W: Word>(inst: &Inst<W>, state: &mut State<W>) {
     }
     /// Get an immediate value.
     macro_rules! imm {
-        ($i:literal u) => { inst.args[$i] };
-        ($i:literal i) => {{
-            let i: W::Signed = imm![$i u].as_();
-            i
-        }};
+        ($i:literal) => { inst.args[$i] };
     }
 
     // Skip the instruction if it is skipped by the flags.
@@ -693,31 +686,32 @@ fn run_instruction<W: Word>(inst: &Inst<W>, state: &mut State<W>) {
     match inst.op_code {
         Nop => (),
         Add => {
-            set! { flags <- update_from_add(r![1 u], r![2 u]) };
-            set! { r![0 u] <- r![1 u].wrapping_add(r![2 u]) };
+            set! { flags <- update_from_add(r![1], r![2]) };
+            set! { r![0] <- r![1] + r![2] };
         }
         AddI => {
-            set! { flags <- update_from_add(r![1 u], imm![2 u]) };
-            set! { r![0 u] <- r![1 u].wrapping_add(imm![2 u]) };
+            set! { flags <- update_from_add(r![1], imm![2]) };
+            set! { r![0] <- r![1] + imm![2] };
         }
         Sub => {
-            set! { flags <- update_from_sub(r![1 u], r![2 u]) };
-            set! { r![0 u] <- r![1 u].wrapping_sub(r![2 u]) };
+            set! { flags <- update_from_sub(r![1], r![2]) };
+            set! { r![0] <- r![1] - r![2] };
         }
         SubI => {
-            set! { flags <- update_from_sub(r![1 u], imm![2 u]) };
-            set! { r![0 u] <- r![1 u].wrapping_sub(imm![2 u]) };
+            set! { flags <- update_from_sub(r![1], imm![2]) };
+            set! { r![0] <- r![1] - imm![2] };
         }
-        And => set!(r![0 u] <- r![1 u] & r![2 u]),
-        Eor => set!(r![0 u] <- r![1 u] ^ r![2 u]),
-        Mov => set!(r![0 u] <- r![1 u]),
-        MovI => set!(r![0 u] <- imm![1 u]),
-        Mul => set!(r![0 i] <- r![1 i].overflowing_mul(r![2 i]).0),
-        Orr => set!(r![0 u] <- r![1 u] | r![2 u]),
+        And => set!(r![0] <- r![1] & r![2]),
+        Eor => set!(r![0] <- r![1] ^ r![2]),
+        Mov => set!(r![0] <- r![1]),
+        MovI => set!(r![0] <- imm![1]),
+        // Mul => set!(r![0 i] <- r![1 i].overflowing_mul(r![2 i]).0),
+        Mul => set!(r![0] <- r![1] * r![2]),
+        Orr => set!(r![0] <- r![1] | r![2]),
     }
 }
 
-fn run_instruction_symbolic<W: Word>(inst: &Inst<W>, state: &mut SymbolicState<'_, W>) {
+fn run_instruction_symbolic<'st, W: Word>(inst: &Inst<W>, state: &mut SymbolicState<'st, W::SmtWord<'st>>) {
     let enabled = inst.cond_code.check(state.flags);
 
     /// Get a register value.
@@ -726,7 +720,7 @@ fn run_instruction_symbolic<W: Word>(inst: &Inst<W>, state: &mut SymbolicState<'
             state.registers[{
                 debug_assert!($i < 3);
                 debug_assert!(inst.op_code.arg_types()[$i] == ArgType::Reg);
-                let r = Register(inst.args[$i].as_());
+                let r = Register(inst.args[$i].into_word::<Word8>().into());
                 r.0 as usize
             }]
         };
@@ -734,12 +728,12 @@ fn run_instruction_symbolic<W: Word>(inst: &Inst<W>, state: &mut SymbolicState<'
     /// Set a register value. Also checks the condition code.
     macro_rules! set {
         (r![$i:literal] <- $e:expr) => {{ r![$i] = enabled.if_then_else($e, r![$i]); }};
-        (flags <- $f:ident($($e:expr),*)) => {{ state.flags.$f::<W>($($e),* , enabled); }};
+        (flags <- $f:ident($($e:expr),*)) => {{ state.flags.$f::<W::SmtWord<'st>>($($e),* , enabled); }};
     }
     /// Get an immediate value.
     macro_rules! imm {
         ($i:literal) => {
-            W::new_bit_vec(state.registers[0].st(), inst.args[$i])
+            inst.args[$i].into_smt_word(state.registers[0].st())
         };
     }
 
@@ -791,6 +785,7 @@ impl<W: Word> BackwardMap<W> {
     pub fn new(registers: &[Register]) -> std::io::Result<Self>
     where
         Self: Serialize + for<'a> Deserialize<'a>,
+        <W as All>::Iter: Clone
     {
         let file_path = std::path::Path::new(".").join(Self::file_name(registers));
         if file_path.exists() {
@@ -813,7 +808,7 @@ impl<W: Word> BackwardMap<W> {
     pub fn file_name(registers: &[Register]) -> String {
         let mut ret = String::new();
         ret.push_str("backward-map-");
-        ret.push_str(&W::Unsigned::BITS.to_string());
+        ret.push_str(&W::BITS.to_string());
         ret.push_str("bit");
         for r in registers {
             ret.push_str(&format!("-{r}"));
@@ -840,7 +835,7 @@ impl<W: Word> BackwardMap<W> {
     }
 
     /// Build from scratch a new backwards behavior map.
-    pub fn new_recalculate(registers: &[Register]) -> Self {
+    pub fn new_recalculate(registers: &[Register]) -> Self where <W as All>::Iter: Clone {
         let mut ret = FxHashMap::default();
         let mut i = 0;
         let ei = EnumerationInfoOptions::Limited(registers);
@@ -879,7 +874,7 @@ impl<W: Word> std::ops::Index<(Inst<W>, State<W>)> for BackwardMap<W> {
         // Clear the registers that don't matter.
         for r in Register::all() {
             if !self.registers.contains(&r) {
-                state.set_register(r, 0.as_());
+                state.set_register(r, 0.into());
             }
         }
         self.map
@@ -889,12 +884,24 @@ impl<W: Word> std::ops::Index<(Inst<W>, State<W>)> for BackwardMap<W> {
     }
 }
 
+impl<W: Copy + Into<Register>> Inst<W> {
+    pub fn regs(&self) -> impl Iterator<Item = Register> {
+        let mut ret = vec![];
+        for (a, t) in self.args.iter().zip(self.op_code.arg_types()) {
+            if t == ArgType::Reg {
+                ret.push(a.clone().into());
+            }
+        }
+        ret.into_iter()
+    }
+}
+
 impl<W: Word> Inst<W> {
     pub fn run(&self, state: &mut State<W>) {
         run_instruction(self, state)
     }
 
-    pub fn run_symbolic(&self, state: &mut SymbolicState<'_, W>) {
+    pub fn run_symbolic<'st>(&self, state: &mut SymbolicState<'st, W::SmtWord<'st>>) {
         run_instruction_symbolic(self, state)
     }
 
@@ -906,38 +913,16 @@ impl<W: Word> Inst<W> {
         &bm[(*self, state)]
     }
 
-    fn to_string_impl(self) -> String {
-        let Inst {
-            op_code,
-            cond_code,
-            args,
-        } = self;
-        let args = args
-            .iter()
-            .zip(op_code.arg_types())
-            .map(|(arg, arg_type)| match arg_type {
-                ArgType::Reg => format!("r{arg}"),
-                ArgType::Imm => format!("#{arg}"),
-                ArgType::Unused => "-".to_string(),
-            })
-            .collect::<Vec<_>>();
-        if cond_code == CondCode::Al {
-            format!("{op_code} {}, {}, {}", args[0], args[1], args[2])
-        } else {
-            format!("{op_code}{cond_code} {}, {}, {}", args[0], args[1], args[2])
-        }
-    }
-
     pub fn reduce<WSmall: Word>(&self, reducer: &mut Reducer<W, WSmall>) -> Inst<WSmall> {
         fn reduce_arg<W: Word, WSmall: Word>(
             reducer: &mut Reducer<W, WSmall>,
-            arg: W::Unsigned,
+            arg: W,
             arg_type: ArgType,
             info: &ImmediateInfo,
-        ) -> WSmall::Unsigned {
+        ) -> WSmall {
             match arg_type {
                 ArgType::Imm => reducer.reduce(arg, info),
-                ArgType::Reg | ArgType::Unused => arg.as_(),
+                ArgType::Reg | ArgType::Unused => arg.into_word(),
             }
         }
 
@@ -963,12 +948,12 @@ impl<W: Word> Inst<W> {
     ) -> impl Iterator<Item = Inst<WBig>> + Clone {
         fn extend_arg<WSmall: Word, WBig: Word>(
             reducer: &Reducer<WBig, WSmall>,
-            arg: WSmall::Unsigned,
+            arg: WSmall,
             arg_type: ArgType,
-        ) -> SliceOrSingle<'_, WBig::Unsigned> {
+        ) -> SliceOrSingle<'_, WBig> {
             match arg_type {
                 ArgType::Imm => reducer.extend(arg),
-                ArgType::Reg | ArgType::Unused => SliceOrSingle::Single(arg.as_()),
+                ArgType::Reg | ArgType::Unused => SliceOrSingle::Single(arg.into_word()),
             }
         }
         // If only we had do notation 🥹
@@ -984,17 +969,32 @@ impl<W: Word> Inst<W> {
             })
         })
     }
+}
 
-    pub fn regs(&self) -> impl Iterator<Item = Register> {
-        let mut ret = vec![];
-        for (a, t) in self.args.iter().zip(self.op_code.arg_types()) {
-            if t == ArgType::Reg {
-                ret.push(Register(a.as_()));
-            }
+impl<W: Display> Display for Inst<W> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        let Inst {
+            op_code,
+            cond_code,
+            args,
+        } = self;
+        let args = args
+            .iter()
+            .zip(op_code.arg_types())
+            .map(|(arg, arg_type)| match arg_type {
+                ArgType::Reg => format!("r{arg}"),
+                ArgType::Imm => format!("#{arg}"),
+                ArgType::Unused => "-".to_string(),
+            })
+            .collect::<Vec<_>>();
+        if *cond_code == CondCode::Al {
+            write!(f, "{op_code} {}, {}, {}", args[0], args[1], args[2])
+        } else {
+            write!(f, "{op_code}{cond_code} {}, {}, {}", args[0], args[1], args[2])
         }
-        ret.into_iter()
     }
 }
+
 
 /// A macro to create an instruction more easily.
 #[macro_export]
@@ -1006,9 +1006,9 @@ macro_rules! inst {
                 op_code: $crate::OpCode::$op_code,
                 cond_code: $crate::CondCode::$cond_code,
                 args: [
-                    *args_iter.get(0).unwrap_or(&Default::default()),
-                    *args_iter.get(1).unwrap_or(&Default::default()),
-                    *args_iter.get(2).unwrap_or(&Default::default()),
+                    args_iter.get(0).cloned().unwrap_or(0usize).into(),
+                    args_iter.get(1).cloned().unwrap_or(0usize).into(),
+                    args_iter.get(2).cloned().unwrap_or(0usize).into(),
                 ],
             }
         }
@@ -1049,7 +1049,7 @@ mod tests {
         let program: [Inst<Word64>; 2] = [inst!(AddI, 0, 1, 1242), inst!(Sub, 2, 0, 1)];
         let mut reducer = Reducer::<Word64, Word4>::default();
         // Add another constant that clashes with 1242 when reduced.
-        reducer.reduce(1242 + 16, &ImmediateInfo { is_shift: false });
+        reducer.reduce((1242 + 16usize).into(), &ImmediateInfo { is_shift: false });
         let mut programs = HashSet::new();
         let program_reduced = program.map(|inst| inst.reduce(&mut reducer));
         let _ = extend_program_for_each(&program_reduced, &reducer, |extended_program| {
@@ -1073,7 +1073,7 @@ mod tests {
     #[test]
     fn test_update_from_sub_zero() {
         let mut flags = Flags::<bool>::default();
-        flags.update_from_sub::<Word64>(5, 5, true);
+        flags.update_from_sub::<Word64>(5usize.into(), 5usize.into(), true);
         assert!(flags.z);
         assert!(!flags.n);
         assert!(flags.c); // no borrow
@@ -1083,7 +1083,7 @@ mod tests {
     #[test]
     fn test_update_from_sub_positive() {
         let mut flags = Flags::<bool>::default();
-        flags.update_from_sub::<Word64>(10, 3, true);
+        flags.update_from_sub::<Word64>(10usize.into(), 3usize.into(), true);
         assert!(!flags.z);
         assert!(!flags.n); // 7 is positive
         assert!(flags.c); // no borrow (10 >= 3)
@@ -1093,7 +1093,7 @@ mod tests {
     #[test]
     fn test_update_from_sub_negative() {
         let mut flags = Flags::<bool>::default();
-        flags.update_from_sub::<Word64>(3, 10, true);
+        flags.update_from_sub::<Word64>(3usize.into(), 10usize.into(), true);
         assert!(!flags.z);
         assert!(flags.n); // result is negative (wraps)
         assert!(!flags.c); // borrow occurred (3 < 10)
@@ -1105,7 +1105,7 @@ mod tests {
         // Positive - Negative = Negative (overflow)
         // For u8: 127 - (-128) = 127 - 128 (as unsigned) = 127 - 128 (wraps)
         let mut flags = Flags::<bool>::default();
-        flags.update_from_sub::<Word8>(127, 128, true); // 127 - (-128 as u8)
+        flags.update_from_sub::<Word8>(127usize.into(), 128usize.into(), true); // 127 - (-128 as u8)
         assert!(flags.n); // wrapped to negative
         assert!(flags.v); // overflow occurred
     }
@@ -1115,7 +1115,7 @@ mod tests {
         // Negative - Positive = Positive (overflow)
         // For u8: 128 (as -128 signed) - 1 = wraps to 127
         let mut flags = Flags::<bool>::default();
-        flags.update_from_sub::<Word8>(128, 1, true);
+        flags.update_from_sub::<Word8>(128usize.into(), 1usize.into(), true);
         assert!(!flags.n); // wrapped to positive
         assert!(flags.v); // overflow occurred
     }
@@ -1128,7 +1128,7 @@ mod tests {
             c: true,
             v: true,
         };
-        flags.update_from_sub::<Word64>(10, 3, false);
+        flags.update_from_sub::<Word64>(10usize.into(), 3usize.into(), false);
         // All flags should remain unchanged
         assert!(flags.z);
         assert!(flags.n);
@@ -1158,10 +1158,10 @@ mod tests {
     fn test_backward_map() {
         type W = Word4;
         let bm = BackwardMap::<W>::new_recalculate(&[Register(1)]);
-        let inst = inst!(AddI, 1.as_(), 1.as_(), 5.as_());
+        let inst: Inst<W> = inst!(AddI, 1, 1, 5);
         let mut output = State::<W>::default();
-        output.set_register(Register(1), 12.as_());
-        output.set_register(Register(2), 6.as_());
+        output.set_register(Register(1), 12.into());
+        output.set_register(Register(2), 6.into());
         output.set_flags(
             Flags {
                 z: false,
@@ -1185,8 +1185,8 @@ mod tests {
         let bm = BackwardMap::<W>::new_recalculate(&[Register(1)]);
         let inst = inst!(Nop,);
         let mut output = State::<W>::default();
-        output.set_register(Register(1), 12.as_());
-        output.set_register(Register(2), 6.as_());
+        output.set_register(Register(1), 12.into());
+        output.set_register(Register(2), 6.into());
         output.set_flags(
             Flags {
                 z: false,
@@ -1210,8 +1210,8 @@ mod tests {
         type W = Word4;
         let bm = BackwardMap::<W>::new(&[Register(0), Register(1)]).unwrap();
         let mut state = State::<W>::default();
-        state.set_register(Register(0), 15.as_());
-        state.set_register(Register(1), 15.as_());
+        state.set_register(Register(0), 15.into());
+        state.set_register(Register(1), 15.into());
         state.set_flags(
             Flags {
                 z: false,
@@ -1223,7 +1223,7 @@ mod tests {
         );
         let ei = EnumerationInfo {
             registers: EnumerationInfoOptions::Limited(&[Register(0), Register(1)]),
-            immediates: EnumerationInfoOptions::Limited(&[0.as_(), 1.as_(), 5.as_()]),
+            immediates: EnumerationInfoOptions::Limited(&[0.into(), 1.into(), 5.into()]),
         };
         for inst in Enumerator::new().into_iter(&ei) {
             let x = &bm[(inst, state.clone())];

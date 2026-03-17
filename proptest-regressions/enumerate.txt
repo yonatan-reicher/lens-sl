@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 4318f7498476b1031eb34fdbf3d3f0352fedfaae620ffe119a03d51c0f33f3bd # shrinks to AllRegistersAndImmediatesAppearArgs = AllRegistersAndImmediatesAppearArgs { registers: {}, immediates: {} }
+cc 8a8ad9360b0d1107aff5a64111506cecf4b66091b08779894a486960833fa6f3 # shrinks to AllRegistersAndImmediatesAppearArgs = AllRegistersAndImmediatesAppearArgs { registers: {r7}, immediates: {Word8(198), Word8(159), Word8(207), Word8(84), Word8(234), Word8(175), Word8(150), Word8(178), Word8(107), Word8(59), Word8(0), Word8(98), Word8(65), Word8(240), Word8(203), Word8(180), Word8(61), Word8(250), Word8(21), Word8(58), Word8(124), Word8(44), Word8(221), Word8(116), Word8(153), Word8(101), Word8(8), Word8(228), Word8(1), Word8(199), Word8(104), Word8(38), Word8(126), Word8(169), Word8(195), Word8(142), Word8(74), Word8(76), Word8(143)} }

@@ -13,15 +13,15 @@ fn bad_case() {
             inst!(And, 0, 3, 0),
         ],
         &[
-            &[(Register(0), 0), (Register(3), 0)],
-            &[(Register(0), 64), (Register(3), 0)],
-            &[(Register(0), 64), (Register(3), 124)],
-            &[(Register(0), 4), (Register(3), 24)],
-            &[(Register(0), 54), (Register(3), 24)],
-            &[(Register(0), 54), (Register(3), 34)],
-            &[(Register(0), 54), (Register(3), 34)],
-            &[(Register(0), 0), (Register(3), 0)],
-            &[(Register(0), 1), (Register(3), 0)],
+            &[(Register(0), 0.into()), (Register(3), 0.into())],
+            &[(Register(0), 64.into()), (Register(3), 0.into())],
+            &[(Register(0), 64.into()), (Register(3), 124.into())],
+            &[(Register(0), 4.into()), (Register(3), 24.into())],
+            &[(Register(0), 54.into()), (Register(3), 24.into())],
+            &[(Register(0), 54.into()), (Register(3), 34.into())],
+            &[(Register(0), 54.into()), (Register(3), 34.into())],
+            &[(Register(0), 0.into()), (Register(3), 0.into())],
+            &[(Register(0), 1.into()), (Register(3), 0.into())],
         ],
         &NoTui,
     );
@@ -39,7 +39,7 @@ fn bad_case_2() {
             inst!(Orr, 0, 0, 1),
             inst!(AddI Eq, 1, 0, 1),
         ],
-        &[&[(Register(0), 0), (Register(1), 0)]],
+        &[&[(Register(0), 0.into()), (Register(1), 0.into())]],
         &NoTui,
     );
     assert_eq!(

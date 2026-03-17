@@ -1,8 +1,8 @@
 use crate::isa::{ArgType, Inst, Register};
 use crate::word::prelude::*;
 
-pub trait State<W: Word> {
-    fn registers(&self) -> impl Iterator<Item = (Register, W::Unsigned)>;
+pub trait State<W> {
+    fn registers(&self) -> impl Iterator<Item = (Register, W)>;
 }
 
 /// Collects the registers and immediates that appear in a program or in test cases.
@@ -30,10 +30,10 @@ impl Collector {
         }
     }
 
-    fn arg<W: Word>(&mut self, arg: W::Unsigned, arg_type: ArgType) {
+    fn arg<W: Word>(&mut self, arg: W, arg_type: ArgType) {
         match arg_type {
             ArgType::Reg => {
-                let reg: Register = Register(arg.as_());
+                let reg = Register::from(arg);
                 if !self.registers.contains(&reg) {
                     self.registers.push(reg);
                 }

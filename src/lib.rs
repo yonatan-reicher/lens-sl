@@ -55,6 +55,7 @@ mod smtlib_utils;
 mod bool;
 /// Defines a trait for things which have length
 mod len;
+mod all;
 
 #[derive(Clone, Copy, Debug, derive_more::Display, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Direction {

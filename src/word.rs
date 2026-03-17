@@ -1,193 +1,243 @@
+//! Define an interface to generalize over different bit-widths and also over SMT bit-vectors.
+
+use crate::all::All;
+use crate::smtlib_utils::{BitVecExt, bit_vec_term_to_i128};
+#[cfg(test)]
+use proptest::prelude::*;
+use serde::{Deserialize, Serialize};
+use smtlib::terms::{IntoWithStorage, StaticSorted};
+use smtlib::{BitVec, Storage};
 use std::fmt::{Debug, Display};
 use std::hash::Hash;
 use std::ops::*;
 
-use arbitrary_int::traits::{Integer, SignedInteger, UnsignedInteger};
-use arbitrary_int::{i4, u4};
+// ========== The Traits =====================================================================
 
-use crate::smtlib_utils::{BitVecExt, bit_vec_term_to_i128};
-use smtlib::terms::{IntoWithStorage, StaticSorted};
-use smtlib::{BitVec, Storage};
-
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
-
-pub trait Word:
-    Sized + Clone + Copy + Debug + Default + PartialEq + Eq + PartialOrd + Ord + Hash + Serialize + /* DeserializeOwned + */ 'static
+/// A trait for unsigned integer types that have wrapping semantics.
+#[rustfmt::skip]
+pub trait Word
+    : AbstractWord
+    + All
+    + Debug
+    + Default
+    + Display
+    + Hash
+    + From<usize>
+    + From<i32> // Because int constants default to `i32`!
+    + Into<usize>
+    + Serialize
+    + Sized
+    + Sub<Output = Self> // Bit-vectors actually do not implement this, so we put this here
+    + PartialOrd
+    + Ord
+    // + DeserializeOwned
+    + 'static
 {
-    type Signed: Sized
-        + Debug
-        + Default
-        + Display
-        + Hash
-        + SignedInteger
-        + WordOps
-        + Serialize
-        + DeserializeOwned
-        + 'static;
-    type Unsigned: Sized
-        + Debug
-        + Default
-        + Display
-        + Hash
-        + UnsignedInteger
-        + WordOps
-        + Serialize
-        + DeserializeOwned
-        + 'static;
-
-    type SymbolicBitVec<'st>: Add<Output = Self::SymbolicBitVec<'st>>
-        + BitAnd<Output = Self::SymbolicBitVec<'st>>
-        + BitOr<Output = Self::SymbolicBitVec<'st>>
-        + BitXor<Output = Self::SymbolicBitVec<'st>>
-        + Clone
-        + Copy
-        + Debug
-        + Div<Output = Self::SymbolicBitVec<'st>>
-        + From<smtlib::terms::Const<'st, Self::SymbolicBitVec<'st>>>
-        + Into<smtlib::terms::Dynamic<'st>>
-        + IntoWithStorage<'st, Self::SymbolicBitVec<'st>>
-        + Mul<Output = Self::SymbolicBitVec<'st>>
-        + Neg<Output = Self::SymbolicBitVec<'st>>
-        + Not<Output = Self::SymbolicBitVec<'st>>
-        + Rem<Output = Self::SymbolicBitVec<'st>>
-        + Shl<Output = Self::SymbolicBitVec<'st>>
-        + Shr<Output = Self::SymbolicBitVec<'st>>
-        + StaticSorted<'st, Inner = Self::SymbolicBitVec<'st>>
-        + BitVecExt<'st>
-        // + TryInto<i64, Error: Debug> // This TryInto implementation is currently broken, so we use our own.
-        // + Sub<Output = Self::SymbolicBitVec<'st>> // For some reason, this is unimplemented.
-        + 'st;
-
-    fn new_bit_vec<'st>(st: &'st Storage, value: Self::Unsigned) -> Self::SymbolicBitVec<'st>;
-
-    fn bit_vec_try_into(value: Self::SymbolicBitVec<'_>) -> Option<Self::Unsigned>;
-
-    fn all() -> impl Clone + Iterator<Item = Self::Unsigned>;
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct Word64;
-impl Word for Word64 {
-    type Unsigned = u64;
-    type Signed = i64;
-    type SymbolicBitVec<'st> = BitVec<'st, 64>;
-
-    fn new_bit_vec<'st>(st: &'st Storage, value: u64) -> Self::SymbolicBitVec<'st> {
-        (value as i64).into_with_storage(st)
-    }
-
-    fn bit_vec_try_into(value: Self::SymbolicBitVec<'_>) -> Option<Self::Unsigned> {
-        bit_vec_term_to_i128(value).map(|i| i as _)
-    }
-
-    fn all() -> impl Clone + Iterator<Item = u64> {
-        0..=u64::MAX
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct Word8;
-impl Word for Word8 {
-    type Unsigned = u8;
-    type Signed = i8;
-    type SymbolicBitVec<'st> = BitVec<'st, 8>;
-
-    fn new_bit_vec<'st>(st: &'st Storage, value: u8) -> Self::SymbolicBitVec<'st> {
-        (value as i64).into_with_storage(st)
-    }
-
-    fn bit_vec_try_into(value: Self::SymbolicBitVec<'_>) -> Option<Self::Unsigned> {
-        bit_vec_term_to_i128(value).map(|i| i as _)
-    }
-
-    fn all() -> impl Clone + Iterator<Item = u8> {
-        0..=u8::MAX
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct Word4;
-impl Word for Word4 {
-    type Unsigned = u4;
-    type Signed = i4;
-    type SymbolicBitVec<'st> = BitVec<'st, 4>;
-
-    fn new_bit_vec<'st>(st: &'st Storage, value: u4) -> Self::SymbolicBitVec<'st> {
-        value.as_::<i64>().into_with_storage(st)
-    }
-
-    fn bit_vec_try_into(value: Self::SymbolicBitVec<'_>) -> Option<Self::Unsigned> {
-        bit_vec_term_to_i128(value).map(|i| i.as_())
-    }
-
-    fn all() -> impl Clone + Iterator<Item = u4> {
-        (0..=u4::MAX.as_::<u8>()).map(|x| x.as_())
-    }
-}
-
-pub trait WordOps: Sized {
+    fn into_smt_word<'st>(self, st: &'st Storage) -> Self::SmtWord<'st>;
+    fn into_word<W: Word>(self) -> W { Into::<usize>::into(self).into() }
     fn is_zero(&self) -> bool;
-    fn overflowing_mul(self, rhs: Self) -> (Self, bool);
-    fn wrapping_add(self, rhs: Self) -> Self;
-    fn wrapping_sub(self, rhs: Self) -> Self;
+    fn signed_lt(self, other: Self) -> bool;
+    fn signed_positive(&self) -> bool;
+    fn signed_negative(&self) -> bool;
+    const ZERO: Self;
+    const ONE: Self;
+    const MAX: Self;
 }
 
-macro_rules! define_word_ops {
-    ($t:ty) => {
-        #[rustfmt::skip]
-        impl WordOps for $t {
-            fn is_zero(&self) -> bool { *self == Integer::ZERO }
-            fn overflowing_mul(self, rhs: Self) -> (Self, bool) { self.overflowing_mul(rhs) }
-            fn wrapping_add(self, rhs: Self) -> Self { self.wrapping_add(rhs) }
-            fn wrapping_sub(self, rhs: Self) -> Self { self.wrapping_sub(rhs) }
+/// Abstracts over SMT bit-vectors.
+#[rustfmt::skip]
+pub trait SmtWord<'st>
+    : AbstractWord
+    + From<smtlib::terms::Const<'st, Self>>
+    + Into<smtlib::terms::Dynamic<'st>>
+    + IntoWithStorage<'st, Self>
+    + StaticSorted<'st, Inner = Self>
+    + BitVecExt<'st>
+    + 'st
+{
+    fn try_into_word(self) -> Option<Self::Word>;
+}
+
+/// Generic trait for as base for [Word] and [SmtWord].
+#[rustfmt::skip]
+pub trait AbstractWord
+    // General
+    : Clone
+    + Copy
+    + Debug
+    // Arithmetic
+    + Add<Output = Self>
+    // + Sub<Output = Self> // Bit-vectors actually do not implement this
+    + Div<Output = Self>
+    + Mul<Output = Self>
+    // Bitwise
+    + BitAnd<Output = Self>
+    + BitOr<Output = Self>
+    + BitXor<Output = Self>
+    + Not<Output = Self>
+    + Shl<Output = Self>
+    + Neg<Output = Self>
+    // + Rem<Output = Self>
+    // + Shr<Output = Self>
+{
+    // One of these shall equal `Self`.
+    type Word: Word;
+    type SmtWord<'st>: SmtWord<'st>;
+    const BITS: usize;
+}
+
+// ========== The Implementation ==================================================================
+
+macro_rules! impl_word {
+    ($name:ident($t:ty) bits $bits:literal signed $signed:ident mask $mask:literal) => {
+        #[derive(
+            Clone, Copy, Default,
+            derive_more::Debug, derive_more::Display,
+            Deserialize, Serialize,
+            PartialEq, Eq, Hash,
+            PartialOrd, Ord,
+        )]
+        #[debug("{_0:?}")]
+        #[display("{_0}")]
+        pub struct $name($t);
+
+        // ----- Behaviour -----
+
+        #[rustfmt::skip] impl From<usize> for $name { fn from(x: usize) -> Self { Self((x & $mask) as $t) } }
+        #[rustfmt::skip] impl From<$name> for usize { fn from(x: $name) -> usize { x.0 as usize } }
+        #[rustfmt::skip] impl From<$t> for $name { fn from(x: $t) -> Self { Self::from(x as usize) } }
+        #[rustfmt::skip] impl From<i32> for $name { fn from(x: i32) -> Self { Self::from(x as usize) } }
+        #[rustfmt::skip] impl From<$name> for $t { fn from(x: $name) -> $t { x.0 as $t } }
+
+        impl Word for $name {
+            fn into_smt_word<'st>(self, st: &'st Storage) -> Self::SmtWord<'st> {
+                (self.0 as i64).into_with_storage(st)
+            }
+
+            fn is_zero(&self) -> bool {
+                self.0 == 0
+            }
+
+            fn signed_positive(&self) -> bool {
+                // Check the MSB!
+                let msb = self.0 >> ($bits - 1);
+                msb == 0 && self.0 != 0
+            }
+
+            fn signed_negative(&self) -> bool {
+                let msb = self.0 >> ($bits - 1);
+                msb == 1
+            }
+
+            fn signed_lt(self, other: Self) -> bool {
+                match (self.signed_negative(), other.signed_negative()) {
+                    (false, false) => self < other,
+                    (true, true) => -self > -other,
+                    (false, true) => false,
+                    (true, false) => true,
+                }
+            }
+
+            const ZERO: $name = Self(0);
+            const ONE: $name = Self(1);
+            const MAX: $name = Self(<$t>::MAX & $mask as $t);
+        }
+
+        impl AbstractWord for $name {
+            type Word = Self;
+            type SmtWord<'st> = BitVec<'st, $bits>;
+            const BITS: usize = $bits;
+        }
+
+        // Arithmetic
+        impl_op!(Add for $name fn add(a, b) = Self::from(a.0.wrapping_add(b.0)));
+        impl_op!(Sub for $name fn sub(a, b) = Self::from(a.0.wrapping_sub(b.0)));
+        impl_op!(Div for $name fn div(a, b) = Self::from(a.0.wrapping_div(b.0)));
+        impl_op!(Mul for $name fn mul(a, b) = Self::from(a.0.wrapping_mul(b.0)));
+        impl_op!(Neg for $name fn neg(a) = !a + Self::ONE);
+        // // + Rem<Output = Self>
+        // Bitwise
+        impl_op!(BitAnd for $name fn bitand(a, b) = Self::from(a.0 & b.0));
+        impl_op!(BitOr  for $name fn bitor(a, b) = Self::from(a.0 | b.0));
+        impl_op!(BitXor for $name fn bitxor(a, b) = Self::from(a.0 ^ b.0));
+        impl_op!(Not    for $name fn not(a) = Self::from(!a.0));
+        impl_op!(Shl    for $name fn shl(a, b) = Self::from(a.0 << b.0));
+        impl_op!(Shr    for $name fn shr(a, b) = Self::from(a.0 >> b.0));
+
+        impl All for $name {
+            type Iter = std::iter::Map<std::ops::RangeInclusive<$t>, fn($t) -> $name>;
+            fn all() -> Self::Iter { (0..=Self::MAX.0).map(Self) }
+        }
+
+        #[cfg(test)]
+        impl Arbitrary for $name {
+            type Parameters = ();
+            type Strategy = proptest::arbitrary::Mapped<$t, $name>;
+
+            fn arbitrary_with((): ()) -> Self::Strategy {
+                any::<$t>().prop_map(Self::from)
+            }
+        }
+
+        // Also implement things for the bit vector!
+
+        impl<'st> SmtWord<'st> for BitVec<'st, $bits> {
+            fn try_into_word(self) -> Option<Self::Word> {
+                bit_vec_term_to_i128(self).map(|i| {
+                    let u = i as u128;
+                    Self::Word::from((u & $mask as u128) as $t)
+                })
+            }
+        }
+
+        impl<'st> AbstractWord for BitVec<'st, $bits> {
+            type Word = $name;
+            type SmtWord<'st1> = BitVec<'st1, $bits>;
+            const BITS: usize = $bits;
         }
     };
 }
-define_word_ops!(u4);
-define_word_ops!(i4);
-define_word_ops!(u8);
-define_word_ops!(i8);
-define_word_ops!(u64);
-define_word_ops!(i64);
+
+macro_rules! impl_op {
+    // One argument
+    ($trait:ident for $t:ident fn $f:ident($a:ident) = $e:expr) => {
+        impl $trait for $t {
+            type Output = Self;
+            fn $f(self) -> Self {
+                let $a = self;
+                $e
+            }
+        }
+    };
+    // Two arguments
+    ($trait:ident for $t:ident fn $f:ident($a:ident, $b:ident) = $e:expr) => {
+        impl $trait for $t {
+            type Output = Self;
+            fn $f(self, other: Self) -> Self {
+                let ($a, $b) = (self, other);
+                $e
+            }
+        }
+    };
+}
+
+impl_word!(Word4(u8)   bits 4  signed i8  mask 0x0F);
+impl_word!(Word8(u8)   bits 8  signed i8  mask 0xFF);
+impl_word!(Word64(u64) bits 64 signed i64 mask 0xFFFFFFFFFFFFFFFFusize);
 
 pub mod prelude {
     #[allow(unused_imports)]
-    pub use super::{Word, Word4, Word8, Word64, WordOps};
+    pub use super::{AbstractWord, SmtWord, Word, Word4, Word8, Word64};
     pub use crate::smtlib_utils::BitVecExt;
-    pub use arbitrary_int::prelude::*;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use proptest::prelude::*;
     use proptest::property_test;
 
-    fn any_u4() -> impl Strategy<Value = u4> {
-        proptest::num::u8::ANY.prop_map(|u| u.as_())
-    }
-
     #[property_test]
-    fn overflowing_add_u4_eq_add_i4(#[strategy = any_u4()] x: u4, #[strategy = any_u4()] y: u4) {
-        let (sum_u4, _overflow_u4) = x.overflowing_add(y);
-        let x_i4: i4 = x.as_();
-        let y_i4: i4 = y.as_();
-        let (sum_i4, _overflow_i4) = x_i4.overflowing_add(y_i4);
-        prop_assert_eq!(sum_u4, sum_i4.as_());
-    }
-
-    #[property_test]
-    fn overflowing_u4_always_overflows(
-        #[strategy = any_u4()] x: u4,
-        #[strategy = any_u4()] overflow_amount: u4,
-    ) {
-        prop_assume!(!overflow_amount.is_zero());
-        prop_assume!(overflow_amount < x);
-        let y = u32::from(overflow_amount).wrapping_sub(x.as_());
-        let y: u4 = y.as_();
-        println!("x: {}, y: {}, overflow_amount: {}", x, y, overflow_amount);
-        let (sum_u4, overflow_u4) = x.overflowing_add(y);
-        prop_assert!(overflow_u4);
-        prop_assert_eq!(sum_u4, overflow_amount);
+    fn word4_add_word4_eq_neg_neg_word4_sub_word4(x: Word4, y: Word4) {
+        prop_assert_eq!(x + y, -(-x - y));
     }
 }
