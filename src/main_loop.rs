@@ -2,6 +2,7 @@
 //! Here we have basically the code that you would see in the actual paper that describes Lens.
 
 use crate::Direction;
+use crate::all::All;
 use crate::collect_registers::Collector;
 use crate::enumerate::{EnumerationInfo, EnumerationInfoOptions, Enumerator};
 use crate::graph;
@@ -47,9 +48,9 @@ impl<W: Word> oracle::test_cases::Program<State<W>> for [Inst<W>] {
 impl<W: Word> oracle::smt::Inst for Inst<W> {
     type State = State<W>;
 
-    type StateVars<'st> = StateVars<'st, W>;
+    type StateVars<'st> = StateVars<'st, W::SmtWord<'st>>;
 
-    type SymbolicState<'st> = SymbolicState<'st, W>;
+    type SymbolicState<'st> = SymbolicState<'st, W::SmtWord<'st>>;
 
     fn new_state_vars<'st>(st: &'st smtlib::Storage, name: &str) -> Self::StateVars<'st> {
         StateVars::new(st, name)
@@ -70,7 +71,10 @@ impl<W: Word> oracle::smt::Inst for Inst<W> {
         self.run(s);
     }
 
-    fn extract_from_model<'st>(model: &smtlib::Model<'st>, s: StateVars<'st, W>) -> State<W> {
+    fn extract_from_model<'st>(
+        model: &smtlib::Model<'st>,
+        s: StateVars<'st, W::SmtWord<'st>>,
+    ) -> State<W> {
         // The state to return at the end.
         let st = s.registers[0].st();
         // == Registers ==
@@ -79,16 +83,18 @@ impl<W: Word> oracle::smt::Inst for Inst<W> {
             let reg = Register(i as u8);
             let val = model
                 .eval(*var)
-                .unwrap_or_else(|| W::new_bit_vec(st, 0.as_()))
-                .pipe(W::bit_vec_try_into)
+                .map(W::SmtWord::try_into_word)
+                .unwrap_or_else(|| Some(0.into()))
                 //.try_into()
                 .unwrap_or_else(|| {
                     panic!(
                         "Failed to convert variable '{var:?}' to the right type in model {model}."
                     )
-                })
-                .as_();
-            state.set_register(reg, val);
+                });
+            state.set_register(
+                reg,
+                val.into_word(), /* This is actually the same word type but whatever */
+            );
         }
         // == Flags ==
         let load_bool = |b| {
@@ -117,9 +123,12 @@ impl<W: Word> oracle::smt::Inst for Inst<W> {
 /// `WS` for word size of the synthesis process.
 pub fn optimize<WT: Word, WS: Word + serde::de::DeserializeOwned>(
     program: &[Inst<WT>],
-    inputs: &[&[(Register, WT::Unsigned)]], // TODO: Return a program in Program<WT> instead...
+    inputs: &[&[(Register, WT)]], // TODO: Return a program in Program<WT> instead...
     tui: &impl for<'g> TuiHook<&'g Graph<WS>, State<WS>>,
-) -> Option<Program<WT>> {
+) -> Option<Program<WT>>
+where
+    <WS as All>::Iter: Clone,
+{
     let mut reducer = Reducer::<WT, WS>::default();
     let mut reduced_program = Vec::with_capacity(program.len());
     for inst in program {
@@ -131,7 +140,10 @@ pub fn optimize<WT: Word, WS: Word + serde::de::DeserializeOwned>(
     let test_cases: Vec<(State<WT>, State<WT>)> = inputs
         .iter()
         .map(|input| {
-            let input = State::from((Flags::default(), input.iter().map(|(r, v)| (*r, v.as_()))));
+            let input = State::from((
+                Flags::default(),
+                input.iter().map(|(r, v)| (*r, v.into_word())),
+            ));
             let mut output = input.clone();
             for inst in program {
                 inst.run(&mut output);
@@ -156,7 +168,7 @@ pub fn optimize<WT: Word, WS: Word + serde::de::DeserializeOwned>(
     collector.program(program);
     collector.test_cases(&test_cases);
     let Collector { registers } = collector;
-    let immediates: Vec<WS::Unsigned> = reducer.immediates().chain([0.as_()]).collect();
+    let immediates: Vec<WS> = reducer.immediates().chain([0.into()]).collect();
 
     // let oracle = TestCasesOracle { test_cases };
     // let oracle_reduced = TestCasesOracle {
@@ -179,7 +191,7 @@ pub fn optimize<WT: Word, WS: Word + serde::de::DeserializeOwned>(
 
 fn synthesize<WT: Word, W: Word + serde::de::DeserializeOwned>(
     registers: &[Register],
-    immediates: &[W::Unsigned],
+    immediates: &[W],
     oracle: impl Oracle<[Inst<WT>], State<WT>>,
     oracle_reduced: impl Oracle<[Inst<W>], State<W>>,
     reducer: Reducer<WT, W>,
@@ -187,7 +199,10 @@ fn synthesize<WT: Word, W: Word + serde::de::DeserializeOwned>(
     // In the future, this could be max_cost.
     original_length: usize,
     tui: &impl for<'a> TuiHook<&'a Graph<W>, State<W>>,
-) -> Option<Program<WT>> {
+) -> Option<Program<WT>>
+where
+    <W as All>::Iter: Clone,
+{
     // The forward and backward graphs start while having the empty program.
     let empty_program = Rc::new(Programs::empty_program());
     let mut forward_graph = Graph::Leaf(empty_program.clone());
