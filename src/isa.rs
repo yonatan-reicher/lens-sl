@@ -889,7 +889,7 @@ impl<W: Copy + Into<Register>> Inst<W> {
         let mut ret = vec![];
         for (a, t) in self.args.iter().zip(self.op_code.arg_types()) {
             if t == ArgType::Reg {
-                ret.push(a.clone().into());
+                ret.push((*a).into());
             }
         }
         ret.into_iter()

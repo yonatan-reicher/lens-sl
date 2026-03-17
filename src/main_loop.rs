@@ -20,12 +20,8 @@ use crate::word::prelude::*;
 use std::ops::ControlFlow::{Break, Continue};
 use std::rc::Rc;
 
-// functionality
-use functionality::Pipe;
-
 // smt stuff!
 use crate::smtlib_utils::bool_term_to_bool;
-use smtlib::Sorted;
 
 // =========================================== Graph ==============================================
 
@@ -75,8 +71,6 @@ impl<W: Word> oracle::smt::Inst for Inst<W> {
         model: &smtlib::Model<'st>,
         s: StateVars<'st, W::SmtWord<'st>>,
     ) -> State<W> {
-        // The state to return at the end.
-        let st = s.registers[0].st();
         // == Registers ==
         let mut state = State::default();
         for (i, var) in s.registers.iter().enumerate() {
