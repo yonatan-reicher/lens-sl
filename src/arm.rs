@@ -11,6 +11,8 @@ use crate::word::prelude::*;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::ops::ControlFlow;
 
+// Derive macros
+use derive_more::From;
 use serde::{Deserialize, Serialize};
 
 #[cfg(test)]
@@ -22,15 +24,31 @@ use smtlib::prelude::*;
 
 // The actual code
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, From, PartialEq, Eq, Hash)]
 #[cfg_attr(test, derive(proptest_derive::Arbitrary))]
 pub enum ArgType {
-    /// Register
-    Reg,
+    /// A register
+    #[from]
+    Reg(RegArgType),
     /// Immediate value (number)
     Imm,
     /// This argument is unused.
     Unused,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(test, derive(proptest_derive::Arbitrary))]
+pub enum RegArgType {
+    // I like using 'Inp' instead of 'In' because it aligns with 'Out'
+    Inp,
+    Out,
+}
+
+impl ArgType {
+    /// Shorthand for `matches!(x, ArgType::Reg(..))`
+    pub fn is_reg(&self) -> bool {
+        matches!(self, ArgType::Reg(..))
+    }
 }
 
 /// In Arm, every instruction can be conditionally executed based on the state of the flags.
@@ -122,12 +140,18 @@ impl CondCode {
     }
 }
 
-/// This macro will let us define our ISA as a table.
+/// This macro will let us define our ISA as a table. Take a look at the use to below to see the
+/// syntax. Explanations of the columns:
+/// * OpCode - the name of the operation code, in Pascal Case.
+/// * Arg 1/2/3 - the `ArgType` of the argument.
+/// * String - the 3-letter name of the op-code in ARM syntax.
+/// * Commutative - if true, the order of the second and third arguments do not matter, only makes
+///   sense if the are of the same type.
 macro_rules! define_instructions {
     (
         | OpCode | Arg 1 | Arg 2 | Arg 3 | String | Commutative |
         $(-)+
-        $( | $op_code:ident | $arg1:ident | $arg2:ident | $arg3:ident | $str:literal | $com:literal | )+
+        $( | $op_code:ident | $arg1:ident $( ($subarg1:ident) )? | $arg2:ident $( ($subarg2:ident) )? | $arg3:ident $( ($subarg3:ident) )? | $str:literal | $com:literal | )+
     ) => {
         /// The operation codes supported by our ISA.
         #[derive(Copy, Clone, Debug, derive_more::Display, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -140,9 +164,11 @@ macro_rules! define_instructions {
         impl OpCode {
             /// Returns the argument types for this opcode.
             pub fn arg_types(&self) -> [ArgType; 3] {
+                use ArgType::*;
+                use RegArgType::*;
                 match self {
                     $( OpCode::$op_code =>
-                        [ArgType::$arg1, ArgType::$arg2, ArgType::$arg3], )+
+                        [$arg1 $( ($subarg1) )?, $arg2 $( ($subarg2) )?, $arg3 $( ($subarg3) )?], )+
                 }
             }
 
@@ -172,17 +198,17 @@ macro_rules! define_instructions {
 define_instructions! {
     | OpCode  | Arg 1  | Arg 2  | Arg 3  | String | Commutative |
     -------------------------------------------------------------
-    | Nop     | Unused | Unused | Unused | "nop"  |    true     |
-    | Add     | Reg    | Reg    | Reg    | "add"  |    true     |
-    | AddI    | Reg    | Reg    | Imm    | "add"  |    false    |
-    | Sub     | Reg    | Reg    | Reg    | "sub"  |    false    |
-    | SubI    | Reg    | Reg    | Imm    | "sub"  |    false    |
-    | And     | Reg    | Reg    | Reg    | "and"  |    true     |
-    | Eor     | Reg    | Reg    | Reg    | "eor"  |    true     |
-    | Mov     | Reg    | Reg    | Unused | "mov"  |    false    |
-    | MovI    | Reg    | Imm    | Unused | "mov"  |    false    |
-    | Mul     | Reg    | Reg    | Reg    | "mul"  |    true     |
-    | Orr     | Reg    | Reg    | Reg    | "orr"  |    true     |
+    | Nop     | Unused   | Unused   | Unused | "nop"  |    true     |
+    | Add     | Reg(Inp) | Reg(Out) | Reg(Inp) | "add"  |    true     |
+    | AddI    | Reg(Inp) | Reg(Out) | Imm    | "add"  |    false    |
+    | Sub     | Reg(Inp) | Reg(Out) | Reg(Inp) | "sub"  |    false    |
+    | SubI    | Reg(Inp) | Reg(Out) | Imm    | "sub"  |    false    |
+    | And     | Reg(Inp) | Reg(Out) | Reg(Inp) | "and"  |    true     |
+    | Eor     | Reg(Inp) | Reg(Out) | Reg(Inp) | "eor"  |    true     |
+    | Mov     | Reg(Inp) | Reg(Out) | Unused | "mov"  |    false    |
+    | MovI    | Reg(Inp) | Imm      | Unused | "mov"  |    false    |
+    | Mul     | Reg(Inp) | Reg(Out) | Reg(Inp) | "mul"  |    true     |
+    | Orr     | Reg(Inp) | Reg(Out) | Reg(Inp) | "orr"  |    true     |
 }
 
 /// A number representing a register.
@@ -281,7 +307,7 @@ fn run_instruction<W: Word>(inst: &Inst<W>, state: &mut State<W>) {
     macro_rules! r {
         ($i:literal) => {{
             debug_assert!($i < 3);
-            debug_assert!(inst.op_code.arg_types()[$i] == ArgType::Reg);
+            debug_assert!(inst.op_code.arg_types()[$i].is_reg());
             let r = Register(inst.args[$i].into_word::<Word8>().into());
             state.get_register(r)
         }};
@@ -290,7 +316,7 @@ fn run_instruction<W: Word>(inst: &Inst<W>, state: &mut State<W>) {
     macro_rules! set {
         (r![$i:literal] <- $value:expr) => {{
             debug_assert!($i < 3);
-            debug_assert!(inst.op_code.arg_types()[$i] == ArgType::Reg);
+            debug_assert!(inst.op_code.arg_types()[$i].is_reg());
             let r = Register(inst.args[$i].into_word::<Word8>().into());
             state.set_register(r, $value)
         }};
@@ -352,7 +378,7 @@ fn run_instruction_symbolic<'st, W: Word>(
         ($i:literal) => {
             state.registers[{
                 debug_assert!($i < 3);
-                debug_assert!(inst.op_code.arg_types()[$i] == ArgType::Reg);
+                debug_assert!(inst.op_code.arg_types()[$i].is_reg());
                 let r = Register(inst.args[$i].into_word::<Word8>().into());
                 r.0 as usize
             }]
@@ -524,7 +550,7 @@ impl<W: Copy + Into<Register>> Inst<W> {
     pub fn regs(&self) -> impl Iterator<Item = Register> {
         let mut ret = vec![];
         for (a, t) in self.args.iter().zip(self.op_code.arg_types()) {
-            if t == ArgType::Reg {
+            if t.is_reg() {
                 ret.push((*a).into());
             }
         }
@@ -558,7 +584,7 @@ impl<W: Word> Inst<W> {
         ) -> WSmall {
             match arg_type {
                 ArgType::Imm => reducer.reduce(arg, info),
-                ArgType::Reg | ArgType::Unused => arg.into_word(),
+                ArgType::Reg(..) | ArgType::Unused => arg.into_word(),
             }
         }
 
@@ -589,7 +615,7 @@ impl<W: Word> Inst<W> {
         ) -> SliceOrSingle<'_, WBig> {
             match arg_type {
                 ArgType::Imm => reducer.extend(arg),
-                ArgType::Reg | ArgType::Unused => SliceOrSingle::Single(arg.into_word()),
+                ArgType::Reg(..) | ArgType::Unused => SliceOrSingle::Single(arg.into_word()),
             }
         }
         // If only we had do notation 🥹
@@ -618,7 +644,7 @@ impl<W: Display> Display for Inst<W> {
             .iter()
             .zip(op_code.arg_types())
             .map(|(arg, arg_type)| match arg_type {
-                ArgType::Reg => format!("r{arg}"),
+                ArgType::Reg(..) => format!("r{arg}"),
                 ArgType::Imm => format!("#{arg}"),
                 ArgType::Unused => "-".to_string(),
             })
