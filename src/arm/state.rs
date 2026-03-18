@@ -67,6 +67,18 @@ bitflags::bitflags! {
     }
 }
 
+// ============================ Mask ============================
+
+/// A liveness mask. For each register, is it used or not. Has just one flag for the whole flags
+/// register (because flags are used and written to together).
+pub struct Mask<B = bool> {
+    pub registers: [B; Register::COUNT as usize],
+    pub flags: B,
+}
+
+/// [Mask], but compacted to a bit-field.
+pub struct BitMask(u32);
+
 // ============================ State impl ============================
 
 impl<W: Copy> State<W> {
