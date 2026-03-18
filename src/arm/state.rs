@@ -21,7 +21,7 @@ use smtlib::terms::Const;
 
 // ============================= State =============================
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct State<W> {
     /// This vector is always sorted by register. Registers that are zero are omitted.
     /// TODO: Change this!

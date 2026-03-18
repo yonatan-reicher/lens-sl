@@ -522,9 +522,9 @@ impl<W: Word> BackwardMap<W> {
                 input.clone_to(&mut output);
                 inst.run(&mut output);
                 // Store!
-                let inputs = ret.entry((inst, output.clone())).or_insert_with(Vec::new);
+                let inputs = ret.entry((inst, output)).or_insert_with(Vec::new);
                 if !inputs.contains(input) {
-                    inputs.push(input.clone());
+                    inputs.push(*input);
                 }
             }
         });
@@ -924,7 +924,7 @@ mod tests {
             immediates: EnumerationInfoOptions::Limited(&[0.into(), 1.into(), 5.into()]),
         };
         for inst in Enumerator::new().into_iter(&ei) {
-            let x = &bm[(inst, state.clone())];
+            let x = &bm[(inst, state)];
             println!("Instruction: {inst}, Output State: {state}");
             println!("Input States: {x:?}");
             if !x.is_empty() {
