@@ -1,4 +1,4 @@
-use crate::isa::{ArgType, Inst, Register};
+use crate::arm::{ArgType, Inst, Register};
 use crate::word::prelude::*;
 
 pub trait State<W> {

@@ -8,7 +8,7 @@ mod programs;
 /// Converting programs to equivalent ones with a reduced bit-width.
 mod reduce_bit_width;
 /// The instruction set.
-mod isa;
+mod arm;
 /// Enumerating all instructions and whatever.
 mod enumerate;
 /// Responsible for things which find counter examples when checking programs for equivalence to
@@ -78,7 +78,7 @@ impl Direction {
 
 // Let's expose just the necessary items.
 
-pub use isa::{BackwardMap, CondCode, Flags, FlagsBitField, Inst, OpCode, Register, State};
+pub use arm::{BackwardMap, CondCode, Flags, FlagsBitField, Inst, OpCode, Register, State};
 pub use main_loop::optimize;
 pub use word::{Word, Word4, Word8, Word64};
 pub use tui::{TuiHook, NoTui, Tui};

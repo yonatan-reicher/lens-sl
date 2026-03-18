@@ -1,6 +1,6 @@
 //! Implements enumerating over instructions.
 
-use crate::isa::{ArgType, CondCode, Inst, OpCode, Register};
+use crate::arm::{ArgType, CondCode, Inst, OpCode, Register};
 use crate::word::prelude::*;
 use std::fmt::Debug;
 

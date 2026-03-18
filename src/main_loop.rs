@@ -6,7 +6,7 @@ use crate::all::All;
 use crate::collect_registers::Collector;
 use crate::enumerate::{EnumerationInfo, EnumerationInfoOptions, Enumerator};
 use crate::graph;
-use crate::isa::{
+use crate::arm::{
     BackwardMap, Flags, Inst, Register, State, StateVars, SymbolicState, extend_program_for_each,
 };
 use crate::len::Len;
