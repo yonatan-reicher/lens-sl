@@ -16,6 +16,8 @@ use smtlib::Storage;
 use smtlib::prelude::*;
 use smtlib::terms::Const;
 
+// ============================= State =============================
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct State<W> {
     /// This vector is always sorted by register. Registers that are zero are omitted.
@@ -24,7 +26,21 @@ pub struct State<W> {
     pub registers: [W; Register::COUNT as usize],
 }
 
-// ============== Flags ==============================================
+// TODO: Unify with [State]
+#[derive(Clone, Copy, Debug)]
+pub struct SymbolicState<'st, W> {
+    pub registers: [W; Register::COUNT as usize],
+    pub flags: Flags<SmtBool<'st>>,
+    // TODO: Live mask
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct StateVars<'st, W> {
+    pub registers: [Const<'st, W>; Register::COUNT as usize],
+    pub flags: Flags<Const<'st, SmtBool<'st>>>,
+}
+
+// ============================= Flags =============================
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Flags<B = bool> {
@@ -48,6 +64,150 @@ bitflags::bitflags! {
         const V = 0b1000;
     }
 }
+
+// ============================ State impl ============================
+
+impl<W: Copy> State<W> {
+    pub fn get_register(&self, reg: Register) -> W {
+        self.registers[reg.0 as usize]
+    }
+    pub fn set_register(&mut self, reg: Register, x: W) {
+        self.registers[reg.0 as usize] = x;
+    }
+    pub fn get_flags(&self) -> FlagsBitField {
+        // self.flags.expect("Flags not set in state.")
+        self.flags
+    }
+    pub fn set_flags(&mut self, flags: FlagsBitField) {
+        self.flags = flags
+    }
+    /// Copies this state to another state object. Used to avoid clones, that in a loop, can
+    /// allocate more.
+    #[inline]
+    pub fn clone_to(&self, other: &mut Self) {
+        other.registers = self.registers;
+        other.flags = self.flags;
+    }
+    pub fn reduce<WSmall: Word>(&self, reducer: &mut Reducer<W, WSmall>) -> State<WSmall>
+    where
+        W: Word,
+    {
+        State {
+            registers: self
+                .registers
+                .map(|v| reducer.reduce(v, &Default::default())),
+            flags: self.flags,
+        }
+    }
+    #[inline]
+    pub fn clear(&mut self)
+    where
+        W: Default,
+    {
+        self.registers = [W::default(); _];
+        self.flags = FlagsBitField::empty();
+    }
+
+    pub fn all_each(ei: &EnumerationInfoOptions<Register>, mut f: impl FnMut(&Self))
+    where
+        W: All + Default,
+        W::Iter: Clone,
+    {
+        let registers = ei.into_iter().collect::<Box<[_]>>();
+        let reg_value_iter = registers.iter().map(|_| W::all()).collect::<Box<[_]>>();
+        let mut iter = PermutationIter::new(&reg_value_iter);
+        let mut state = State::default();
+        while let Some(reg_values) = iter.next_slice() {
+            state.clear();
+            for (r, &v) in registers.iter().cloned().zip(reg_values) {
+                state.set_register(r, v);
+            }
+            for flags in Flags::ALL {
+                state.set_flags(flags.into());
+                f(&state)
+            }
+        }
+    }
+}
+
+impl<W: Word, F, I> From<(F, I)> for State<W>
+where
+    F: Into<Flags>,
+    I: IntoIterator<Item = (Register, W)>,
+{
+    fn from((f, i): (F, I)) -> Self {
+        let mut ret = Self::default();
+        // Flags
+        ret.set_flags(f.into().into());
+        // Registers
+        for (r, v) in i {
+            ret.set_register(r, v);
+        }
+        ret
+    }
+}
+
+impl<W: Word> Display for State<W> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "{}", self.get_flags())?;
+        for r in Register::all() {
+            let v = self.get_register(r);
+            if !v.is_zero() {
+                write!(f, " {r}={v:>2}")?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl<W: Word> collect_registers::State<W> for State<W> {
+    fn registers(&self) -> impl Iterator<Item = (Register, W)> {
+        Register::all().filter_map(|r| {
+            if !self.get_register(r).is_zero() {
+                Some((r, self.get_register(r)))
+            } else {
+                None
+            }
+        })
+    }
+}
+
+impl<W: Word> oracle::test_cases::State for State<W> {
+    fn clone_to(&self, output: &mut Self) {
+        self.clone_to(output);
+    }
+}
+
+impl<'st, W: SmtWord<'st>> From<StateVars<'st, W>> for SymbolicState<'st, W> {
+    fn from(value: StateVars<'st, W>) -> Self {
+        Self {
+            registers: value.registers.map(Into::into),
+            flags: value.flags.into(),
+        }
+    }
+}
+
+impl<'st, W: SmtWord<'st>> SymbolicState<'st, W> {
+    pub fn eq(&self, other: Self) -> SmtBool<'st> {
+        let regs = self.registers.iter().zip(other.registers);
+        let regs_eq = regs
+            .map(|(ra, rb)| ra._eq(rb))
+            .reduce(|b1, b2| b1 & b2)
+            .unwrap();
+        regs_eq & self.flags.eq(&other.flags)
+    }
+}
+
+impl<'st, W: SmtWord<'st>> StateVars<'st, W> {
+    pub fn new(st: &'st Storage, name: &str) -> Self {
+        Self {
+            registers: std::array::from_fn(|i| W::new_const(st, &format!("{name}_r{i}"))),
+            flags: Flags::new(st, name),
+        }
+    }
+}
+
+// ============================ Flags impl ============================
 
 impl<'st, B: Copy + Into<SmtBool<'st>>> BoolEq<SmtBool<'st>> for Flags<B> {
     fn eq(&self, other: &Self) -> SmtBool<'st> {
@@ -209,6 +369,17 @@ impl<B: Bool> From<FlagsBitField> for Flags<B> {
     }
 }
 
+impl<'st> Flags<Const<'st, SmtBool<'st>>> {
+    pub fn new(st: &'st Storage, name: &str) -> Self {
+        Self {
+            z: SmtBool::new_const(st, &format!("{name}_z")),
+            n: SmtBool::new_const(st, &format!("{name}_n")),
+            c: SmtBool::new_const(st, &format!("{name}_c")),
+            v: SmtBool::new_const(st, &format!("{name}_v")),
+        }
+    }
+}
+
 #[cfg(test)]
 impl proptest::arbitrary::Arbitrary for FlagsBitField {
     type Parameters = ();
@@ -227,170 +398,5 @@ impl proptest::arbitrary::Arbitrary for FlagsBitField {
                 flags
             })
             .boxed()
-    }
-}
-
-impl<W: Copy> State<W> {
-    pub fn get_register(&self, reg: Register) -> W {
-        self.registers[reg.0 as usize]
-    }
-    pub fn set_register(&mut self, reg: Register, x: W) {
-        self.registers[reg.0 as usize] = x;
-    }
-    pub fn get_flags(&self) -> FlagsBitField {
-        // self.flags.expect("Flags not set in state.")
-        self.flags
-    }
-    pub fn set_flags(&mut self, flags: FlagsBitField) {
-        self.flags = flags
-    }
-    /// Copies this state to another state object. Used to avoid clones, that in a loop, can
-    /// allocate more.
-    #[inline]
-    pub fn clone_to(&self, other: &mut Self) {
-        other.registers = self.registers;
-        other.flags = self.flags;
-    }
-    pub fn reduce<WSmall: Word>(&self, reducer: &mut Reducer<W, WSmall>) -> State<WSmall>
-    where
-        W: Word,
-    {
-        State {
-            registers: self
-                .registers
-                .map(|v| reducer.reduce(v, &Default::default())),
-            flags: self.flags,
-        }
-    }
-    #[inline]
-    pub fn clear(&mut self)
-    where
-        W: Default,
-    {
-        self.registers = [W::default(); _];
-        self.flags = FlagsBitField::empty();
-    }
-
-    pub fn all_each(ei: &EnumerationInfoOptions<Register>, mut f: impl FnMut(&Self))
-    where
-        W: All + Default,
-        W::Iter: Clone,
-    {
-        let registers = ei.into_iter().collect::<Box<[_]>>();
-        let reg_value_iter = registers.iter().map(|_| W::all()).collect::<Box<[_]>>();
-        let mut iter = PermutationIter::new(&reg_value_iter);
-        let mut state = State::default();
-        while let Some(reg_values) = iter.next_slice() {
-            state.clear();
-            for (r, &v) in registers.iter().cloned().zip(reg_values) {
-                state.set_register(r, v);
-            }
-            for flags in Flags::ALL {
-                state.set_flags(flags.into());
-                f(&state)
-            }
-        }
-    }
-}
-
-impl<W: Word, F, I> From<(F, I)> for State<W>
-where
-    F: Into<Flags>,
-    I: IntoIterator<Item = (Register, W)>,
-{
-    fn from((f, i): (F, I)) -> Self {
-        let mut ret = Self::default();
-        // Flags
-        ret.set_flags(f.into().into());
-        // Registers
-        for (r, v) in i {
-            ret.set_register(r, v);
-        }
-        ret
-    }
-}
-
-impl<W: Word> Display for State<W> {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "{}", self.get_flags())?;
-        for r in Register::all() {
-            let v = self.get_register(r);
-            if !v.is_zero() {
-                write!(f, " {r}={v:>2}")?;
-            }
-        }
-        Ok(())
-    }
-}
-
-impl<W: Word> collect_registers::State<W> for State<W> {
-    fn registers(&self) -> impl Iterator<Item = (Register, W)> {
-        Register::all().filter_map(|r| {
-            if !self.get_register(r).is_zero() {
-                Some((r, self.get_register(r)))
-            } else {
-                None
-            }
-        })
-    }
-}
-
-impl<W: Word> oracle::test_cases::State for State<W> {
-    fn clone_to(&self, output: &mut Self) {
-        self.clone_to(output);
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct StateVars<'st, W> {
-    pub registers: [Const<'st, W>; Register::COUNT as usize],
-    pub flags: Flags<Const<'st, SmtBool<'st>>>,
-}
-
-impl<'st, W: SmtWord<'st>> StateVars<'st, W> {
-    pub fn new(st: &'st Storage, name: &str) -> Self {
-        Self {
-            registers: std::array::from_fn(|i| W::new_const(st, &format!("{name}_r{i}"))),
-            flags: Flags::new(st, name),
-        }
-    }
-}
-
-impl<'st> Flags<Const<'st, SmtBool<'st>>> {
-    pub fn new(st: &'st Storage, name: &str) -> Self {
-        Self {
-            z: SmtBool::new_const(st, &format!("{name}_z")),
-            n: SmtBool::new_const(st, &format!("{name}_n")),
-            c: SmtBool::new_const(st, &format!("{name}_c")),
-            v: SmtBool::new_const(st, &format!("{name}_v")),
-        }
-    }
-}
-
-// TODO: Unify with [State]
-#[derive(Clone, Copy, Debug)]
-pub struct SymbolicState<'st, W> {
-    pub registers: [W; Register::COUNT as usize],
-    pub flags: Flags<SmtBool<'st>>,
-    // TODO: Live mask
-}
-
-impl<'st, W: SmtWord<'st>> From<StateVars<'st, W>> for SymbolicState<'st, W> {
-    fn from(value: StateVars<'st, W>) -> Self {
-        Self {
-            registers: value.registers.map(Into::into),
-            flags: value.flags.into(),
-        }
-    }
-}
-
-impl<'st, W: SmtWord<'st>> SymbolicState<'st, W> {
-    pub fn eq(&self, other: Self) -> SmtBool<'st> {
-        let regs = self.registers.iter().zip(other.registers);
-        let regs_eq = regs
-            .map(|(ra, rb)| ra._eq(rb))
-            .reduce(|b1, b2| b1 & b2)
-            .unwrap();
-        regs_eq & self.flags.eq(&other.flags)
     }
 }
