@@ -10,7 +10,6 @@ use crate::oracle;
 use crate::reduce_bit_width::Reducer;
 use crate::word::prelude::*;
 use std::fmt::{self, Display, Formatter};
-use std::ops::{Index, IndexMut};
 // derive macros
 use derive_more::{Debug, Display};
 use serde::{Deserialize, Serialize};
@@ -226,6 +225,27 @@ impl<'st, W: SmtWord<'st>> StateVars<'st, W> {
     }
 }
 
+//     State Masking
+
+impl<W: Copy + Default> State<W> {
+    pub fn mask(self, mask: Mask) -> Self {
+        State {
+            flags: if mask.flags {
+                self.flags
+            } else {
+                FlagsBitField::default()
+            },
+            registers: Register::ALL.map(|r| {
+                if mask[r] {
+                    self.get_register(r)
+                } else {
+                    W::default()
+                }
+            }),
+        }
+    }
+}
+
 // ============================ Flags impl ============================
 
 impl<'st, B: Copy + Into<SmtBool<'st>>> BoolEq<SmtBool<'st>> for Flags<B> {
@@ -422,6 +442,26 @@ impl proptest::arbitrary::Arbitrary for FlagsBitField {
 
 // ============================ Mask impl ============================
 
+impl Mask {
+    pub const EMPTY: Self = Mask {
+        flags: false,
+        registers: [false; _],
+    };
+    pub const FULL: Self = Mask {
+        flags: true,
+        registers: [true; _],
+    };
+    pub const JUST_FLAGS: Self = Mask {
+        flags: true,
+        registers: [false; _],
+    };
+    pub const fn just_register(r: Register) -> Self {
+        let mut ret = Self::EMPTY;
+        ret.registers[r.0 as usize] = true;
+        ret
+    }
+}
+
 impl<B> Index<Register> for Mask<B> {
     type Output = B;
     fn index(&self, r: Register) -> &B {
@@ -483,6 +523,81 @@ impl From<BitMask> for Mask {
             flags: (b.0 & 1) > 0,
             // Reg i is stored in the (i + 1)th bit
             registers: Register::ALL.map(|r| ((b.0 >> (1 + r.0)) & 1) > 0),
+        }
+    }
+}
+
+// --- Mask operations ---
+use std::ops::{BitAnd, BitOr, BitXor, Index, IndexMut, Not};
+
+// Bit-Mask
+
+impl BitAnd<BitMask> for BitMask {
+    type Output = BitMask;
+    fn bitand(self, other: BitMask) -> Self::Output {
+        Self(self.0 & other.0)
+    }
+}
+
+impl BitOr<BitMask> for BitMask {
+    type Output = BitMask;
+    fn bitor(self, other: BitMask) -> Self::Output {
+        Self(self.0 | other.0)
+    }
+}
+
+impl BitXor<BitMask> for BitMask {
+    type Output = BitMask;
+    fn bitxor(self, other: Self) -> BitMask {
+        Self((self.0 ^ other.0) & BitMask::from(Mask::FULL).0)
+    }
+}
+
+impl Not for BitMask {
+    type Output = BitMask;
+    fn not(self) -> BitMask {
+        Self(!self.0 & BitMask::from(Mask::FULL).0)
+    }
+}
+
+// Mask
+
+impl<B: Bool> BitAnd<Mask<B>> for Mask<B> {
+    type Output = Mask<B>;
+    fn bitand(self, other: Mask<B>) -> Self::Output {
+        Self {
+            flags: self.flags | other.flags,
+            registers: Register::ALL.map(|r| self[r] & other[r]),
+        }
+    }
+}
+
+impl<B: Bool> BitOr<Mask<B>> for Mask<B> {
+    type Output = Mask<B>;
+    fn bitor(self, other: Mask<B>) -> Self::Output {
+        Self {
+            flags: self.flags | other.flags,
+            registers: Register::ALL.map(|r| self[r] | other[r]),
+        }
+    }
+}
+
+impl<B: Bool> BitXor<Mask<B>> for Mask<B> {
+    type Output = Mask<B>;
+    fn bitxor(self, other: Self) -> Self {
+        Self {
+            flags: self.flags ^ other.flags,
+            registers: Register::ALL.map(|r| self[r] ^ other[r]),
+        }
+    }
+}
+
+impl<B: Bool> Not for Mask<B> {
+    type Output = Mask<B>;
+    fn not(self) -> Self {
+        Self {
+            flags: !self.flags,
+            registers: Register::ALL.map(|r| !self[r]),
         }
     }
 }
