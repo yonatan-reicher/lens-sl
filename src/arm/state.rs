@@ -1,3 +1,5 @@
+//! State types and state-related logic for the ARM-like ISA.
+
 use super::Register;
 use crate::all::All;
 use crate::all_permutations::Iter as PermutationIter;
