@@ -1,10 +1,10 @@
 #[allow(unused_imports)]
 use lens_sl::{NoTui, Tui};
 #[allow(unused_imports)]
-use lens_sl::{Register, Word4, Word8, Word64, inst, optimize};
+use lens_sl::{Register, Word4, Word8, Word64, inst, optimize, sl_optimize};
 
 fn main() {
-    let p = optimize::<Word64, Word4>(
+    let p = sl_optimize::<Word64, Word4>(
         &[
             inst!(AddI, 0, 0, 5),
             inst!(AddI Eq, 1, 0, 1),
