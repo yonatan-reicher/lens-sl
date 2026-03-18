@@ -559,7 +559,8 @@ impl<W: Copy + Into<Register>> Inst<W> {
         ret.into_iter()
     }
 
-    pub fn input_mask(&self) -> state::Mask {
+    // The parts of the state that this instruction reads.
+    pub fn read_mask(&self) -> state::Mask {
         let mut ret = state::Mask::default();
         for (a, t) in self.args_with_types() {
             if let ArgType::Reg(RegArgType::Inp) = t {
@@ -570,7 +571,8 @@ impl<W: Copy + Into<Register>> Inst<W> {
         ret
     }
 
-    pub fn output_mask(&self) -> state::Mask {
+    /// The parts of the state that this instruction writes.
+    pub fn write_mask(&self) -> state::Mask {
         let mut ret = state::Mask::default();
         for (a, t) in self.args_with_types() {
             if let ArgType::Reg(RegArgType::Out) = t {
