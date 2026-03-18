@@ -567,6 +567,28 @@ impl<W: Copy + Into<Register>> Inst<W> {
         }
         ret.into_iter()
     }
+
+    pub fn input_mask(&self) -> state::Mask {
+        let mut ret = state::Mask::default();
+        for (a, t) in self.args_with_types() {
+            if let ArgType::Reg(RegArgType::Inp) = t {
+                ret[a.into()] |= true
+            }
+        }
+        ret.flags = self.cond_code != CondCode::Al;
+        ret
+    }
+
+    pub fn output_mask(&self) -> state::Mask {
+        let mut ret = state::Mask::default();
+        for (a, t) in self.args_with_types() {
+            if let ArgType::Reg(RegArgType::Out) = t {
+                ret[a.into()] |= true
+            }
+        }
+        ret.flags = self.op_code.affects_flags();
+        ret
+    }
 }
 
 impl<W: Word> Inst<W> {
