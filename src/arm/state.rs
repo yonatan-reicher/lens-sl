@@ -10,8 +10,9 @@ use crate::oracle;
 use crate::reduce_bit_width::Reducer;
 use crate::word::prelude::*;
 use std::fmt::{self, Display, Formatter};
+use std::ops::{Index, IndexMut};
 // derive macros
-use derive_more::Display;
+use derive_more::{Debug, Display};
 use serde::{Deserialize, Serialize};
 // smt
 use smtlib::Storage;
@@ -71,12 +72,16 @@ bitflags::bitflags! {
 
 /// A liveness mask. For each register, is it used or not. Has just one flag for the whole flags
 /// register (because flags are used and written to together).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Mask<B = bool> {
     pub registers: [B; Register::COUNT as usize],
     pub flags: B,
 }
 
 /// [Mask], but compacted to a bit-field.
+#[derive(Clone, Copy, Debug, Display, Default, PartialEq, Eq, Hash)]
+#[debug("{:?}", Mask::from(*self))]
+#[display("{}", Mask::from(*self))]
 pub struct BitMask(u32);
 
 // ============================ State impl ============================
@@ -412,5 +417,72 @@ impl proptest::arbitrary::Arbitrary for FlagsBitField {
                 flags
             })
             .boxed()
+    }
+}
+
+// ============================ Mask impl ============================
+
+impl<B> Index<Register> for Mask<B> {
+    type Output = B;
+    fn index(&self, r: Register) -> &B {
+        &self.registers[r.0 as usize]
+    }
+}
+
+impl<B> IndexMut<Register> for Mask<B> {
+    fn index_mut(&mut self, r: Register) -> &mut B {
+        &mut self.registers[r.0 as usize]
+    }
+}
+
+impl Display for Mask {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        let mut words = vec![];
+        // Flags
+        if self.flags {
+            words.push("F".to_string());
+        }
+        // Registers
+        for r in Register::all() {
+            if self[r] {
+                words.push(r.to_string());
+            }
+        }
+        // Finalize
+        let mut joined = words.join(",");
+        if joined.is_empty() {
+            joined.push('-');
+        }
+        write!(f, "{}", joined)?;
+        Ok(())
+    }
+}
+
+impl From<Mask> for BitMask {
+    fn from(m: Mask) -> BitMask {
+        let mut ret = 0u32;
+        // Flags
+        if m.flags {
+            ret = 1
+        };
+        // Registers
+        for r in Register::all() {
+            if m[r] {
+                // Reg i is stored in the (i + 1)th bit
+                ret |= 1 << (1 + r.0);
+            }
+        }
+        // Return
+        BitMask(ret)
+    }
+}
+
+impl From<BitMask> for Mask {
+    fn from(b: BitMask) -> Mask {
+        Mask {
+            flags: (b.0 & 1) > 0,
+            // Reg i is stored in the (i + 1)th bit
+            registers: Register::ALL.map(|r| ((b.0 >> (1 + r.0)) & 1) > 0),
+        }
     }
 }
