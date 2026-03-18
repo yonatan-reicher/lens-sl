@@ -12,7 +12,6 @@ pub trait Program<S> {
 
 pub trait State: Clone + Default + Eq {
     fn clone_to(&self, output: &mut Self);
-
 }
 
 impl<P: Program<S> + ?Sized, S: State> Oracle<P, S> for TestCasesOracle<S> {
