@@ -196,17 +196,17 @@ macro_rules! define_instructions {
 }
 
 define_instructions! {
-    | OpCode  | Arg 1  | Arg 2  | Arg 3  | String | Commutative |
-    -------------------------------------------------------------
-    | Nop     | Unused   | Unused   | Unused | "nop"  |    true     |
+    | OpCode  | Arg 1    | Arg 2    | Arg 3    | String | Commutative |
+    -------------------------------------------------------------------
+    | Nop     | Unused   | Unused   | Unused   | "nop"  |    true     |
     | Add     | Reg(Inp) | Reg(Out) | Reg(Inp) | "add"  |    true     |
-    | AddI    | Reg(Inp) | Reg(Out) | Imm    | "add"  |    false    |
+    | AddI    | Reg(Inp) | Reg(Out) | Imm      | "add"  |    false    |
     | Sub     | Reg(Inp) | Reg(Out) | Reg(Inp) | "sub"  |    false    |
-    | SubI    | Reg(Inp) | Reg(Out) | Imm    | "sub"  |    false    |
+    | SubI    | Reg(Inp) | Reg(Out) | Imm      | "sub"  |    false    |
     | And     | Reg(Inp) | Reg(Out) | Reg(Inp) | "and"  |    true     |
     | Eor     | Reg(Inp) | Reg(Out) | Reg(Inp) | "eor"  |    true     |
-    | Mov     | Reg(Inp) | Reg(Out) | Unused | "mov"  |    false    |
-    | MovI    | Reg(Inp) | Imm      | Unused | "mov"  |    false    |
+    | Mov     | Reg(Inp) | Reg(Out) | Unused   | "mov"  |    false    |
+    | MovI    | Reg(Inp) | Imm      | Unused   | "mov"  |    false    |
     | Mul     | Reg(Inp) | Reg(Out) | Reg(Inp) | "mul"  |    true     |
     | Orr     | Reg(Inp) | Reg(Out) | Reg(Inp) | "orr"  |    true     |
 }
