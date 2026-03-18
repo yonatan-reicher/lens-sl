@@ -554,7 +554,7 @@ impl<W: Word> std::ops::Index<(Inst<W>, State<W>)> for BackwardMap<W> {
 }
 
 impl<W: Copy + Into<Register>> Inst<W> {
-    fn args_with_types(&self) -> impl Iterator<Item=(W, ArgType)> {
+    fn args_with_types(&self) -> impl Iterator<Item = (W, ArgType)> {
         self.args.into_iter().zip(self.op_code.arg_types())
     }
 
