@@ -280,7 +280,7 @@ impl<W: Word> From<W> for Register {
 }
 
 /// A single instruction.
-#[derive(derive_more::Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, derive_more::Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(test, derive(proptest_derive::Arbitrary))]
 #[debug("{op_code:?}{}{args:?}",
     match cond_code {
@@ -292,15 +292,6 @@ pub struct Inst<W> {
     pub op_code: OpCode,
     pub cond_code: CondCode,
     pub args: [W; 3],
-}
-
-// Implementing `Clone` and `Copy` manually instead of by `derive` because `derive` adds
-// unnecessary trait bounds on the generic parameter.
-impl<W: Word> Copy for Inst<W> {}
-impl<W: Word> Clone for Inst<W> {
-    fn clone(&self) -> Self {
-        *self
-    }
 }
 
 // =========================================== State ==============================================
