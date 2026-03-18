@@ -8,10 +8,9 @@ pub trait Len {
 // Implement for references
 macro_rules! ref_impl {
     ($t:ty) => {
-        #[rustfmt::skip]
         impl<T: Len> Len for $t {
-            fn len(&self) -> usize     { T::len(self) }
-            fn is_empty(&self) -> bool { T::is_empty(self) }
+            #[rustfmt::skip]    fn len(&self) -> usize     { T::len(self) }
+            #[rustfmt::skip]    fn is_empty(&self) -> bool { T::is_empty(self) }
         }
     };
 }
