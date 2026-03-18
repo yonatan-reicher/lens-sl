@@ -147,11 +147,12 @@ impl CondCode {
 /// * String - the 3-letter name of the op-code in ARM syntax.
 /// * Commutative - if true, the order of the second and third arguments do not matter, only makes
 ///   sense if the are of the same type.
+/// * Affects Flags - this isn't how ARM actually works, but good enough for now
 macro_rules! define_instructions {
     (
-        | OpCode | Arg 1 | Arg 2 | Arg 3 | String | Commutative |
+        | OpCode | Arg 1 | Arg 2 | Arg 3 | String | Commutative | Affects Flags |
         $(-)+
-        $( | $op_code:ident | $arg1:ident $( ($subarg1:ident) )? | $arg2:ident $( ($subarg2:ident) )? | $arg3:ident $( ($subarg3:ident) )? | $str:literal | $com:literal | )+
+        $( | $op_code:ident | $arg1:ident $( ($subarg1:ident) )? | $arg2:ident $( ($subarg2:ident) )? | $arg3:ident $( ($subarg3:ident) )? | $str:literal | $com:literal | $affects_flags:literal | )+
     ) => {
         /// The operation codes supported by our ISA.
         #[derive(Copy, Clone, Debug, derive_more::Display, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -191,24 +192,30 @@ macro_rules! define_instructions {
                     $( OpCode::$op_code => $com, )+
                 }
             }
+
+            pub fn affects_flags(&self) -> bool {
+                match self {
+                    $( OpCode::$op_code => $affects_flags, )+
+                }
+            }
         }
     };
 }
 
 define_instructions! {
-    | OpCode  | Arg 1    | Arg 2    | Arg 3    | String | Commutative |
-    -------------------------------------------------------------------
-    | Nop     | Unused   | Unused   | Unused   | "nop"  |    true     |
-    | Add     | Reg(Inp) | Reg(Out) | Reg(Inp) | "add"  |    true     |
-    | AddI    | Reg(Inp) | Reg(Out) | Imm      | "add"  |    false    |
-    | Sub     | Reg(Inp) | Reg(Out) | Reg(Inp) | "sub"  |    false    |
-    | SubI    | Reg(Inp) | Reg(Out) | Imm      | "sub"  |    false    |
-    | And     | Reg(Inp) | Reg(Out) | Reg(Inp) | "and"  |    true     |
-    | Eor     | Reg(Inp) | Reg(Out) | Reg(Inp) | "eor"  |    true     |
-    | Mov     | Reg(Inp) | Reg(Out) | Unused   | "mov"  |    false    |
-    | MovI    | Reg(Inp) | Imm      | Unused   | "mov"  |    false    |
-    | Mul     | Reg(Inp) | Reg(Out) | Reg(Inp) | "mul"  |    true     |
-    | Orr     | Reg(Inp) | Reg(Out) | Reg(Inp) | "orr"  |    true     |
+    | OpCode  | Arg 1    | Arg 2    | Arg 3    | String | Commutative | Affects Flags |
+    -----------------------------------------------------------------------------------
+    | Nop     | Unused   | Unused   | Unused   | "nop"  |    true     |     false     |
+    | Add     | Reg(Inp) | Reg(Out) | Reg(Inp) | "add"  |    true     |     true      |
+    | AddI    | Reg(Inp) | Reg(Out) | Imm      | "add"  |    false    |     true      |
+    | Sub     | Reg(Inp) | Reg(Out) | Reg(Inp) | "sub"  |    false    |     true      |
+    | SubI    | Reg(Inp) | Reg(Out) | Imm      | "sub"  |    false    |     true      |
+    | And     | Reg(Inp) | Reg(Out) | Reg(Inp) | "and"  |    true     |     false     |
+    | Eor     | Reg(Inp) | Reg(Out) | Reg(Inp) | "eor"  |    true     |     false     |
+    | Mov     | Reg(Inp) | Reg(Out) | Unused   | "mov"  |    false    |     false     |
+    | MovI    | Reg(Inp) | Imm      | Unused   | "mov"  |    false    |     false     |
+    | Mul     | Reg(Inp) | Reg(Out) | Reg(Inp) | "mul"  |    true     |     false     |
+    | Orr     | Reg(Inp) | Reg(Out) | Reg(Inp) | "orr"  |    true     |     false     |
 }
 
 /// A number representing a register.
