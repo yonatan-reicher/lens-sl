@@ -75,10 +75,9 @@ impl Direction {
     }
 }
 
-
 // Let's expose just the necessary items.
 
 pub use arm::{BackwardMap, CondCode, Flags, FlagsBitField, Inst, OpCode, Register, State};
 pub use main_loop::optimize;
+pub use tui::{NoTui, Tui, TuiHook};
 pub use word::{Word, Word4, Word8, Word64};
-pub use tui::{TuiHook, NoTui, Tui};

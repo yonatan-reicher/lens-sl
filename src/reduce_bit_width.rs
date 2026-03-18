@@ -9,10 +9,7 @@ pub struct ImmediateInfo {
     pub is_shift: bool,
 }
 
-pub fn reduce<WBig: Word, WSmall: Word>(
-    c: WBig,
-    info: &ImmediateInfo,
-) -> WSmall {
+pub fn reduce<WBig: Word, WSmall: Word>(c: WBig, info: &ImmediateInfo) -> WSmall {
     if info.is_shift {
         let bit_width = WBig::from(WBig::BITS);
         let reduced_bit_width = WSmall::from(WSmall::BITS);
@@ -50,7 +47,9 @@ impl<WBig: Word, WSmall: Word> Reducer<WBig, WSmall> {
     pub fn extend(&self, value: WSmall) -> Iter<'_, WBig> {
         self.0
             .get(&value)
-            .map_or(Iter::Single(value.into().into()), |v| Iter::Slice(v.as_slice()))
+            .map_or(Iter::Single(value.into().into()), |v| {
+                Iter::Slice(v.as_slice())
+            })
     }
 
     pub fn immediates(&self) -> impl Iterator<Item = WSmall> + '_ {

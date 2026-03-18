@@ -73,11 +73,7 @@ where
     }
 }
 
-fn advance<I>(
-    collections: &[I],
-    buf: &mut [I::Item],
-    iterators: &mut [I::IntoIter],
-) -> bool
+fn advance<I>(collections: &[I], buf: &mut [I::Item], iterators: &mut [I::IntoIter]) -> bool
 where
     I: IntoIterator + Clone,
 {

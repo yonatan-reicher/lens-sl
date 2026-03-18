@@ -253,7 +253,9 @@ mod tests {
 
     #[property_test(config = ProptestConfig { cases: 20, ..ProptestConfig::default() })]
     fn all_registers_and_immediates_appear(
-        #[strategy = prop::collection::hash_set(any::<Register>(), 1..17)] registers: HashSet<Register>,
+        #[strategy = prop::collection::hash_set(any::<Register>(), 1..17)] registers: HashSet<
+            Register,
+        >,
         #[strategy = prop::collection::hash_set(any::<Word8>(), 1..17)] immediates: HashSet<Word8>,
     ) {
         prop_assume!(!registers.is_empty());

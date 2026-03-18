@@ -1,7 +1,7 @@
 #[allow(unused_imports)]
-use lens_sl::{Tui, NoTui};
+use lens_sl::{NoTui, Tui};
 #[allow(unused_imports)]
-use lens_sl::{Register, Word64, Word8, Word4, inst, optimize};
+use lens_sl::{Register, Word4, Word8, Word64, inst, optimize};
 
 fn main() {
     let p = optimize::<Word64, Word4>(
