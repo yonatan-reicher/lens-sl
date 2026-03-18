@@ -547,11 +547,15 @@ impl<W: Word> std::ops::Index<(Inst<W>, State<W>)> for BackwardMap<W> {
 }
 
 impl<W: Copy + Into<Register>> Inst<W> {
+    fn args_with_types(&self) -> impl Iterator<Item=(W, ArgType)> {
+        self.args.into_iter().zip(self.op_code.arg_types())
+    }
+
     pub fn regs(&self) -> impl Iterator<Item = Register> {
         let mut ret = vec![];
-        for (a, t) in self.args.iter().zip(self.op_code.arg_types()) {
+        for (a, t) in self.args_with_types() {
             if t.is_reg() {
-                ret.push((*a).into());
+                ret.push(a.into());
             }
         }
         ret.into_iter()
