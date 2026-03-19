@@ -21,7 +21,7 @@ where
     where
         Ps: Extend<P>,
     {
-        let programs = self.classes.entry(e).or_insert(Ps::default());
+        let programs = self.classes.entry(e).or_default();
         programs.extend([p]);
     }
 }
