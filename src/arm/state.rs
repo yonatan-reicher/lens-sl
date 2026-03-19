@@ -83,6 +83,14 @@ pub struct Mask<B = bool> {
 #[display("{}", Mask::from(*self))]
 pub struct BitMask(u32);
 
+// =========================== Masked State ===========================
+
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub struct Masked<W> {
+    state: State<W>,
+    mask: BitMask,
+}
+
 // ============================ State impl ============================
 
 impl<W: Copy> State<W> {
@@ -599,5 +607,65 @@ impl<B: Bool> Not for Mask<B> {
             flags: !self.flags,
             registers: Register::ALL.map(|r| !self[r]),
         }
+    }
+}
+
+// ============================ Masked State impl ============================
+
+#[rustfmt::skip]
+impl<W> Masked<W> {
+    pub fn mask(&self) -> BitMask { self.mask }
+    pub fn state(&self) -> &State<W> { &self.state }
+}
+
+impl<W> From<State<W>> for Masked<W> {
+    fn from(state: State<W>) -> Masked<W> {
+        Masked {
+            state,
+            mask: Mask::FULL.into(),
+        }
+    }
+}
+
+// And'ing a masked state with a mask activates the mask on it
+impl<W: Copy + Default> BitAnd<Mask> for Masked<W> {
+    type Output = Self;
+    fn bitand(self, mask: Mask) -> Self {
+        Self {
+            mask: self.mask & mask.into(),
+            state: self.state.mask(mask),
+            // mask mask mask mask...
+        }
+    }
+}
+
+// Or'ing two masked states returns the first state, with the values of the second state where this
+// one is masked away.
+impl<W: Copy + Default> BitOr for Masked<W> {
+    type Output = Self;
+    fn bitor(self, other: Self) -> Self {
+        // self takes priority
+        let mask = self.mask | other.mask;
+        // Convert the bit-masks to real masks
+        let (self_mask, other_mask) = (Mask::from(self.mask), Mask::from(other.mask));
+        let state = State {
+            flags: if self_mask.flags {
+                self.state.flags
+            } else if other_mask.flags {
+                other.state.flags
+            } else {
+                FlagsBitField::default()
+            },
+            registers: Register::ALL.map(|r| {
+                if self_mask[r] {
+                    self.state.get_register(r)
+                } else if other_mask[r] {
+                    other.state.get_register(r)
+                } else {
+                    W::default()
+                }
+            }),
+        };
+        Masked { state, mask }
     }
 }
