@@ -161,10 +161,8 @@ fn collect_children<'a, W: Word>(
     bank: &'a Bank<W>,
 ) -> impl Iterator<
     Item = (
-        &'a Effect<W>,
-        &'a Programs<W>,
-        &'a Effect<W>,
-        &'a Programs<W>,
+        (&'a Effect<W>, &'a Programs<W>),
+        (&'a Effect<W>, &'a Programs<W>),
     ),
 > {
     I {
@@ -184,10 +182,8 @@ struct I<'a, W: Word> {
 
 impl<'a, W: Word> Iterator for I<'a, W> {
     type Item = (
-        &'a Effect<W>,
-        &'a Programs<W>,
-        &'a Effect<W>,
-        &'a Programs<W>,
+        (&'a Effect<W>, &'a Programs<W>),
+        (&'a Effect<W>, &'a Programs<W>),
     );
     fn next(&mut self) -> Option<Self::Item> {
         // Check if the second iterator is done,
@@ -207,7 +203,7 @@ impl<'a, W: Word> Iterator for I<'a, W> {
             return self.next();
         }
         // Frame rule succeeds!
-        Some((a.0, a.1, b.0, b.1))
+        Some((*a, b))
     }
 }
 
