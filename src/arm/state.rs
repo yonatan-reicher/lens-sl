@@ -85,7 +85,7 @@ pub struct BitMask(u32);
 
 // =========================== Masked State ===========================
 
-#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Hash)]
 pub struct Masked<W> {
     state: State<W>,
     mask: BitMask,
