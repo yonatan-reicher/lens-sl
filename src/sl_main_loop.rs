@@ -7,16 +7,47 @@ use crate::oracle::Oracle;
 use crate::reduce_bit_width::Reducer;
 use crate::tui::TuiHook;
 use crate::word::prelude::*;
-use functionality::Mutate;
+use functionality::{Mutate, Pipe};
 use std::rc::Rc;
+use std::fmt::Debug;
+use std::hash::Hash;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq, Eq, Hash)]
 struct Effect<W> {
     input: MaskedState<W>,
     output: MaskedState<W>,
 }
 
-type Programs<W> = Rc<crate::programs::Programs<Inst<W>>>;
+#[derive(Clone, Debug, Default)]
+enum Programs<W> {
+    #[default]
+    Empty,
+    Inst(Inst<W>),
+    /// This and that
+    Extend(Rc<(Programs<W>, Programs<W>)>),
+    /// This and then that
+    Concat(Rc<(Programs<W>, Programs<W>)>),
+}
+
+impl<W: Clone> Programs<W> {
+    pub fn concat(self, other: Self) -> Programs<W> {
+        Programs::Concat(Rc::new((self, other)))
+    }
+}
+
+impl<W> From<Inst<W>> for Programs<W> {
+    fn from(i: Inst<W>) -> Programs<W> {
+        Programs::Inst(i)
+    }
+}
+
+impl<W: Clone + Debug + Eq + Hash> Extend<Programs<W>> for Programs<W> {
+    fn extend<I: IntoIterator<Item=Programs<W>>>(&mut self, iter: I) {
+        for x in iter {
+            *self = Programs::Extend(Rc::new((self.clone(), x)));
+        }
+    }
+}
 
 type Bank<W> = crate::bank::Bank<Effect<W>, Programs<W>>;
 
@@ -25,7 +56,7 @@ type Bank<W> = crate::bank::Bank<Effect<W>, Programs<W>>;
 pub fn optimize<WBig: Word, W: Word>(
     program: &[Inst<WBig>],
     examples: &[&[(Register, WBig)]],
-    tui: &impl for<'g> TuiHook<&'g Graph<State<W>, Programs<W>>, State<W>>,
+    tui: &impl for<'g> TuiHook<&'g Graph<State<W>, crate::programs::Programs<Inst<W>>>, State<W>>,
 ) -> Option<Vec<Inst<W>>>
 where
     <W as All>::Iter: Clone,
@@ -52,74 +83,49 @@ where
     let ei = EnumerationInfo {
         registers: EnumerationInfoOptions::Limited(&[
             Register(0),
-            Register(1),
-            Register(2),
-            Register(3),
-            Register(4),
-            Register(5),
-            Register(6),
-            Register(7),
-            Register(8),
-            Register(9),
-            Register(10),
-            Register(11),
+            // Register(1),
+            // Register(2),
+            // Register(3),
+            // Register(4),
+            // Register(5),
+            // Register(6),
+            // Register(7),
+            // Register(8),
+            // Register(9),
+            // Register(10),
+            // Register(11),
         ]),
         immediates: EnumerationInfoOptions::<W>::Unlimited,
     };
+    let n = Enumerator::new().into_iter(&ei).count();
+    let mut i = 0;
     for inst in Enumerator::new().into_iter(&ei) {
-        inst.read_mask();
-        // find 0- ~4 registers that
-    }
-
-    /*
-    // Initialize with the empty program in all sorts of forms
-    println!("Adding empty programs");
-    let (s, m) = (State::default(), Mask::EMPTY);
-    bank.vec.push((s, m, vec![], s, m).into());
-    for f in Flags::ALL {
-        let s = State::<W>::default().mutate(|s| s.flags = f.into());
-        let m = Mask::JUST_FLAGS;
-        bank.vec.push((s, m, vec![], s, m).into());
-    }
-    for r in Register::all() {
-        for v in W::all() {
-            let s = State::default().mutate(|s| s.set_register(r, v));
-            let m = Mask::just_register(r);
-            bank.vec.push((s, m, vec![], s, m).into());
+        let unmasked_input = initial_state;
+        let unmasked_output = initial_state.mutate(|s| inst.run(s));
+        let change = unmasked_output.diff(&unmasked_input).into_bit_mask();
+        let read_mask = inst.read_mask().into_bit_mask();
+        let (input_mask, output_mask) = (read_mask, read_mask | change);
+        // Now we just want to mask the input, mask the output and add to the bank right? Wrong. We
+        // actually want to add to the masks. This has to do with how we aren't adding empty
+        // programs to the bank. In the original algorithm, Sobeq, you do add the equivalent of
+        // empty programs - programs which just return the value of a variable! Again, in our
+        // domain, the equivalent for that is empty programs that have a single register
+        // pre&post-condition (example, {r0=5}ε{r0=5}). As an optimization we leave those out, and
+        // to make up for that, we need to include variations of the post-conditions with these
+        // registers that aren't actually used in the instruction. Wall of text out.
+        for mask in BitMask::all() {
+            // TODO: instead of skipping, just iterate only those we need.
+            if mask.into_mask().registers().count() > 4 { continue; }
+            let (input_mask, output_mask) = (input_mask | mask, output_mask | mask);
+            let input = MaskedState::from(unmasked_input) & input_mask.into();
+            let output = MaskedState::from(unmasked_output) & output_mask.into();
+            let effect = Effect { input, output };
+            let programs = Programs::from(inst);
+            bank.insert(effect, programs);
         }
+        i += 1;
+        println!("{i}/{n}");
     }
-
-    // Add single instruction programs println!("Single instruction programs");
-    let ei = EnumerationInfo {
-        registers: EnumerationInfoOptions::Limited(&[
-            Register(0),
-            Register(1),
-            Register(2),
-            Register(3),
-            Register(4),
-            Register(5),
-            Register(6),
-            Register(7),
-            Register(8),
-            Register(9),
-            Register(10),
-            Register(11),
-        ]),
-        immediates: EnumerationInfoOptions::Unlimited,
-    };
-    for inst in Enumerator::new().into_iter(&ei) {
-        let (i_m, o_m) = (inst.read_mask(), inst.read_mask() | inst.write_mask());
-        let rs = Register::all().filter(|r| i_m[*r]).collect::<Box<[_]>>();
-        let ei = EnumerationInfoOptions::Limited(&rs);
-        State::all_each(&ei, |s| {
-            let p = vec![inst];
-            let i = *s;
-            let mut o = *s;
-            inst.run(&mut o);
-            bank.vec.push((i, i_m, p, o, o_m).into());
-        });
-    }
-    */
 
     // loop {
     //     let mut to_add = vec![];
@@ -215,6 +221,6 @@ fn eval<W: Word>(
     // We need to mask the second's inputs which are fed by the outputs of the first.
     let input = a.0.input | (b.0.input & (!conflict_mask).into());
     let output = b.0.output | a.0.output;
-    let prog = a.1.mutate(|p| Rc::make_mut(p).extend(&b.1));
+    let prog = a.1.mutate(|p| p.extend([b.1]));
     (Effect { input, output }, prog)
 }
