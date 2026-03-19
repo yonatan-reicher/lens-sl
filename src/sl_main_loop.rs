@@ -8,9 +8,9 @@ use crate::reduce_bit_width::Reducer;
 use crate::tui::TuiHook;
 use crate::word::prelude::*;
 use functionality::{Mutate, Pipe};
-use std::rc::Rc;
 use std::fmt::Debug;
 use std::hash::Hash;
+use std::rc::Rc;
 
 #[derive(Debug, Default, PartialEq, Eq, Hash)]
 struct Effect<W> {
