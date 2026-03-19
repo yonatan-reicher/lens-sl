@@ -169,6 +169,17 @@ impl<W> IndexMut<Register> for State<W> {
     }
 }
 
+impl<W: PartialEq> State<W> {
+    pub fn diff(&self, other: &Self) -> Mask {
+        Mask  {
+            flags: self.flags != other.flags,
+            registers: Register::ALL.map(|r| {
+                self[r] != other[r]
+            }),
+        }
+    }
+}
+
 impl<W: Word, F, I> From<(F, I)> for State<W>
 where
     F: Into<Flags>,
