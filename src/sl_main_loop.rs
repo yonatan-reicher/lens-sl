@@ -42,7 +42,7 @@ impl<W> From<Inst<W>> for Programs<W> {
 }
 
 impl<W: Clone + Debug + Eq + Hash> Extend<Programs<W>> for Programs<W> {
-    fn extend<I: IntoIterator<Item=Programs<W>>>(&mut self, iter: I) {
+    fn extend<I: IntoIterator<Item = Programs<W>>>(&mut self, iter: I) {
         for x in iter {
             *self = Programs::Extend(Rc::new((self.clone(), x)));
         }
