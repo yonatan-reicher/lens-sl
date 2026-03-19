@@ -492,6 +492,20 @@ impl Mask {
         ret.registers[r.0 as usize] = true;
         ret
     }
+
+    pub fn into_bit_mask(self) -> BitMask {
+        self.into()
+    }
+
+    pub fn registers(&self) -> impl Iterator<Item=Register> {
+        Register::ALL.into_iter().filter(|r| self[*r])
+    }
+}
+
+impl BitMask {
+    pub fn into_mask(self) -> Mask {
+        self.into()
+    }
 }
 
 impl<B> Index<Register> for Mask<B> {
@@ -556,6 +570,14 @@ impl From<BitMask> for Mask {
             // Reg i is stored in the (i + 1)th bit
             registers: Register::ALL.map(|r| ((b.0 >> (1 + r.0)) & 1) > 0),
         }
+    }
+}
+
+// It's much easier to implement `All` for the bit-masks
+impl All for BitMask {
+    type Iter = std::iter::Map<std::ops::Range<u32>, fn(u32) -> BitMask>;
+    fn all() -> Self::Iter {
+        (0..BitMask::from(Mask::FULL).0 + 1).map(Self)
     }
 }
 
