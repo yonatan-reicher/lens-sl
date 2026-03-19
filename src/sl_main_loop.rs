@@ -115,7 +115,9 @@ where
         // registers that aren't actually used in the instruction. Wall of text out.
         for mask in BitMask::all() {
             // TODO: instead of skipping, just iterate only those we need.
-            if mask.into_mask().registers().count() > 4 { continue; }
+            if mask.into_mask().registers().count() > 4 {
+                continue;
+            }
             let (input_mask, output_mask) = (input_mask | mask, output_mask | mask);
             let input = MaskedState::from(unmasked_input) & input_mask.into();
             let output = MaskedState::from(unmasked_output) & output_mask.into();
