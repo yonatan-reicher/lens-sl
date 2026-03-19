@@ -156,6 +156,19 @@ impl<W: Copy> State<W> {
     }
 }
 
+impl<W> Index<Register> for State<W> {
+    type Output = W;
+    fn index(&self, r: Register) -> &W {
+        &self.registers[r.0 as usize]
+    }
+}
+
+impl<W> IndexMut<Register> for State<W> {
+    fn index_mut(&mut self, r: Register) -> &mut W {
+        &mut self.registers[r.0 as usize]
+    }
+}
+
 impl<W: Word, F, I> From<(F, I)> for State<W>
 where
     F: Into<Flags>,
