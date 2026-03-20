@@ -49,6 +49,27 @@ impl<W: Clone + Debug + Eq + Hash> Extend<Programs<W>> for Programs<W> {
     }
 }
 
+impl<W: Clone> From<Programs<W>> for Vec<Vec<Inst<W>>> {
+    fn from(p: Programs<W>) -> Self {
+        match p {
+            Programs::Empty => vec![],
+            Programs::Inst(inst) => vec![vec![inst]],
+            Programs::Extend(rc) => {
+                rc.0.clone().pipe(Vec::from).mutate(|v| v.extend_from_slice(&rc.0.clone().pipe(Vec::from)))
+            }
+            Programs::Concat(rc) => {
+                let mut ret = vec![];
+                for y in rc.1.clone().pipe(Vec::from) {
+                    for x in rc.0.clone().pipe(Vec::from) {
+                        ret.push(x.mutate(|v| v.extend_from_slice(&y)));
+                    }
+                }
+                ret
+            }
+        }
+    }
+}
+
 type Bank<W> = crate::bank::Bank<Effect<W>, Programs<W>>;
 
 // === Algorithm ===
