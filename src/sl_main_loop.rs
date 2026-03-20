@@ -99,74 +99,26 @@ where
         }
     };
 
-    // Initial the bank with our atomic single-instruction programs, on the initial and final
-    // states of our lonely counter-example.
-    let ei = EnumerationInfo {
-        registers: EnumerationInfoOptions::Limited(&[
-            Register(0),
-            // Register(1),
-            // Register(2),
-            // Register(3),
-            // Register(4),
-            // Register(5),
-            // Register(6),
-            // Register(7),
-            // Register(8),
-            // Register(9),
-            // Register(10),
-            // Register(11),
-        ]),
-        immediates: EnumerationInfoOptions::<W>::Unlimited,
-    };
-    let n = Enumerator::new().into_iter(&ei).count();
-    let mut i = 0;
-    for inst in Enumerator::new().into_iter(&ei) {
-        let unmasked_input = initial_state;
-        let unmasked_output = initial_state.mutate(|s| inst.run(s));
-        let change = unmasked_output.diff(&unmasked_input).into_bit_mask();
-        let read_mask = inst.read_mask().into_bit_mask();
-        let (input_mask, output_mask) = (read_mask, read_mask | change);
-        // Now we just want to mask the input, mask the output and add to the bank right? Wrong. We
-        // actually want to add to the masks. This has to do with how we aren't adding empty
-        // programs to the bank. In the original algorithm, Sobeq, you do add the equivalent of
-        // empty programs - programs which just return the value of a variable! Again, in our
-        // domain, the equivalent for that is empty programs that have a single register
-        // pre&post-condition (example, {r0=5}ε{r0=5}). As an optimization we leave those out, and
-        // to make up for that, we need to include variations of the post-conditions with these
-        // registers that aren't actually used in the instruction. Wall of text out.
-        for mask in BitMask::all() {
-            // TODO: instead of skipping, just iterate only those we need.
-            if mask.into_mask().registers().count() > 4 {
-                continue;
-            }
-            let (input_mask, output_mask) = (input_mask | mask, output_mask | mask);
-            let input = MaskedState::from(unmasked_input) & input_mask.into();
-            let output = MaskedState::from(unmasked_output) & output_mask.into();
-            let effect = Effect { input, output };
-            let programs = Programs::from(inst);
-            bank.insert(effect, programs);
-        }
-        i += 1;
-        println!("{i}/{n}");
-    }
+    init_bank(&mut bank, initial_state.into());
 
-    // loop {
-    //     let mut to_add = vec![];
-    //     // Our F, for now, is concatenation.
-    //     for (a, b) in collect_children(&bank) {
-    //         let x = eval(a, b);
-    //         // did we win?
-    //         if x.output.state.registers[1] == 1.into() && x.output.state.registers[2] == 2.into() && x.output.state.registers[3] == 3.into() {
-    //             return Some(x.prog);
-    //         }
-    //         // Check if there exists a more general EC.
-    //         if bank.vec.iter().map(|e| e.input).all(|i| todo!()) {
-    //             if x.input not in
-    //         }
-    //     }
-    //     dbg!(to_add);
-    //     break;
-    // }
+    loop {
+        // let mut to_add = vec![];
+        // Our F, for now, is concatenation.
+        for (a, b) in collect_children(&bank) {
+            let x = eval((a.0, a.1.clone()), (b.0, b.1.clone()));
+            // did we win?
+            if x.0.output.state().registers[1] == 1.into() && x.0.output.state().registers[2] == 2.into() && x.0.output.state().registers[3] == 3.into() {
+                return Some(x.1.pipe(Vec::from)[0].clone());
+            }
+            // Check if we have a sub-masked-state that is not in the bank yet!
+            for sub_output in x.0.output.singleton_sub_states() {
+                todo!()
+                // if bank.contains_effect(sub_state) { }
+            }
+        }
+        // dbg!(to_add);
+        break;
+    }
 
     println!("Reached end!");
 
@@ -242,4 +194,51 @@ fn eval<W: Word>(
     let output = b.0.output | a.0.output;
     let prog = a.1.mutate(|p| p.extend([b.1]));
     (Effect { input, output }, prog)
+}
+
+// =============== Init Bank ======================================================================
+
+fn init_bank<W: Word>(bank: &mut Bank<W>, state: MaskedState<W>) {
+    // Initial the bank with our atomic single-instruction programs, on the initial and final
+    // states of our lonely counter-example.
+    let ei = EnumerationInfo {
+        registers: EnumerationInfoOptions::Limited(&[
+            Register(0),
+            Register(1),
+            Register(2),
+        ]),
+        immediates: EnumerationInfoOptions::<W>::Unlimited,
+    };
+    let n = Enumerator::new().into_iter(&ei).count();
+    let mut i = 0;
+    for inst in Enumerator::new().into_iter(&ei) {
+        let unmasked_input = *state.state();
+        let unmasked_output = state.state().clone().mutate(|s| inst.run(s));
+        let change = unmasked_output.diff(&unmasked_input).into_bit_mask();
+        let read_mask = inst.read_mask().into_bit_mask();
+        let (input_mask, output_mask) = (read_mask, read_mask | change);
+        // Now we just want to mask the input, mask the output and add to the bank right? Wrong. We
+        // actually want to add to the masks. This has to do with how we aren't adding empty
+        // programs to the bank. In the original algorithm, Sobeq, you do add the equivalent of
+        // empty programs - programs which just return the value of a variable! Again, in our
+        // domain, the equivalent for that is empty programs that have a single register
+        // pre&post-condition (example, {r0=5}ε{r0=5}). As an optimization we leave those out, and
+        // to make up for that, we need to include variations of the post-conditions with these
+        // registers that aren't actually used in the instruction. Wall of text out.
+        for mask in BitMask::all() {
+            // TODO: instead of skipping, just iterate only those we need.
+            if mask.into_mask().registers().count() > 4 {
+                continue;
+            }
+            let (input_mask, output_mask) = (input_mask | mask, output_mask | mask);
+            let input = MaskedState::from(unmasked_input) & input_mask.into();
+            let output = MaskedState::from(unmasked_output) & output_mask.into();
+            let effect = Effect { input, output };
+            let programs = Programs::from(inst);
+            bank.insert(effect, programs);
+        }
+        i += 1;
+        println!("{i}/{n}");
+    }
+
 }
