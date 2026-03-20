@@ -27,26 +27,34 @@ Some changes in the algorithm that we made.
 - Allocations have been reduced. Tried to reduce allocations and reuse
   allocations in key places.
 
-- TODO: Check if this actually correct.
-  Connection with the SMT solver for program equivalence is kept open. In the
+- Connection with the SMT solver for program equivalence is kept open. In the
   original algorithm, the SMT solver is at least completely restarted after each
   program. That is, the original program is reintroduced to it.
 
-## Currently Working On
+- Different Expansion strategy. When a graph is expanded, uses the outputs that
+  are stored for each program, and inserts with those, but when a conflict with
+  the depths of a branch happens when inserting, it discards the deeper outputs.
+  We are not sure what the original algorithm did with these depth-conflicts.
 
-main-loop-testing
-smt
-state-cloner
-unifying symbolic and concrete execution
+## New Algorithm
+
+The idea of the new algorithm is to take inspiration from Sobeq. Sobeq does a
+synthesis search for an Ast of a language with expressions. Here, in ARM, we
+don't have expressions, only instructions. In Sobeq's javascript, the atomic
+programs are just variable expression. Then you have constructors for method
+calls, operators and whatever. Here, in ARM, we'll have all possible
+instructions as our atomic programs, and our constructors will just be the
+concatenation operator.
+
+**`InitBank`** - `InitBank` is the name of the procedure in Sobeq that takes
+inserts new atomic programs into the bank under new equivalence classes. Our
+version will do the same ig.
 
 ## TODO
 
 Expand ISA and correct it's behavior.
-Backwards search.
 Reduced program with SMT holes for the SMT to find!
 Collect information.
-Make SMT code more efficient, by giving variables for each step.
-Make expand cut-off after a certain depth or something.
 
 ## On Collecting Information
 
