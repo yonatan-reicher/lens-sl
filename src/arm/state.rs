@@ -171,11 +171,9 @@ impl<W> IndexMut<Register> for State<W> {
 
 impl<W: PartialEq> State<W> {
     pub fn diff(&self, other: &Self) -> Mask {
-        Mask  {
+        Mask {
             flags: self.flags != other.flags,
-            registers: Register::ALL.map(|r| {
-                self[r] != other[r]
-            }),
+            registers: Register::ALL.map(|r| self[r] != other[r]),
         }
     }
 }
@@ -497,7 +495,7 @@ impl Mask {
         self.into()
     }
 
-    pub fn registers(&self) -> impl Iterator<Item=Register> {
+    pub fn registers(&self) -> impl Iterator<Item = Register> {
         Register::ALL.into_iter().filter(|r| self[*r])
     }
 }
