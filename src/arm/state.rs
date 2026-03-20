@@ -498,6 +498,27 @@ impl Mask {
     pub fn registers(&self) -> impl Iterator<Item = Register> {
         Register::ALL.into_iter().filter(|r| self[*r])
     }
+
+    /// The sub-mask are the masks that contain only a single thing
+    pub fn singleton_sub_masks(self) -> impl Iterator<Item = Mask> {
+        return I(self);
+
+        struct I(Mask);
+        impl Iterator for I {
+            type Item = Mask;
+            fn next(&mut self) -> Option<Self::Item> {
+                if let Some(r) = Register::ALL.into_iter().find(|r| self.0[*r]) {
+                    self.0[r] = false;
+                    return Some(Mask::just_register(r));
+                }
+                if self.0.flags {
+                    self.0.flags = false;
+                    return Some(Mask::JUST_FLAGS);
+                }
+                None
+            }
+        }
+    }
 }
 
 impl BitMask {
@@ -660,6 +681,17 @@ impl<B: Bool> Not for Mask<B> {
 impl<W> Masked<W> {
     pub fn mask(&self) -> BitMask { self.mask }
     pub fn state(&self) -> &State<W> { &self.state }
+}
+
+impl<W: Copy + Default> Masked<W> {
+    /// Returns the singleton sub-masked-states of this masked state. That is, the states that
+    /// contain only a single part of this state's mask.
+    pub fn singleton_sub_states(self) -> impl Iterator<Item = Self> {
+        self.mask
+            .into_mask()
+            .singleton_sub_masks()
+            .map(move |m| self & m)
+    }
 }
 
 impl<W> From<State<W>> for Masked<W> {
