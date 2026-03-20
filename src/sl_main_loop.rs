@@ -1,5 +1,5 @@
 use crate::all::All;
-use crate::arm::state::{BitMask, Flags, FlagsBitField, Mask, Masked as MaskedState, State};
+use crate::arm::state::{BitMask, Mask, Masked as MaskedState, State};
 use crate::arm::{Inst, Register};
 use crate::enumerate::{EnumerationInfo, EnumerationInfoOptions, Enumerator};
 use crate::graph::Graph;
