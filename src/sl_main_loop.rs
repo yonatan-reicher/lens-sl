@@ -8,6 +8,7 @@ use crate::reduce_bit_width::Reducer;
 use crate::tui::TuiHook;
 use crate::word::prelude::*;
 use functionality::{Mutate, Pipe};
+use rustc_hash::FxHashSet;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::rc::Rc;
@@ -55,7 +56,9 @@ impl<W: Clone> From<Programs<W>> for Vec<Vec<Inst<W>>> {
             Programs::Empty => vec![],
             Programs::Inst(inst) => vec![vec![inst]],
             Programs::Extend(rc) => {
-                rc.0.clone().pipe(Vec::from).mutate(|v| v.extend_from_slice(&rc.0.clone().pipe(Vec::from)))
+                rc.0.clone()
+                    .pipe(Vec::from)
+                    .mutate(|v| v.extend_from_slice(&rc.0.clone().pipe(Vec::from)))
             }
             Programs::Concat(rc) => {
                 let mut ret = vec![];
@@ -72,7 +75,9 @@ impl<W: Clone> From<Programs<W>> for Vec<Vec<Inst<W>>> {
 
 type Bank<W> = crate::bank::Bank<Effect<W>, Programs<W>>;
 
-// === Algorithm ===
+// =================== Main Algorithm ===================================================
+
+const DEBUG: bool = true;
 
 pub fn optimize<WBig: Word, W: Word>(
     program: &[Inst<WBig>],
@@ -101,23 +106,42 @@ where
 
     init_bank(&mut bank, initial_state.into());
 
+    let mut outputs_seen = FxHashSet::default();
+    let mut to_init = vec![];
+    let mut iters_left = 10;
     loop {
-        // let mut to_add = vec![];
+        if DEBUG {
+            dbg!(iters_left);
+        }
         // Our F, for now, is concatenation.
         for (a, b) in collect_children(&bank) {
             let x = eval((a.0, a.1.clone()), (b.0, b.1.clone()));
             // did we win?
-            if x.0.output.state().registers[1] == 1.into() && x.0.output.state().registers[2] == 2.into() && x.0.output.state().registers[3] == 3.into() {
+            if x.0.output.state().registers[1] == 1.into()
+                && x.0.output.state().registers[2] == 2.into()
+                && x.0.output.state().registers[3] == 3.into()
+            {
                 return Some(x.1.pipe(Vec::from)[0].clone());
             }
+            if false {
             // Check if we have a sub-masked-state that is not in the bank yet!
-            for sub_output in x.0.output.singleton_sub_states() {
-                todo!()
-                // if bank.contains_effect(sub_state) { }
+            if !outputs_seen.contains(x.0.output.state()) {
+                outputs_seen.insert(*x.0.output.state());
+                dbg!(outputs_seen.len());
+                to_init.push(x.0.output);
+            }
             }
         }
-        // dbg!(to_add);
-        break;
+        if DEBUG {
+            println!("done");
+        }
+        for s in to_init.drain(..) {
+            init_bank(&mut bank, s);
+        }
+        iters_left -= 1;
+        if iters_left == 0 {
+            break;
+        }
     }
 
     println!("Reached end!");
@@ -130,22 +154,15 @@ where
 
 /// In contrast to Sobeq, we only care about a single constructor - concatenation. It has 2
 /// arguments, which makes implementation and reasoning easier for us.
-fn collect_children<'a, W: Word>(
-    bank: &'a Bank<W>,
-) -> impl Iterator<
-    Item = (
-        (&'a Effect<W>, &'a Programs<W>),
-        (&'a Effect<W>, &'a Programs<W>),
-    ),
-> {
-    I {
+fn collect_children<'a, W: Word>(bank: &'a Bank<W>) -> CollectChildrenIter<'a, W> {
+    CollectChildrenIter {
         bank,
         iters: (bank.iter().fuse().peekable(), bank.iter()),
     }
 }
 
 use std::iter::{Fuse, Peekable};
-struct I<'a, W: Word> {
+struct CollectChildrenIter<'a, W> {
     bank: &'a Bank<W>,
     iters: (
         Peekable<Fuse<crate::bank::Iter<'a, Effect<W>, Programs<W>>>>,
@@ -153,7 +170,7 @@ struct I<'a, W: Word> {
     ),
 }
 
-impl<'a, W: Word> Iterator for I<'a, W> {
+impl<'a, W: Word> Iterator for CollectChildrenIter<'a, W> {
     type Item = (
         (&'a Effect<W>, &'a Programs<W>),
         (&'a Effect<W>, &'a Programs<W>),
@@ -163,11 +180,14 @@ impl<'a, W: Word> Iterator for I<'a, W> {
         let Some(b) = self.iters.1.next() else {
             self.iters.1 = self.bank.iter();
             self.iters.0.next();
+            if self.iters.0.len() % 100 == 0 {
+            dbg!(self.iters.0.len());
+            }
             return self.next();
         };
         // then check the first!
         // Notice that if the first iterator is done, we
-        let a = self.iters.0.peek()?;
+        let a = *self.iters.0.peek()?;
         // Check frame rule!
         // This marks the state that appears in the output of the first program and the input of
         // the first.
@@ -176,7 +196,11 @@ impl<'a, W: Word> Iterator for I<'a, W> {
             return self.next();
         }
         // Frame rule succeeds!
-        Some((*a, b))
+        Some((a, b))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (0, Some(self.iters.0.len() * self.iters.1.len()))
     }
 }
 
@@ -192,7 +216,7 @@ fn eval<W: Word>(
     // We need to mask the second's inputs which are fed by the outputs of the first.
     let input = a.0.input | (b.0.input & (!conflict_mask).into());
     let output = b.0.output | a.0.output;
-    let prog = a.1.mutate(|p| p.extend([b.1]));
+    let prog = a.1.concat(b.1);
     (Effect { input, output }, prog)
 }
 
@@ -202,18 +226,14 @@ fn init_bank<W: Word>(bank: &mut Bank<W>, state: MaskedState<W>) {
     // Initial the bank with our atomic single-instruction programs, on the initial and final
     // states of our lonely counter-example.
     let ei = EnumerationInfo {
-        registers: EnumerationInfoOptions::Limited(&[
-            Register(0),
-            Register(1),
-            Register(2),
-        ]),
+        registers: EnumerationInfoOptions::Limited(&[Register(0)/*, Register(1) */]),
         immediates: EnumerationInfoOptions::<W>::Unlimited,
     };
     let n = Enumerator::new().into_iter(&ei).count();
     let mut i = 0;
     for inst in Enumerator::new().into_iter(&ei) {
         let unmasked_input = *state.state();
-        let unmasked_output = state.state().clone().mutate(|s| inst.run(s));
+        let unmasked_output = (*state.state()).mutate(|s| inst.run(s));
         let change = unmasked_output.diff(&unmasked_input).into_bit_mask();
         let read_mask = inst.read_mask().into_bit_mask();
         let (input_mask, output_mask) = (read_mask, read_mask | change);
@@ -227,7 +247,7 @@ fn init_bank<W: Word>(bank: &mut Bank<W>, state: MaskedState<W>) {
         // registers that aren't actually used in the instruction. Wall of text out.
         for mask in BitMask::all() {
             // TODO: instead of skipping, just iterate only those we need.
-            if mask.into_mask().registers().count() > 4 {
+            if mask.into_mask().registers().count() > 2 {
                 continue;
             }
             let (input_mask, output_mask) = (input_mask | mask, output_mask | mask);
@@ -240,5 +260,4 @@ fn init_bank<W: Word>(bank: &mut Bank<W>, state: MaskedState<W>) {
         i += 1;
         println!("{i}/{n}");
     }
-
 }
