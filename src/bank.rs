@@ -40,7 +40,7 @@ impl<E, P> Bank<E, P> {
         self.classes.values().map(|p| p.len()).sum()
     }
 
-    pub fn iter(&self) -> Iter<E, P> {
+    pub fn iter(&self) -> Iter<'_, E, P> {
         self.into_iter()
     }
 }
