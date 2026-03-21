@@ -108,38 +108,40 @@ where
 
     let mut outputs_seen = FxHashSet::default();
     let mut to_init = vec![];
-    let mut iters_left = 10;
+    let mut i = 0;
     loop {
         if DEBUG {
-            dbg!(iters_left);
+            i += 1;
+            println!("=== Iteration {i} ===");
         }
         // Our F, for now, is concatenation.
         for (a, b) in collect_children(&bank) {
             let x = eval((a.0, a.1.clone()), (b.0, b.1.clone()));
             // did we win?
-            if x.0.output.state().registers[1] == 1.into()
-                && x.0.output.state().registers[2] == 2.into()
-                && x.0.output.state().registers[3] == 3.into()
+            if x.0.output.state().registers[0] == 1.into()
+            //if x.0.output.state().registers[1] == 1.into()
+            //    && x.0.output.state().registers[2] == 2.into()
+            //    && x.0.output.state().registers[3] == 3.into()
             {
+                dbg!(&x);
                 return Some(x.1.pipe(Vec::from)[0].clone());
             }
-            if false {
             // Check if we have a sub-masked-state that is not in the bank yet!
             if !outputs_seen.contains(x.0.output.state()) {
                 outputs_seen.insert(*x.0.output.state());
-                dbg!(outputs_seen.len());
+                if DEBUG {
+                    println!("Another one added! {}", outputs_seen.len());
+                }
                 to_init.push(x.0.output);
-            }
             }
         }
         if DEBUG {
-            println!("done");
+            println!("Finished collecting children");
         }
         for s in to_init.drain(..) {
             init_bank(&mut bank, s);
         }
-        iters_left -= 1;
-        if iters_left == 0 {
+        if i == 10 {
             break;
         }
     }
@@ -180,9 +182,9 @@ impl<'a, W: Word> Iterator for CollectChildrenIter<'a, W> {
         let Some(b) = self.iters.1.next() else {
             self.iters.1 = self.bank.iter();
             self.iters.0.next();
-            if self.iters.0.len() % 100 == 0 {
-            dbg!(self.iters.0.len());
-            }
+            // if self.iters.0.len().is_multiple_of(1000) {
+            //    println!("{}", self.iters.0.len());
+            // }
             return self.next();
         };
         // then check the first!
@@ -226,8 +228,8 @@ fn init_bank<W: Word>(bank: &mut Bank<W>, state: MaskedState<W>) {
     // Initial the bank with our atomic single-instruction programs, on the initial and final
     // states of our lonely counter-example.
     let ei = EnumerationInfo {
-        registers: EnumerationInfoOptions::Limited(&[Register(0)/*, Register(1) */]),
-        immediates: EnumerationInfoOptions::<W>::Unlimited,
+        registers: EnumerationInfoOptions::Limited(&[Register(0) /*, Register(1) */]),
+        immediates: EnumerationInfoOptions::<W>::Limited(&[0.into(), 1.into(), 2.into()]),
     };
     let n = Enumerator::new().into_iter(&ei).count();
     let mut i = 0;
