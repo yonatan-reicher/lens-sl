@@ -58,7 +58,7 @@ impl<W: Clone> From<Programs<W>> for Vec<Vec<Inst<W>>> {
             Programs::Extend(rc) => {
                 rc.0.clone()
                     .pipe(Vec::from)
-                    .mutate(|v| v.extend_from_slice(&rc.0.clone().pipe(Vec::from)))
+                    .mutate(|v| v.extend_from_slice(&rc.1.clone().pipe(Vec::from)))
             }
             Programs::Concat(rc) => {
                 let mut ret = vec![];
