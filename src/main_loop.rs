@@ -125,44 +125,12 @@ where
         reduced_program.push(inst.reduce(&mut reducer));
     }
 
-    // Run the program on each input to get the outputs. We call these "test cases".
-    let test_cases: Vec<(State<WT>, State<WT>)> = inputs
-        .iter()
-        .map(|input| {
-            let input = State::from((
-                Flags::default(),
-                input.iter().map(|(r, v)| (*r, v.into_word())),
-            ));
-            let mut output = input;
-            for inst in program {
-                inst.run(&mut output);
-            }
-            (input, output)
-        })
-        .collect();
-    let _test_cases_reduced: Vec<(State<WS>, State<WS>)> = test_cases
-        .iter()
-        .map(|(input, _output)| {
-            let input = input.reduce(&mut reducer.clone());
-            let mut output = input;
-            for inst in &reduced_program {
-                inst.run(&mut output);
-            }
-            (input, output)
-        })
-        .collect();
-
     // Collect all the registers and immediates that might be useful for synthesis.
     let mut collector = Collector::new();
     collector.program(program);
     collector.test_cases(&test_cases);
     let Collector { registers } = collector;
     let immediates: Vec<WS> = reducer.immediates().chain([0.into()]).collect();
-
-    // let oracle = TestCasesOracle { test_cases };
-    // let oracle_reduced = TestCasesOracle {
-    //     test_cases: test_cases_reduced,
-    // };
 
     let oracle = SmtOracle::new(program.to_vec());
     let oracle_reduced = SmtOracle::new(reduced_program);
