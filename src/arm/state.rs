@@ -542,7 +542,7 @@ impl<B: Bool> BoolEq<B> for Mask<B> {
 }
 
 impl BitMask {
-    const EMPTY: BitMask = BitMask(0);
+    pub const EMPTY: BitMask = BitMask(0);
 
     pub fn into_mask(self) -> Mask {
         self.into()
