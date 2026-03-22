@@ -28,3 +28,14 @@ impl<P: Program<S> + ?Sized, S: State> Oracle<P, S> for TestCasesOracle<S> {
         Ok(())
     }
 }
+
+use crate::word::Word;
+use crate::arm::Inst;
+use crate::arm::state::State as ArmState;
+impl<W: Word> Program<ArmState<W>> for [Inst<W>] {
+    fn run(&self, state: &mut ArmState<W>) {
+        for inst in self {
+            inst.run(state);
+        }
+    }
+}

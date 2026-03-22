@@ -33,14 +33,6 @@ type Graph<W> = graph::Graph<State<W>, Rc<Programs<W>>>;
 
 // ========================================== Oracle ==============================================
 
-impl<W: Word> oracle::test_cases::Program<State<W>> for [Inst<W>] {
-    fn run(&self, state: &mut State<W>) {
-        for inst in self {
-            inst.run(state);
-        }
-    }
-}
-
 impl<W: Word> oracle::smt::Inst for Inst<W> {
     type State = State<W>;
 
