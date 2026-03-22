@@ -20,7 +20,6 @@ mod tui;
 /// Main loop where the big picture stuff happens.
 mod main_loop;
 mod bank;
-mod sl_main_loop;
 
 // Here is a diagram of the dependency structure between some of the main modules:
 //
@@ -83,4 +82,3 @@ pub use arm::{BackwardMap, CondCode, Flags, FlagsBitField, Inst, OpCode, Registe
 pub use main_loop::optimize;
 pub use tui::{NoTui, Tui, TuiHook};
 pub use word::{Word, Word4, Word8, Word64};
-pub use sl_main_loop::optimize as sl_optimize;
