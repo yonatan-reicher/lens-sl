@@ -3,10 +3,10 @@
 use super::Register;
 use crate::all::All;
 use crate::all_permutations::Iter as PermutationIter;
+use crate::bool::all_eq;
 use crate::bool::prelude::*;
 use crate::collect_registers;
 use crate::enumerate::EnumerationInfoOptions;
-use crate::oracle;
 use crate::reduce_bit_width::Reducer;
 use crate::word::prelude::*;
 use std::fmt::{self, Display, Formatter};
@@ -33,13 +33,14 @@ pub struct State<W> {
 pub struct SymbolicState<'st, W> {
     pub registers: [W; Register::COUNT as usize],
     pub flags: Flags<SmtBool<'st>>,
-    // TODO: Live mask
+    pub mask: Mask<SmtBool<'st>>,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct StateVars<'st, W> {
     pub registers: [Const<'st, W>; Register::COUNT as usize],
     pub flags: Flags<Const<'st, SmtBool<'st>>>,
+    pub mask: Mask<Const<'st, SmtBool<'st>>>,
 }
 
 // ============================= Flags =============================
@@ -71,7 +72,7 @@ bitflags::bitflags! {
 
 /// A liveness mask. For each register, is it used or not. Has just one flag for the whole flags
 /// register (because flags are used and written to together).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, Hash)]
 pub struct Mask<B = bool> {
     pub registers: [B; Register::COUNT as usize],
     pub flags: B,
@@ -132,6 +133,13 @@ impl<W: Copy> State<W> {
     {
         self.registers = [W::default(); _];
         self.flags = FlagsBitField::empty();
+    }
+
+    pub fn masked(self, mask: Mask) -> Masked<W>
+    where
+        W: Default,
+    {
+        Masked::from(self) & mask
     }
 
     pub fn all_each(ei: &EnumerationInfoOptions<Register>, mut f: impl FnMut(&Self))
@@ -225,18 +233,24 @@ impl<'st, W: SmtWord<'st>> From<StateVars<'st, W>> for SymbolicState<'st, W> {
         Self {
             registers: value.registers.map(Into::into),
             flags: value.flags.into(),
+            mask: value.mask.map(Into::into),
         }
     }
 }
 
 impl<'st, W: SmtWord<'st>> SymbolicState<'st, W> {
     pub fn eq(&self, other: Self) -> SmtBool<'st> {
-        let regs = self.registers.iter().zip(other.registers);
+        let SymbolicState {
+            registers,
+            flags,
+            mask,
+        } = self;
+        let regs = registers.iter().zip(other.registers);
         let regs_eq = regs
             .map(|(ra, rb)| ra._eq(rb))
             .reduce(|b1, b2| b1 & b2)
             .unwrap();
-        regs_eq & self.flags.eq(&other.flags)
+        regs_eq & flags.eq(&other.flags) & mask.eq(&other.mask)
     }
 }
 
@@ -245,6 +259,12 @@ impl<'st, W: SmtWord<'st>> StateVars<'st, W> {
         Self {
             registers: std::array::from_fn(|i| W::new_const(st, &format!("{name}_r{i}"))),
             flags: Flags::new(st, name),
+            mask: Mask {
+                registers: std::array::from_fn(|i| {
+                    SmtBool::new_const(st, &format!("{name}_r{i}_live"))
+                }),
+                flags: SmtBool::new_const(st, &format!("{name}_flags_live")),
+            },
         }
     }
 }
@@ -515,9 +535,31 @@ impl Mask {
     }
 }
 
+impl<B> Mask<B> {
+    pub fn map<B2>(self, mut f: impl FnMut(B) -> B2) -> Mask<B2> {
+        Mask {
+            registers: self.registers.map(&mut f),
+            flags: f(self.flags),
+        }
+    }
+}
+
+impl<B: Bool> BoolEq<B> for Mask<B> {
+    fn eq(&self, other: &Self) -> B {
+        let Mask { registers, flags } = self;
+        all_eq(registers.iter().zip(&other.registers)) & flags.eq(&other.flags)
+    }
+}
+
 impl BitMask {
+    const EMPTY: BitMask = BitMask(0);
+
     pub fn into_mask(self) -> Mask {
         self.into()
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.0 == 0
     }
 }
 
