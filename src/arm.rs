@@ -617,6 +617,21 @@ impl<W: Word> Inst<W> {
         Some(state.masked(output_mask))
     }
 
+    pub fn run_backward_masked<'a>(
+        &self,
+        output: state::Masked<W>,
+        bm: &'a BackwardMap<W>,
+    ) -> impl IntoIterator<Item = &'a state::Masked<W>> + use<'a, W> {
+        // let unmasked_outputs = output.mask().;
+        // self.run_backward(*output.state(), bm)
+        //     .into_iter()
+        //     .map(|input| {
+        //         todo!()
+        //     })
+        todo!();
+        []
+    }
+
     pub fn reduce<WSmall: Word>(&self, reducer: &mut Reducer<W, WSmall>) -> Inst<WSmall> {
         fn reduce_arg<W: Word, WSmall: Word>(
             reducer: &mut Reducer<W, WSmall>,
