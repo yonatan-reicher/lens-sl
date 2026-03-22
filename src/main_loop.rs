@@ -19,7 +19,6 @@ use crate::word::prelude::*;
 
 // std imports
 use std::ops::ControlFlow::{Break, Continue};
-use std::rc::Rc;
 
 // smt stuff!
 use crate::smtlib_utils::bool_term_to_bool;
