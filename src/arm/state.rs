@@ -77,14 +77,14 @@ pub struct Mask<B = bool> {
 }
 
 /// [Mask], but compacted to a bit-field.
-#[derive(Clone, Copy, Debug, Display, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Display, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[debug("{:?}", Mask::from(*self))]
 #[display("{}", Mask::from(*self))]
 pub struct BitMask(u32);
 
 // =========================== Masked State ===========================
 
-#[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Masked<W> {
     state: State<W>,
     mask: BitMask,
