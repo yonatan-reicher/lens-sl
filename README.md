@@ -54,17 +54,10 @@ version will do the same ig.
 
 ## Currently Working On
 
-Saved the Backwards Map object to a file when created for the first time. Next
-time I want to run some tests on the enumeration code, maybe even in it's own
-environment without, as a standalone test. I want to print the minimum and
-maximum depths of the tree at lots of different points to understand the real
-deal. My suspicions indicate that when building forward, they build the whole
-graph, which makes no sense to me.
-After that, I should implement the new backwards graph type - it should just be
-a vector of hash-maps from outputs to sets of programs. Vector of the length of
-the amount of tests.
-Will also need to change the insert for programs to check if the program
-already exists.
+Still working on that Sobeq thing. Thinking of starting over from the Lens code
+instead, and just changing the state to the masked state, and then in expand,
+add by concatenation instead of whatever-the-fuck we do now. I think I'll try
+trying it tomorrow morning.
 
 ## TODO
 
