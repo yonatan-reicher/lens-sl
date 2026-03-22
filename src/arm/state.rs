@@ -262,7 +262,7 @@ impl<'st, W: SmtWord<'st>> StateVars<'st, W> {
 //     State Masking
 
 impl<W: Copy + Default> State<W> {
-    pub fn mask(self, mask: Mask) -> Self {
+    pub fn mask_or_default(self, mask: Mask) -> Self {
         State {
             flags: if mask.flags {
                 self.flags
@@ -735,7 +735,7 @@ impl<W: Copy + Default> BitAnd<Mask> for Masked<W> {
     fn bitand(self, mask: Mask) -> Self {
         Self {
             mask: self.mask & mask.into(),
-            state: self.state.mask(mask),
+            state: self.state.mask_or_default(mask),
             // mask mask mask mask...
         }
     }
