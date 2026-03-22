@@ -25,6 +25,8 @@ use crate::smtlib_utils::bool_term_to_bool;
 
 use functionality::prelude::*;
 
+use itertools::Itertools;
+
 // =========================================== Graph ==============================================
 
 type Program<W> = programs::Program<Inst<W>>;
@@ -133,11 +135,15 @@ where
     let registers = Collector::new()
         .mutate(|c| c.program(program))
         .pipe(|c| c.registers)
-        .mutate(|r| r.extend(additional_registers));
+        .mutate(|r| r.extend(additional_registers))
+        .mutate(|r| r.sort())
+        .mutate(|r| r.dedup());
     let immediates: Vec<WS> = reducer
         .immediates()
         .chain(additional_immediates_reduced)
-        .collect();
+        .collect::<Vec<WS>>()
+        .mutate(|r| r.sort())
+        .mutate(|r| r.dedup());
 
     let oracle = SmtOracle::new(program.to_vec());
     let oracle_reduced = SmtOracle::new(reduced_program);

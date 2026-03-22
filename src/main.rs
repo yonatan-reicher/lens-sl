@@ -16,16 +16,8 @@ fn main() {
             inst!(AddI Eq, 1, 0, 1),
             inst!(AddI Eq, 1, 0, 1),
         ],
-        &[
-            &[(Register(0), 0.into()), (Register(1), 0.into())],
-            &[(Register(0), 1.into()), (Register(1), 0.into())],
-            &[(Register(0), 0.into()), (Register(1), 1.into())],
-            &[(Register(0), 1.into()), (Register(1), 1.into())],
-            &[(Register(0), 20.into()), (Register(1), 1.into())],
-            &[(Register(0), 8.into()), (Register(1), 1.into())],
-            &[(Register(0), 93.into()), (Register(1), 1.into())],
-            &[(Register(0), 92.into()), (Register(1), 11.into())],
-        ],
+        [Register(0), Register(1)],
+        [0.into(), 1.into(), 20.into(), 8.into(), 11.into(), 92.into(), 93.into()],
         &Tui::default(), // */ &NoTui,
     );
     let Some(p) = p else {
