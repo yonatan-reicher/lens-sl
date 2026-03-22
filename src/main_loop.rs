@@ -7,6 +7,7 @@ use crate::arm::state::Masked as MaskedState;
 use crate::arm::{
     BackwardMap, Flags, Inst, Register, State, StateVars, SymbolicState, extend_program_for_each,
 };
+use crate::arm::state::Masked as MaskedState;
 use crate::collect_registers::Collector;
 use crate::enumerate::{EnumerationInfo, EnumerationInfoOptions, Enumerator};
 use crate::graph;
@@ -33,7 +34,7 @@ type Program<W> = programs::Program<Inst<W>>;
 
 type Programs<W> = programs::Programs<Inst<W>>;
 
-type Graph<W> = graph::Graph<State<W>, Programs<W>>;
+type Graph<W> = graph::Graph<MaskedState<W>, Programs<W>>;
 
 // ========================================== Oracle ==============================================
 
@@ -375,8 +376,8 @@ fn connect_and_refine<WT: Word, WS: Word>(
             }
             _ => {
                 println!("Graphs are not leaves at the end.");
-                println!("Forward Graph: \n{}", forward_graph.pretty_print());
-                println!("Backward Graph: \n{}", backward_graph.pretty_print());
+                // println!("Forward Graph: \n{}", forward_graph.pretty_print());
+                // println!("Backward Graph: \n{}", backward_graph.pretty_print());
                 panic!();
             }
         }
@@ -409,9 +410,9 @@ fn connect_and_refine<WT: Word, WS: Word>(
         panic!();
     };
 
-    let mut next = State::default();
+    let mut next = MaskedState::default();
     for (forward_output, forward_subgraph) in forward_outputs {
-        forward_output.clone_to(&mut next);
+        next = *forward_output;
         inst.run(&mut next);
         if let Some(backward_subgraph) = backward_outputs.get_mut(&next) {
             let res = connect_and_refine(globals, forward_subgraph, backward_subgraph, inst, k + 1);
