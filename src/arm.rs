@@ -2,6 +2,7 @@
 
 use crate::all::All;
 use crate::all_permutations::Iter as PermutationIter;
+use crate::arm::state::BitMask;
 use crate::bool::prelude::*;
 use crate::enumerate::{EnumerationInfo, EnumerationInfoOptions, Enumerator};
 use crate::iter_slice_or_single::Iter as SliceOrSingle;
@@ -599,6 +600,21 @@ impl<W: Word> Inst<W> {
         bm: &'a BackwardMap<W>,
     ) -> impl IntoIterator<Item = &'a State<W>> + use<'a, W> {
         &bm[(*self, state)]
+    }
+
+    pub fn run_masked(&self, masked: state::Masked<W>) -> Option<state::Masked<W>> {
+        // Check if we can run
+        let input_mask: BitMask = masked.mask();
+        let missing_inputs_mask = self.read_mask().into_bit_mask() & !input_mask;
+        if !missing_inputs_mask.is_empty() {
+            return None;
+        }
+        // We can. Run!
+        let mut state = *masked.state();
+        self.run(&mut state);
+        let change_mask = state.diff(masked.state());
+        let output_mask = change_mask | input_mask.into_mask();
+        Some(state.masked(output_mask))
     }
 
     pub fn reduce<WSmall: Word>(&self, reducer: &mut Reducer<W, WSmall>) -> Inst<WSmall> {
