@@ -220,6 +220,7 @@ where
     // Generate a first input
     println!("Checking empty program");
     match globals.oracle_reduced.check_program(&[]) {
+        // TODO: What if the reduced program is equivalent but not the unreduced?
         Ok(()) => return Some(vec![]), // Turns out it's actually the empty program 🤷
         Err((inp, out)) => {
             tui.found_counter_example(inp, out);
