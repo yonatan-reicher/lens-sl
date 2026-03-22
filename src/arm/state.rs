@@ -33,14 +33,12 @@ pub struct State<W> {
 pub struct SymbolicState<'st, W> {
     pub registers: [W; Register::COUNT as usize],
     pub flags: Flags<SmtBool<'st>>,
-    pub mask: Mask<SmtBool<'st>>,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct StateVars<'st, W> {
     pub registers: [Const<'st, W>; Register::COUNT as usize],
     pub flags: Flags<Const<'st, SmtBool<'st>>>,
-    pub mask: Mask<Const<'st, SmtBool<'st>>>,
 }
 
 // ============================= Flags =============================
@@ -233,7 +231,6 @@ impl<'st, W: SmtWord<'st>> From<StateVars<'st, W>> for SymbolicState<'st, W> {
         Self {
             registers: value.registers.map(Into::into),
             flags: value.flags.into(),
-            mask: value.mask.map(Into::into),
         }
     }
 }
@@ -243,14 +240,13 @@ impl<'st, W: SmtWord<'st>> SymbolicState<'st, W> {
         let SymbolicState {
             registers,
             flags,
-            mask,
         } = self;
         let regs = registers.iter().zip(other.registers);
         let regs_eq = regs
             .map(|(ra, rb)| ra._eq(rb))
             .reduce(|b1, b2| b1 & b2)
             .unwrap();
-        regs_eq & flags.eq(&other.flags) & mask.eq(&other.mask)
+        regs_eq & flags.eq(&other.flags)
     }
 }
 
@@ -259,12 +255,6 @@ impl<'st, W: SmtWord<'st>> StateVars<'st, W> {
         Self {
             registers: std::array::from_fn(|i| W::new_const(st, &format!("{name}_r{i}"))),
             flags: Flags::new(st, name),
-            mask: Mask {
-                registers: std::array::from_fn(|i| {
-                    SmtBool::new_const(st, &format!("{name}_r{i}_live"))
-                }),
-                flags: SmtBool::new_const(st, &format!("{name}_flags_live")),
-            },
         }
     }
 }
