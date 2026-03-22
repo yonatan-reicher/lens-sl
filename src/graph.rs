@@ -1,12 +1,8 @@
 use crate::len::Len;
+use functionality::{Pipe, Mutate};
 use rustc_hash::FxHashMap;
 use std::fmt::Display;
 use std::hash::Hash;
-
-pub trait Programs: Default + Len {
-    type Program;
-    fn extend(&mut self, other: &Self);
-}
 
 /// A search graph for programs and their outputs on some test cases.
 /// For n test cases (input_n, output_n), the graph has n levels, including 0.
@@ -21,12 +17,15 @@ pub enum Graph<State, P> {
     Nest(FxHashMap<State, Self>),
 }
 
-impl<S, P: Programs> Graph<S, P>
+impl<S, P> Graph<S, P>
 where
     S: Eq + Hash + Clone,
 {
     /// The number of programs stored in the graph.
-    pub fn n_programs(&self) -> usize {
+    pub fn n_programs(&self) -> usize
+    where
+        P: Len,
+    {
         match self {
             Self::Leaf(programs) => programs.len(),
             Self::Nest(hash_map) => hash_map
@@ -80,7 +79,10 @@ where
         }
     }
 
-    pub fn insert(&mut self, output: S, progs: &P) {
+    pub fn insert<A>(&mut self, output: S, progs: impl IntoIterator<Item = A>)
+    where
+        P: Default + Extend<A>,
+    {
         debug_assert!(matches!(self, Graph::Nest(..)));
         match self {
             Self::Leaf(..) => unreachable!(),
@@ -101,7 +103,10 @@ where
 
     /// Insert the given programs under the given set of states. The length of
     /// the slice of output states must be of the same depth as the graph.
-    pub fn insert_all(&mut self, outputs: &[S], progs: &P) {
+    pub fn insert_all<A>(&mut self, outputs: &[S], progs: impl IntoIterator<Item = A>)
+    where
+        P: Default + Extend<A> + Extend<P> + Len,
+    {
         match self {
             Self::Leaf(programs) => {
                 if !outputs.is_empty() && programs.is_empty() {
@@ -127,19 +132,16 @@ where
         }
     }
 
-    pub fn flatten(self) -> P {
+    pub fn flatten(self) -> P
+    where
+        P: Default + Extend<P>,
+    {
         match self {
             Graph::Leaf(p) => p,
             Graph::Nest(map) => {
-                let mut ret = None;
-                for sub_graph in map.into_values() {
-                    let p1 = sub_graph.flatten();
-                    match &mut ret {
-                        None => ret = Some(p1),
-                        Some(p) => p.extend(&p1),
-                    }
-                }
-                ret.unwrap()
+                map.into_values()
+                    .map(|sub_graph| sub_graph.flatten())
+                    .pipe(|iter| P::default().mutate(|p| p.extend(iter)))
             }
         }
     }
@@ -168,7 +170,7 @@ where
 impl<S, P> Graph<S, P>
 where
     S: Eq + Hash + Display,
-    P: Programs + Display,
+    P: Display,
 {
     pub fn pretty_print_lines(&self) -> Vec<String> {
         match self {
@@ -194,9 +196,10 @@ where
 
 // ==================== Printing Stats ==========================================
 
-impl<S, P: Programs> Graph<S, P>
+impl<S, P> Graph<S, P>
 where
     S: Eq + Hash + Clone,
+    P: Len,
 {
     /// Print information that shows us growth and memory usage of the graphs.
     #[allow(dead_code)]
@@ -237,36 +240,46 @@ where
 mod tests {
     use super::*;
 
-    impl Programs for Vec<&str> {
-        type Program = String;
-        fn extend(&mut self, other: &Self) {
-            self.extend_from_slice(other);
+    #[derive(Default)]
+    struct Programs(Vec<&'static str>);
+
+    impl Len for Programs {
+        fn len(&self) -> usize {
+            self.0.len()
+        }
+    }
+
+    impl Extend<Programs> for Programs {
+        fn extend<I: IntoIterator<Item = Programs>>(&mut self, iter: I) {
+            iter.into_iter().for_each(|x| {
+                self.0.extend_from_slice(&x.0);
+            })
         }
     }
 
     #[test]
     fn insert_actually_modifies_graph() {
-        let mut graph = Graph::Nest(Default::default());
-        graph.insert("output1", &vec!["prog1"]);
-        graph.insert("output2", &vec!["prog2"]);
+        let mut graph: Graph<&str, Programs> = Graph::Nest(Default::default());
+        graph.insert("output1", [Programs(vec!["prog1"])]);
+        graph.insert("output2", [Programs(vec!["prog2"])]);
         assert_eq!(graph.n_programs(), 2);
         assert_eq!(graph.n_leaves(), 2);
     }
 
     #[test]
     fn insert_combines_when_it_should() {
-        let mut graph = Graph::Nest(Default::default());
-        graph.insert("output1", &vec!["prog1"]);
-        graph.insert("output1", &vec!["prog2"]);
+        let mut graph: Graph<&str, Programs> = Graph::Nest(Default::default());
+        graph.insert("output1", [Programs(vec!["prog1"])]);
+        graph.insert("output1", [Programs(vec!["prog2"])]);
         assert_eq!(graph.n_programs(), 2);
         assert_eq!(graph.n_leaves(), 1);
     }
 
     #[test]
     fn insert_all_with_empty_slice() {
-        let mut graph: Graph<&str, Vec<&str>> = Graph::Leaf(vec![]);
-        graph.insert_all(&[], &vec!["prog1"]);
-        graph.insert_all(&[], &vec!["prog2"]);
+        let mut graph: Graph<&str, Programs> = Graph::Leaf(Programs::default());
+        graph.insert_all(&[], [Programs(vec!["prog1"])]);
+        graph.insert_all(&[], [Programs(vec!["prog2"])]);
         assert_eq!(graph.n_programs(), 2);
         assert_eq!(graph.n_leaves(), 1);
     }

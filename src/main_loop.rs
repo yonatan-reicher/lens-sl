@@ -29,7 +29,7 @@ type Program<W> = programs::Program<Inst<W>>;
 
 type Programs<W> = programs::Programs<Inst<W>>;
 
-type Graph<W> = graph::Graph<State<W>, Rc<Programs<W>>>;
+type Graph<W> = graph::Graph<State<W>, Programs<W>>;
 
 // ========================================== Oracle ==============================================
 
@@ -190,7 +190,7 @@ where
     <W as All>::Iter: Clone,
 {
     // The forward and backward graphs start while having the empty program.
-    let empty_program = Rc::new(Programs::empty_program());
+    let empty_program = Programs::empty_program();
     let mut forward_graph = Graph::Leaf(empty_program.clone());
     let mut backward_graph = Graph::Leaf(empty_program);
     let enumeration_info = &EnumerationInfo::<W> {
@@ -500,8 +500,8 @@ fn expand_forward_or_backward<W: Word, StepRet: IntoIterator<Item = State<W>>>(
         match old_graph {
             Graph::Leaf(programs) if programs.is_empty() => (),
             Graph::Leaf(programs) => {
-                let programs = Rc::new(programs.clone().concat(inst));
-                new_graph.insert_all(out_states, &programs);
+                let programs = programs.clone().concat(inst);
+                new_graph.insert_all(out_states, [programs]);
             }
             Graph::Nest(hash_map) => {
                 for (state, sub_graph) in hash_map.iter() {
@@ -556,9 +556,9 @@ fn build_forwards_or_backwards<W: Word, StepRet: IntoIterator<Item = State<W>>>(
     let old_graph = std::mem::replace(graph, Graph::Nest(Default::default()));
     old_graph.for_each(&mut |programs| {
         programs.each(|program| {
-            let programs: Rc<Programs<W>> = Rc::new(program.iter().cloned().collect());
+            let programs: Programs<W> = program.iter().cloned().collect();
             for output in step(&program, *input) {
-                graph.insert(output, &programs);
+                graph.insert(output, [programs.clone()]);
             }
         });
     });
