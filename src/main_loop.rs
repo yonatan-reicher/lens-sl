@@ -238,31 +238,16 @@ where
         if globals.forward_length + globals.backward_length + 1 == original_length - 1 {
             return None;
         }
-        let should_expand_forward = 2 * globals.backward_length >= globals.forward_length;
-        let should_expand_forward = true;
-        let direction = Direction::from_is_forward(should_expand_forward);
+        let direction = Direction::Forward;
         tui.expanding(direction);
-        if should_expand_forward {
-            expand_forward(
-                &mut forward_graph,
-                enumeration_info,
-                globals.tui,
-                globals.total_instructions,
-            );
-            globals.forward_length += 1;
-            tui.report_graph(Direction::Forward, &forward_graph);
-        } else {
-            expand_backward(
-                &mut backward_graph,
-                enumeration_info,
-                globals.tui,
-                globals.total_instructions,
-                &globals.backward_map,
-            );
-            globals.backward_length += 1;
-            tui.report_graph(Direction::Backward, &backward_graph);
-        }
-        // print_stats(&forward_graph, &backward_graph);
+        expand_forward(
+            &mut forward_graph,
+            enumeration_info,
+            globals.tui,
+            globals.total_instructions,
+        );
+        globals.forward_length += 1;
+        tui.report_graph(Direction::Forward, &forward_graph);
     }
 }
 
@@ -448,18 +433,6 @@ fn expand_forward<W: Word>(
     expand_forward_or_backward(graph, ei, tui, total_inst, |state, inst| {
         inst.run_masked(state)
     })
-}
-
-fn expand_backward<W: Word>(
-    graph: &mut Graph<W>,
-    ei: &EnumerationInfo<W>,
-    tui: &impl for<'g> TuiHook<&'g Graph<W>, State<W>>,
-    total_inst: usize,
-    bm: &BackwardMap<W>,
-) {
-    expand_forward_or_backward(graph, ei, tui, total_inst, |state, inst| {
-        inst.run_backward_masked(state, bm).into_iter().cloned()
-    });
 }
 
 fn expand_forward_or_backward<W: Word, StepRet: IntoIterator<Item = MaskedState<W>>>(
