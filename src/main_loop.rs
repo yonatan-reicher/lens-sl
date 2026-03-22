@@ -3,6 +3,7 @@
 
 use crate::Direction;
 use crate::all::All;
+use crate::arm::state::Masked as MaskedState;
 use crate::arm::{
     BackwardMap, Flags, Inst, Register, State, StateVars, SymbolicState, extend_program_for_each,
 };
@@ -12,7 +13,7 @@ use crate::graph;
 use crate::len::Len;
 use crate::oracle::{self, Oracle, SmtOracle};
 use crate::programs;
-use crate::reduce_bit_width::Reducer;
+use crate::reduce_bit_width::{ImmediateInfo, Reducer};
 use crate::tui::TuiHook;
 use crate::word::prelude::*;
 
@@ -22,6 +23,8 @@ use std::rc::Rc;
 
 // smt stuff!
 use crate::smtlib_utils::bool_term_to_bool;
+
+use functionality::prelude::*;
 
 // =========================================== Graph ==============================================
 
