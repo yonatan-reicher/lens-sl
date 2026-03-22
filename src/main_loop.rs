@@ -111,7 +111,8 @@ impl<W: Word> oracle::smt::Inst for Inst<W> {
 /// `WS` for word size of the synthesis process.
 pub fn optimize<WT: Word, WS: Word + serde::de::DeserializeOwned>(
     program: &[Inst<WT>],
-    inputs: &[&[(Register, WT)]], // TODO: Return a program in Program<WT> instead...
+    additional_registers: impl IntoIterator<Item = Register>,
+    additional_immediates: impl IntoIterator<Item = WT>,
     tui: &impl for<'g> TuiHook<&'g Graph<WS>, State<WS>>,
 ) -> Option<Program<WT>>
 where
@@ -123,13 +124,20 @@ where
         // This puts the original unreduced constants into the reducer.
         reduced_program.push(inst.reduce(&mut reducer));
     }
+    let additional_immediates_reduced: Vec<WS> = additional_immediates
+        .into_iter()
+        .map(|i| reducer.reduce(i, &ImmediateInfo { is_shift: false }))
+        .collect();
 
     // Collect all the registers and immediates that might be useful for synthesis.
-    let mut collector = Collector::new();
-    collector.program(program);
-    collector.test_cases(&test_cases);
-    let Collector { registers } = collector;
-    let immediates: Vec<WS> = reducer.immediates().chain([0.into()]).collect();
+    let registers = Collector::new()
+        .mutate(|c| c.program(program))
+        .pipe(|c| c.registers)
+        .mutate(|r| r.extend(additional_registers));
+    let immediates: Vec<WS> = reducer
+        .immediates()
+        .chain(additional_immediates_reduced)
+        .collect();
 
     let oracle = SmtOracle::new(program.to_vec());
     let oracle_reduced = SmtOracle::new(reduced_program);
