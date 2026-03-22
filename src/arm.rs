@@ -761,6 +761,24 @@ where
     ControlFlow::Continue(())
 }
 
+/// Returns a mask for the input and the masked output.
+pub fn run_program_masked<W: Word>(prog: impl IntoIterator<Item=Inst<W>>, input: State<W>) -> (BitMask, state::Masked<W>) {
+    let (mut input_mask, mut output_mask) = (BitMask::EMPTY, BitMask::EMPTY);
+    let mut current_state = input;
+    for inst in prog {
+        let prev = current_state;
+        inst.run(&mut current_state);
+        let read_mask = inst.read_mask().into_bit_mask();
+        let change_mask = current_state.diff(&prev).into_bit_mask();
+        let old_output_mask = output_mask;
+        // Add to input whatever you read and didn't write to earlier
+        input_mask = input_mask | (read_mask & !old_output_mask);
+        // Add to output whatever you are writing to
+        output_mask = output_mask | change_mask;
+    }
+    (input_mask, current_state.masked(output_mask.into_mask()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
