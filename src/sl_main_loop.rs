@@ -1,409 +1,594 @@
+//! The main loop for synthesis and optimization.
+//! Here we have basically the code that you would see in the actual paper that describes Lens.
+
+use crate::Direction;
 use crate::all::All;
-use crate::all_permutations::Iter as PermutationIter;
-use crate::arm::state::{BitMask, Mask, Masked as MaskedState, State};
-use crate::arm::{Inst, Register, extend_program_for_each};
+use crate::arm::{
+    BackwardMap, Flags, Inst, Register, State, StateVars, SymbolicState, extend_program_for_each,
+};
+use crate::collect_registers::Collector;
 use crate::enumerate::{EnumerationInfo, EnumerationInfoOptions, Enumerator};
-use crate::graph::Graph;
-use crate::oracle::{Oracle, SmtOracle};
-use crate::reduce_bit_width::{ImmediateInfo, Reducer};
+use crate::graph;
+use crate::len::Len;
+use crate::oracle::{self, Oracle, SmtOracle};
+use crate::programs;
+use crate::reduce_bit_width::Reducer;
 use crate::tui::TuiHook;
 use crate::word::prelude::*;
-use functionality::{Mutate, Pipe};
-use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
-use std::fmt::Debug;
-use std::hash::{BuildHasher, Hash, Hasher};
-use std::ops::ControlFlow;
+
+// std imports
+use std::ops::ControlFlow::{Break, Continue};
 use std::rc::Rc;
 
-#[derive(Debug, Default)]
-// Note: the inputs should always have the same mask in all of them i think
-struct Effect<W>(FxHashMap<MaskedState<W>, MaskedState<W>>);
+// smt stuff!
+use crate::smtlib_utils::bool_term_to_bool;
 
-impl<W> Effect<W> {
-    pub fn inputs(&self) -> impl Iterator<Item = &MaskedState<W>> {
-        self.0.iter().map(|x| x.0)
-    }
-    pub fn outputs(&self) -> impl Iterator<Item = &MaskedState<W>> {
-        self.0.iter().map(|x| x.1)
-    }
-}
+// =========================================== Graph ==============================================
 
-impl<W: Eq + Hash> PartialEq for Effect<W> {
-    fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0
-    }
-}
+type Program<W> = programs::Program<Inst<W>>;
 
-impl<W: Eq + Hash> Eq for Effect<W> {}
+type Programs<W> = programs::Programs<Inst<W>>;
 
-impl<W: Hash> Hash for Effect<W> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        // We need to make sure we hash the elements in some sort of order. This makes sure the
-        // order of the set's iterator does not matter.
-        let mut hashes: Box<[_]> = self.0.iter().map(|x| FxBuildHasher.hash_one(x)).collect();
-        hashes.sort();
-        hashes.hash(state);
-    }
-}
+type Graph<W> = graph::Graph<State<W>, Rc<Programs<W>>>;
 
-impl<W: Eq + Hash> FromIterator<(MaskedState<W>, MaskedState<W>)> for Effect<W> {
-    fn from_iter<T: IntoIterator<Item = (MaskedState<W>, MaskedState<W>)>>(iter: T) -> Self {
-        Self(iter.into_iter().collect())
-    }
-}
+// ========================================== Oracle ==============================================
 
-#[derive(Clone, Debug, Default)]
-enum Programs<W> {
-    #[default]
-    Empty,
-    Inst(Inst<W>),
-    /// This and that
-    Extend(Rc<(Programs<W>, Programs<W>)>),
-    /// This and then that
-    Concat(Rc<(Programs<W>, Programs<W>)>),
-}
-
-impl<W: Clone> Programs<W> {
-    pub fn concat(self, other: Self) -> Programs<W> {
-        Programs::Concat(Rc::new((self, other)))
-    }
-}
-
-impl<W> From<Inst<W>> for Programs<W> {
-    fn from(i: Inst<W>) -> Programs<W> {
-        Programs::Inst(i)
-    }
-}
-
-impl<W: Clone + Debug + Eq + Hash> Extend<Programs<W>> for Programs<W> {
-    fn extend<I: IntoIterator<Item = Programs<W>>>(&mut self, iter: I) {
-        for x in iter {
-            *self = Programs::Extend(Rc::new((self.clone(), x)));
+impl<W: Word> oracle::test_cases::Program<State<W>> for [Inst<W>] {
+    fn run(&self, state: &mut State<W>) {
+        for inst in self {
+            inst.run(state);
         }
     }
 }
 
-impl<W: Clone> From<Programs<W>> for Vec<Vec<Inst<W>>> {
-    fn from(p: Programs<W>) -> Self {
-        match p {
-            Programs::Empty => vec![],
-            Programs::Inst(inst) => vec![vec![inst]],
-            Programs::Extend(rc) => {
-                rc.0.clone()
-                    .pipe(Vec::from)
-                    .mutate(|v| v.extend_from_slice(&rc.1.clone().pipe(Vec::from)))
-            }
-            Programs::Concat(rc) => {
-                let mut ret = vec![];
-                for y in rc.1.clone().pipe(Vec::from) {
-                    for x in rc.0.clone().pipe(Vec::from) {
-                        ret.push(x.mutate(|v| v.extend_from_slice(&y)));
-                    }
-                }
-                ret
-            }
+impl<W: Word> oracle::smt::Inst for Inst<W> {
+    type State = State<W>;
+
+    type StateVars<'st> = StateVars<'st, W::SmtWord<'st>>;
+
+    type SymbolicState<'st> = SymbolicState<'st, W::SmtWord<'st>>;
+
+    fn new_state_vars<'st>(st: &'st smtlib::Storage, name: &str) -> Self::StateVars<'st> {
+        StateVars::new(st, name)
+    }
+
+    fn state_neq<'st>(
+        s1: Self::SymbolicState<'st>,
+        s2: Self::SymbolicState<'st>,
+    ) -> smtlib::Bool<'st> {
+        !s1.eq(s2)
+    }
+
+    fn step_symbolic<'st>(&self, s: &mut Self::SymbolicState<'st>) {
+        self.run_symbolic(s);
+    }
+
+    fn step<'st>(&self, s: &mut Self::State) {
+        self.run(s);
+    }
+
+    fn extract_from_model<'st>(
+        model: &smtlib::Model<'st>,
+        s: StateVars<'st, W::SmtWord<'st>>,
+    ) -> State<W> {
+        // == Registers ==
+        let mut state = State::default();
+        for (i, var) in s.registers.iter().enumerate() {
+            let reg = Register(i as u8);
+            let val = model
+                .eval(*var)
+                .map(W::SmtWord::try_into_word)
+                .unwrap_or_else(|| Some(0.into()))
+                //.try_into()
+                .unwrap_or_else(|| {
+                    panic!(
+                        "Failed to convert variable '{var:?}' to the right type in model {model}."
+                    )
+                });
+            state.set_register(
+                reg,
+                val.into_word(), /* This is actually the same word type but whatever */
+            );
         }
+        // == Flags ==
+        let load_bool = |b| {
+            model
+                .eval(b)
+                .and_then(|b| bool_term_to_bool(b))
+                .unwrap_or(false /* Arbitrary default, result did not matter */)
+        };
+        state.set_flags(
+            Flags {
+                z: load_bool(s.flags.z),
+                n: load_bool(s.flags.n),
+                c: load_bool(s.flags.c),
+                v: load_bool(s.flags.v),
+            }
+            .into(),
+        );
+        state
     }
 }
 
-type Bank<W> = crate::bank::Bank<Effect<W>, Programs<W>>;
+// ====================================== Implementation ==========================================
 
-type Program<W> = [Inst<W>];
-type OwnedProgram<W> = Vec<Inst<W>>;
+// This is the main function that gets exposed.
+/// `WT` for word size of the target program.
+/// `WS` for word size of the synthesis process.
+pub fn optimize<WT: Word, WS: Word + serde::de::DeserializeOwned>(
+    program: &[Inst<WT>],
+    inputs: &[&[(Register, WT)]], // TODO: Return a program in Program<WT> instead...
+    tui: &impl for<'g> TuiHook<&'g Graph<WS>, State<WS>>,
+) -> Option<Program<WT>>
+where
+    <WS as All>::Iter: Clone,
+{
+    let mut reducer = Reducer::<WT, WS>::default();
+    let mut reduced_program = Vec::with_capacity(program.len());
+    for inst in program {
+        // This puts the original unreduced constants into the reducer.
+        reduced_program.push(inst.reduce(&mut reducer));
+    }
 
-// =================== Main Algorithm ===================================================
+    // Run the program on each input to get the outputs. We call these "test cases".
+    let test_cases: Vec<(State<WT>, State<WT>)> = inputs
+        .iter()
+        .map(|input| {
+            let input = State::from((
+                Flags::default(),
+                input.iter().map(|(r, v)| (*r, v.into_word())),
+            ));
+            let mut output = input;
+            for inst in program {
+                inst.run(&mut output);
+            }
+            (input, output)
+        })
+        .collect();
+    let _test_cases_reduced: Vec<(State<WS>, State<WS>)> = test_cases
+        .iter()
+        .map(|(input, _output)| {
+            let input = input.reduce(&mut reducer.clone());
+            let mut output = input;
+            for inst in &reduced_program {
+                inst.run(&mut output);
+            }
+            (input, output)
+        })
+        .collect();
 
-#[derive(derive_more::Debug)]
-struct Globals<'a, WBig, W> {
-    // does not contain the bank because it needs it's borrow to be tracked independently.
-    // bank: Bank<W>,
-    counter_examples: Vec<(State<W>, State<W>)>,
-    oracle: &'a mut dyn Oracle<Program<WBig>, State<WBig>>,
-    oracle_reduced: &'a mut dyn Oracle<Program<W>, State<W>>,
-    reducer: Reducer<WBig, W>,
-    registers: Vec<Register>,
-    immediates: Vec<W>,
+    // Collect all the registers and immediates that might be useful for synthesis.
+    let mut collector = Collector::new();
+    collector.program(program);
+    collector.test_cases(&test_cases);
+    let Collector { registers } = collector;
+    let immediates: Vec<WS> = reducer.immediates().chain([0.into()]).collect();
+
+    // let oracle = TestCasesOracle { test_cases };
+    // let oracle_reduced = TestCasesOracle {
+    //     test_cases: test_cases_reduced,
+    // };
+
+    let oracle = SmtOracle::new(program.to_vec());
+    let oracle_reduced = SmtOracle::new(reduced_program);
+
+    synthesize::<WT, WS>(
+        &registers,
+        &immediates,
+        oracle,
+        oracle_reduced,
+        reducer,
+        program.len(),
+        tui,
+    )
 }
 
-const DEBUG: bool = true;
-
-pub fn optimize<WBig: Word, W: Word>(
-    program: &[Inst<WBig>],
-    additional_registers: impl IntoIterator<Item = Register>,
-    additional_immediates: impl IntoIterator<Item = WBig>,
-    tui: &impl for<'g> TuiHook<&'g Graph<State<W>, crate::programs::Programs<Inst<W>>>, State<W>>,
-) -> Option<Vec<Inst<WBig>>>
+fn synthesize<WT: Word, W: Word + serde::de::DeserializeOwned>(
+    registers: &[Register],
+    immediates: &[W],
+    oracle: impl Oracle<[Inst<WT>], State<WT>>,
+    oracle_reduced: impl Oracle<[Inst<W>], State<W>>,
+    reducer: Reducer<WT, W>,
+    // The length of the original program.
+    // In the future, this could be max_cost.
+    original_length: usize,
+    tui: &impl for<'a> TuiHook<&'a Graph<W>, State<W>>,
+) -> Option<Program<WT>>
 where
     <W as All>::Iter: Clone,
 {
-    // Reduce the program and the given immediates to the lower bit-width
-    let mut reducer = Reducer::default();
-    let reduced_program: Vec<_> = program.iter().map(|i| i.reduce(&mut reducer)).collect();
-    for i in additional_immediates {
-        reducer.reduce(i, &ImmediateInfo { is_shift: false });
+    // The forward and backward graphs start while having the empty program.
+    let empty_program = Rc::new(Programs::empty_program());
+    let mut forward_graph = Graph::Leaf(empty_program.clone());
+    let mut backward_graph = Graph::Leaf(empty_program);
+    let enumeration_info = &EnumerationInfo::<W> {
+        registers: EnumerationInfoOptions::Limited(registers),
+        immediates: EnumerationInfoOptions::Limited(immediates),
+    };
+    let mut globals = Globals {
+        oracle,
+        oracle_reduced,
+        inputs: vec![],
+        outputs: vec![],
+        forward_length: 0,
+        backward_length: 0,
+        extender: reducer,
+        tui,
+        backward_map: BackwardMap::new(registers).unwrap(),
+        total_instructions: Enumerator::new().into_iter(enumeration_info).count(),
+    };
+    // Generate a first input
+    println!("Checking empty program");
+    match globals.oracle_reduced.check_program(&[]) {
+        // TODO: What if the reduced program is equivalent but not the unreduced?
+        Ok(()) => return Some(vec![]), // Turns out it's actually the empty program 🤷
+        Err((inp, out)) => {
+            tui.found_counter_example(inp, out);
+            globals.inputs.push(inp);
+            globals.outputs.push(out);
+        }
     }
-    // Collect all the registers and immediates that might be useful for synthesis.
-    let immediates: Vec<W> = reducer.immediates().collect();
-    let registers = crate::collect_registers::Collector::new()
-        .mutate(|c| c.program(program))
-        .pipe(|c| c.registers)
-        .mutate(|v| v.extend(additional_registers));
-
-    // Algorithm state
-    let bank = &mut Bank::<W>::default();
-    let g = &mut Globals {
-        counter_examples: vec![],
-        oracle: &mut SmtOracle::new(program.to_vec()),
-        oracle_reduced: &mut SmtOracle::new(reduced_program),
-        reducer,
-        registers,
-        immediates,
-    };
-
-    // Check the empty program. Obviously, this probably fails, but a. It might not, and b. We need
-    // it to generate the first counter example.
-    let initial_state: State<W> = match verify(&[], g) {
-        Some(Some(p)) => return Some(p),
-        Some(None) => panic!(),
-        None => g.counter_examples[0].0,
-    };
-
-    init_bank(bank, initial_state.into(), g);
-
-    let mut outputs_seen = FxHashSet::default();
-    let mut to_init = vec![];
-    let mut i = 0;
+    tui.report_graph(Direction::Forward, &forward_graph);
+    tui.report_graph(Direction::Backward, &backward_graph);
     loop {
-        if DEBUG {
-            i += 1;
-            println!("=== Iteration {i} ===");
+        // ------------------------------ Search Phase --------------------------------------------
+        tui.searching();
+        for (i, inst) in Enumerator::new().into_iter(enumeration_info).enumerate() {
+            tui.progress(i, globals.total_instructions);
+            let res = connect_and_refine::<WT, W>(
+                &mut globals,
+                &mut forward_graph,
+                &mut backward_graph,
+                inst,
+                1,
+            );
+            match res {
+                ConnectAndRefineResult::Found(prog) => {
+                    println!("Found program of length {}", prog.len());
+                    return Some(prog);
+                }
+                ConnectAndRefineResult::Continue => {}
+            }
         }
-        // Our F, for now, is concatenation.
-        for (a, b) in collect_children(&bank) {
-            let x = eval((a.0, a.1.clone()), (b.0, b.1.clone()));
-            // did we win?
-            if matches_all_counter_examples(&x.0, &g.counter_examples) {
-                println!("all match!");
-                let v = Vec::from(x.1);
-                let l = v.len();
-                dbg!(v.len());
-                for (i, p) in v.into_iter().enumerate() {
-                    println!("[{i}/{l}]");
-                    match verify(&p, g) {
-                        Some(Some(p)) => return Some(p),
-                        Some(None) => (),
-                        None => (),
+        // ------------------------------ Expand Phase --------------------------------------------
+        tui.progress(globals.total_instructions, globals.total_instructions);
+        tui.report_graph(Direction::Forward, &forward_graph);
+        tui.report_graph(Direction::Backward, &backward_graph);
+        if globals.forward_length + globals.backward_length + 1 == original_length - 1 {
+            return None;
+        }
+        let should_expand_forward = 2 * globals.backward_length >= globals.forward_length;
+        let direction = Direction::from_is_forward(should_expand_forward);
+        tui.expanding(direction);
+        if should_expand_forward {
+            expand_forward(
+                &mut forward_graph,
+                enumeration_info,
+                globals.tui,
+                globals.total_instructions,
+            );
+            globals.forward_length += 1;
+            tui.report_graph(Direction::Forward, &forward_graph);
+        } else {
+            expand_backward(
+                &mut backward_graph,
+                enumeration_info,
+                globals.tui,
+                globals.total_instructions,
+                &globals.backward_map,
+            );
+            globals.backward_length += 1;
+            tui.report_graph(Direction::Backward, &backward_graph);
+        }
+        // print_stats(&forward_graph, &backward_graph);
+    }
+}
+
+enum ConnectAndRefineResult<W: Word> {
+    Found(Program<W>),
+    Continue,
+}
+
+/// WT - word for the target program. WS - word for the synthesis process.
+struct Globals<
+    'tui,
+    WT: Word,
+    WS: Word,
+    OT: Oracle<[Inst<WT>], State<WT>>,
+    OS: Oracle<[Inst<WS>], State<WS>>,
+    TUI: for<'g> TuiHook<&'g Graph<WS>, State<WS>>,
+> {
+    oracle: OT,
+    /// The oracle that checks program in the reduced word size.
+    oracle_reduced: OS,
+    inputs: Vec<State<WS>>,
+    outputs: Vec<State<WS>>,
+    /// The length of the prefixes of the program being built.
+    forward_length: usize,
+    backward_length: usize,
+    extender: Reducer<WT, WS>,
+    tui: &'tui TUI,
+    /// Stores data needed for running instructions backwards in time.
+    backward_map: BackwardMap<WS>,
+    /// The total instructions we are enumerating
+    total_instructions: usize,
+}
+
+enum ProgramOrRetry<W: Word> {
+    Program(Program<W>),
+    Retry,
+}
+
+fn connect_and_refine<WT: Word, WS: Word>(
+    globals: &mut Globals<
+        '_,
+        WT,
+        WS,
+        impl Oracle<[Inst<WT>], State<WT>>,
+        impl Oracle<[Inst<WS>], State<WS>>,
+        impl for<'a> TuiHook<&'a Graph<WS>, State<WS>>,
+    >,
+    forward_graph: &mut Graph<WS>,
+    backward_graph: &mut Graph<WS>,
+    inst: Inst<WS>,
+    // This is the index of the input/output pair we are currently trying to connect.
+    k: usize,
+) -> ConnectAndRefineResult<WT> {
+    let tui = globals.tui;
+    if k > globals.inputs.len() {
+        let mut counter_example_added = false;
+        match (&forward_graph, &backward_graph) {
+            (Graph::Leaf(prefixes), Graph::Leaf(postfixes)) => {
+                let ret = {
+                    // We found a class of candidate programs.
+                    // Try each one. If one works, return it. If none work, adds all counter-examples.
+                    // First, make a buffer to hold the program.
+                    let program_length = globals.forward_length + 1 + globals.backward_length;
+                    let mut program = Vec::with_capacity(program_length);
+                    prefixes.try_each(|prefix| {
+                        debug_assert_eq!(prefix.len(), globals.forward_length);
+                        postfixes.try_each(|postfix| {
+                            debug_assert_eq!(postfix.len(), globals.backward_length);
+                            // Build the current candidate (reduced) program.
+                            program.clear();
+                            program.extend(prefix.iter());
+                            program.push(inst);
+                            program.extend(postfix.iter());
+                            match globals.oracle_reduced.check_program(&program) {
+                                // Found!
+                                Ok(()) => extend_program_for_each(
+                                    &program,
+                                    &globals.extender,
+                                    |extended_program| match globals
+                                        .oracle
+                                        .check_program(extended_program)
+                                    {
+                                        Ok(()) => {
+                                            Break(ProgramOrRetry::Program(extended_program.to_vec()))
+                                        }
+                                        Err(_) => Continue(()),
+                                    },
+                                ),
+                                Err((inp, out)) => {
+                                    tui.found_counter_example( inp, out,);
+                                    let mut actual = inp;
+                                    program.iter().for_each(|i| i.run(&mut actual));
+                                    debug_assert!(
+                                        !has_counter_example_been_seen(globals, &inp, &out),
+                                        "Counter-example from reduced oracle should not have been seen before."
+                                    );
+                                    debug_assert!(actual != out, "Found mismatched interpreter behaviours!");
+                                    globals.inputs.push(inp);
+                                    globals.outputs.push(out);
+                                    counter_example_added = true;
+                                    Break(ProgramOrRetry::Retry)
+                                }
+                            }
+                        })
+                    })
+                };
+                match ret {
+                    Break(ProgramOrRetry::Program(prog)) => {
+                        return ConnectAndRefineResult::Found(prog);
                     }
+                    Break(ProgramOrRetry::Retry) => {
+                        return connect_and_refine(globals, forward_graph, backward_graph, inst, k);
+                    }
+                    Continue(()) => (),
                 }
             }
-            // Check if we have a sub-masked-state that is not in the bank yet!
-            let outputs = x.0.outputs().map(|x| x.state()).collect::<Box<[_]>>();
-            if !outputs_seen.contains(&outputs) {
-                outputs_seen.insert(outputs);
-                if DEBUG {
-                    println!("Another one added! {}", outputs_seen.len());
-                }
-                to_init.push(x.0.outputs());
+            _ => {
+                println!("Graphs are not leaves at the end.");
+                println!("Forward Graph: \n{}", forward_graph.pretty_print());
+                println!("Backward Graph: \n{}", backward_graph.pretty_print());
+                panic!();
             }
         }
-        if DEBUG {
-            println!("Finished collecting children");
-        }
-        for s in to_init.drain(..) {
-            init_bank(bank, s, g);
-        }
-        if i == 10 {
-            break;
+        if !counter_example_added {
+            // When we don't find a counter-example, we know that we are already at the deepest part of
+            // the graph, a leaf. When you are at a leaf, it means you don't have any more input-output
+            // pairs to match between the forward and backward graph, so you can't connect the forward
+            // and backwards graphs. That is to say, you are done!
+            return ConnectAndRefineResult::Continue;
         }
     }
 
-    println!("Reached end!");
-
-    println!("{}", bank.n_effects());
-    None
-}
-
-// ======== Collect Children ======================================================================
-
-/// In contrast to Sobeq, we only care about a single constructor - concatenation. It has 2
-/// arguments, which makes implementation and reasoning easier for us.
-fn collect_children<'a, W: Word>(bank: &'a Bank<W>) -> CollectChildrenIter<'a, W> {
-    CollectChildrenIter {
-        bank,
-        iters: (bank.iter().fuse().peekable(), bank.iter()),
-    }
-}
-
-use std::iter::{Fuse, Peekable};
-struct CollectChildrenIter<'a, W> {
-    bank: &'a Bank<W>,
-    iters: (
-        Peekable<Fuse<crate::bank::Iter<'a, Effect<W>, Programs<W>>>>,
-        crate::bank::Iter<'a, Effect<W>, Programs<W>>,
-    ),
-}
-
-impl<'a, W: Word> Iterator for CollectChildrenIter<'a, W> {
-    type Item = (
-        (&'a Effect<W>, &'a Programs<W>),
-        (&'a Effect<W>, &'a Programs<W>),
-    );
-    fn next(&mut self) -> Option<Self::Item> {
-        // Check if the second iterator is done,
-        let Some(b) = self.iters.1.next() else {
-            self.iters.1 = self.bank.iter();
-            self.iters.0.next();
-            return self.next();
-        };
-        // then check the first!
-        // Notice that if the first iterator is done, we
-        let a = *self.iters.0.peek()?;
-        // Check frame rule!
-        // This marks the state that appears in the output of the first program and the input of
-        // the first.
-        let conflict_mask = Mask::from(a.0.output.mask() & b.0.input.mask());
-        if a.0.output.state().mask(conflict_mask) != b.0.input.state().mask(conflict_mask) {
-            return self.next();
-        }
-        // Frame rule succeeds!
-        Some((a, b))
+    if matches!(forward_graph, Graph::Leaf(..)) {
+        build_forward(forward_graph, &globals.inputs[k - 1]);
     }
 
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        (0, Some(self.iters.0.len() * self.iters.1.len()))
+    if matches!(backward_graph, Graph::Leaf(..)) {
+        build_backward(
+            backward_graph,
+            &globals.outputs[k - 1],
+            &globals.backward_map,
+        );
     }
-}
 
-// =============== Eval ===========================================================================
-
-/// This [eval] is the 'Eval' from Sobeq, which takes children and a constructor and combined them
-/// together. Here the constructor is always concatenation.
-fn eval<W: Word>(
-    a: (&Effect<W>, Programs<W>),
-    b: (&Effect<W>, Programs<W>),
-) -> (Effect<W>, Programs<W>) {
-    let both = a.0.0.iter().zip(&b.0.0);
-    let effect = both
-        .map(|(&(a_input, a_output), &(b_input, b_output))| {
-            let conflict_mask = a_output.mask() & b_input.mask();
-            // We need to mask the second's inputs which are fed by the outputs of the first.
-            let input = a_input | (b_input & (!conflict_mask).into());
-            let output = b_output | a_output;
-            (input, output)
-        })
-        .collect::<Vec<_>>()
-        .pipe(Effect);
-    let prog = a.1.concat(b.1);
-    (effect, prog)
-}
-
-// =============== Init Bank ======================================================================
-
-fn init_bank<WBig, W: Word>(bank: &mut Bank<W>, states: &[MaskedState<W>], g: &Globals<WBig, W>) {
-    // Initial the bank with our atomic single-instruction programs, on the initial and final
-    // states of our lonely counter-example.
-    let ei = EnumerationInfo {
-        registers: EnumerationInfoOptions::Limited(&g.registers),
-        immediates: EnumerationInfoOptions::<W>::Limited(&g.immediates),
+    // Must be nests, because build_forwards/backwards always turn leaves into nests.
+    let Graph::Nest(forward_outputs) = forward_graph else {
+        panic!();
     };
-    let n = Enumerator::new().into_iter(&ei).count();
-    let mut i = 0;
-    for inst in Enumerator::new().into_iter(&ei) {
-        let effects = states
-            .iter()
-            .map(|state| {
-                let unmasked_input = *state.state();
-                let unmasked_output = (*state.state()).mutate(|s| inst.run(s));
-                let change = unmasked_output.diff(&unmasked_input).into_bit_mask();
-                let read_mask = inst.read_mask().into_bit_mask();
-                let (input_mask, output_mask) = (read_mask, read_mask | change);
-                // Now we just want to mask the input, mask the output and add to the bank right? Wrong. We
-                // actually want to add to the masks. This has to do with how we aren't adding empty
-                // programs to the bank. In the original algorithm, Sobeq, you do add the equivalent of
-                // empty programs - programs which just return the value of a variable! Again, in our
-                // domain, the equivalent for that is empty programs that have a single register
-                // pre&post-condition (example, {r0=5}ε{r0=5}). As an optimization we leave those out, and
-                // to make up for that, we need to include variations of the post-conditions with these
-                // registers that aren't actually used in the instruction. Wall of text out.
-                BitMask::all().filter_map(|mask| {
-                    // TODO: instead of skipping, just iterate only those we need.
-                    if mask.into_mask().registers().count() > 2 {
-                        return None;
-                    }
-                    let (input_mask, output_mask) = (input_mask | mask, output_mask | mask);
-                    let input = MaskedState::from(unmasked_input) & input_mask.into();
-                    let output = MaskedState::from(unmasked_output) & output_mask.into();
-                    Some((input, output))
-                })
-            })
-            .collect::<Box<[_]>>()
-            .pipe(move |mut s| {
-                PermutationIter::new(&mut s).into_iter().map(|x| x.into_iter().collect())
-            });
-        let programs = Programs::from(inst);
-        effects.for_each(|effect| bank.insert(effect, programs));
-        i += 1;
-        println!("{i}/{n}");
-    }
-}
+    let Graph::Nest(backward_outputs) = backward_graph else {
+        panic!();
+    };
 
-// =============== Verify ======================================================================
-
-fn verify<WBig: Word, W: Word>(
-    p: &Program<W>,
-    g: &mut Globals<WBig, W>,
-) -> Option<Option<OwnedProgram<WBig>>> {
-    match g.oracle_reduced.check_program(p) {
-        Err(ce) => {
-            if !g.counter_examples.contains(&ce) {
-                g.counter_examples.push(ce);
-            }
-            None
-        }
-        Ok(()) => {
-            let ret = extend_program_for_each(p, &g.reducer, |p| match g.oracle.check_program(p) {
-                Ok(()) => ControlFlow::Break(p.to_vec()),
-                Err(ce) => {
-                    dbg!(ce);
-                    ControlFlow::Continue(())
+    let mut next = State::default();
+    for (forward_output, forward_subgraph) in forward_outputs {
+        forward_output.clone_to(&mut next);
+        inst.run(&mut next);
+        if let Some(backward_subgraph) = backward_outputs.get_mut(&next) {
+            let res = connect_and_refine(globals, forward_subgraph, backward_subgraph, inst, k + 1);
+            match res {
+                ConnectAndRefineResult::Found(prog) => {
+                    return ConnectAndRefineResult::Found(prog);
                 }
-            });
-            Some(match ret {
-                ControlFlow::Continue(()) => None,
-                ControlFlow::Break(p) => Some(p),
-            })
+                ConnectAndRefineResult::Continue => {}
+            }
         }
     }
+    ConnectAndRefineResult::Continue
 }
 
-// ================ Build ======================================================
-
-fn build<WBig, W>(
-    effect: Effect<W>,
-    prog: Programs<W>,
-    bank: &mut Bank<W>,
-    g: &mut Globals<WBig, W>,
+/// Go through each program prefix in the graph, and expand it by one
+/// instruction forward. This is done for each program, and for each
+/// instruction.
+fn expand_forward<W: Word>(
+    graph: &mut Graph<W>,
+    ei: &EnumerationInfo<W>,
+    tui: &impl for<'g> TuiHook<&'g Graph<W>, State<W>>,
+    total_inst: usize,
 ) {
-    if effect.0.len() < g.counter_examples.len() {
-        todo!()
+    expand_forward_or_backward(graph, ei, tui, total_inst, |mut state, inst| {
+        inst.run(&mut state);
+        [state]
+    })
+}
+
+fn expand_backward<W: Word>(
+    graph: &mut Graph<W>,
+    ei: &EnumerationInfo<W>,
+    tui: &impl for<'g> TuiHook<&'g Graph<W>, State<W>>,
+    total_inst: usize,
+    bm: &BackwardMap<W>,
+) {
+    expand_forward_or_backward(graph, ei, tui, total_inst, |state, inst| {
+        inst.run_backward(state, bm).into_iter().cloned()
+    });
+}
+
+fn expand_forward_or_backward<W: Word, StepRet: IntoIterator<Item = State<W>>>(
+    graph: &mut Graph<W>,
+    ei: &EnumerationInfo<W>,
+    tui: &impl for<'g> TuiHook<&'g Graph<W>, State<W>>,
+    total_inst: usize,
+    step: impl Fn(State<W>, Inst<W>) -> StepRet,
+) {
+    // let old_graph = std::mem::replace(graph, Graph::Nest(Default::default()));
+    let old_graph = std::mem::replace(graph, Graph::Leaf(Default::default()));
+    debug_assert_ne!(old_graph.n_programs(), 0);
+    let mut out_states = vec![];
+    // TODO: I think this would be faster if we iterate through the graph only once, and have this
+    // for loop on each leaf. Or maybe, iterate on like a 100 instructions at once.
+    for (i, inst) in Enumerator::new().into_iter(ei).enumerate() {
+        tui.progress(i, total_inst);
+        out_states.clear();
+        recurse(&old_graph, graph, inst, &mut out_states, &step);
+    }
+    tui.progress(total_inst, total_inst);
+    debug_assert_ne!(graph.n_programs(), 0);
+
+    fn recurse<W: Word, StepRet: IntoIterator<Item = State<W>>>(
+        old_graph: &Graph<W>,
+        new_graph: &mut Graph<W>,
+        inst: Inst<W>,
+        out_states: &mut Vec<State<W>>,
+        step: &impl Fn(State<W>, Inst<W>) -> StepRet,
+    ) {
+        match old_graph {
+            Graph::Leaf(programs) if programs.is_empty() => (),
+            Graph::Leaf(programs) => {
+                let programs = Rc::new(programs.clone().concat(inst));
+                new_graph.insert_all(out_states, &programs);
+            }
+            Graph::Nest(hash_map) => {
+                for (state, sub_graph) in hash_map.iter() {
+                    for out_state in step(*state, inst) {
+                        out_states.push(out_state);
+                        recurse(sub_graph, new_graph, inst, out_states, step);
+                        out_states.pop();
+                    }
+                }
+            }
+        }
     }
 }
 
-// ================ Other ======================================================
-
-fn matches_all_counter_examples<'a, W: Word>(
-    effect: &Effect<W>,
-    counter_examples: impl IntoIterator<Item = &'a (State<W>, State<W>)>,
-) -> bool {
-    // For now, an effect has only a singe input-output thingy. In just a bitty, we'll have
-    // more.
-    let pairs = &[(effect.input, effect.output)];
-    for ((i, o), (i_ce, o_ce)) in pairs.iter().zip(counter_examples) {
-        let fine = MaskedState::from(*i_ce) & i.mask().into() == *i
-            && MaskedState::from(*o_ce) & o.mask().into() == *o;
-        if !fine {
-            return false;
+fn build_forward<W: Word>(graph: &mut Graph<W>, input: &State<W>) {
+    build_forwards_or_backwards(graph, input, |program, mut state| {
+        for inst in program {
+            inst.run(&mut state);
         }
-    }
-    true
+        [state]
+    });
+}
+
+fn build_backward<W: Word>(graph: &mut Graph<W>, input: &State<W>, bm: &BackwardMap<W>) {
+    build_forwards_or_backwards(graph, input, |program, output| {
+        // A vector of reaching states, that we push backwards in time, one instruction at a time.
+        let mut states = vec![output];
+        let mut new_states = vec![];
+        for inst in program.iter().rev() {
+            for state in states.drain(..) {
+                for new_state in inst.run_backward(state, bm) {
+                    new_states.push(*new_state);
+                }
+            }
+            std::mem::swap(&mut states, &mut new_states);
+            debug_assert!(new_states.is_empty());
+        }
+        states
+    });
+}
+
+fn build_forwards_or_backwards<W: Word, StepRet: IntoIterator<Item = State<W>>>(
+    graph: &mut Graph<W>,
+    input: &State<W>,
+    step: impl Fn(&Program<W>, State<W>) -> StepRet,
+) {
+    debug_assert!(matches!(graph, Graph::Leaf(..)));
+    // Rebuild the graph.
+    // TODO: We can probably avoid completely rebuilding by just removing and adding programs on
+    // the same data-structure. This would reduce allocations, but you need to mark which programs
+    // have been visited, or store them in a list.
+    let old_graph = std::mem::replace(graph, Graph::Nest(Default::default()));
+    old_graph.for_each(&mut |programs| {
+        programs.each(|program| {
+            let programs: Rc<Programs<W>> = Rc::new(program.iter().cloned().collect());
+            for output in step(&program, *input) {
+                graph.insert(output, &programs);
+            }
+        });
+    });
+}
+
+/// Checks if the given counter-example has already been seen, by searching the input-output pairs
+/// in the global context.
+fn has_counter_example_been_seen<WT: Word, WS: Word>(
+    globals: &mut Globals<
+        '_,
+        WT,
+        WS,
+        impl Oracle<[Inst<WT>], State<WT>>,
+        impl Oracle<[Inst<WS>], State<WS>>,
+        impl for<'g> TuiHook<&'g Graph<WS>, State<WS>>,
+    >,
+    inp: &State<WS>,
+    out: &State<WS>,
+) -> bool {
+    globals
+        .inputs
+        .iter()
+        .zip(&globals.outputs)
+        .any(|(i, o)| i == inp && o == out)
 }

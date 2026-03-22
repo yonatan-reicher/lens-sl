@@ -54,10 +54,8 @@ version will do the same ig.
 
 ## Currently Working On
 
-Still working on that Sobeq thing. Thinking of starting over from the Lens code
-instead, and just changing the state to the masked state, and then in expand,
-add by concatenation instead of whatever-the-fuck we do now. I think I'll try
-trying it tomorrow morning.
+Had some bad progress on starting from the Sobeq pseudocode, so I'm starting
+over from my Lens implementation.
 
 ## TODO
 
