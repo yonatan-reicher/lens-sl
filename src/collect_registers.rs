@@ -32,7 +32,7 @@ impl Collector {
 
     fn arg<W: Word>(&mut self, arg: W, arg_type: ArgType) {
         match arg_type {
-            ArgType::Reg => {
+            ArgType::Reg(..) => {
                 let reg = Register::from(arg);
                 if !self.registers.contains(&reg) {
                     self.registers.push(reg);

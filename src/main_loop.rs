@@ -138,7 +138,7 @@ where
                 Flags::default(),
                 input.iter().map(|(r, v)| (*r, v.into_word())),
             ));
-            let mut output = input.clone();
+            let mut output = input;
             for inst in program {
                 inst.run(&mut output);
             }
@@ -149,7 +149,7 @@ where
         .iter()
         .map(|(input, _output)| {
             let input = input.reduce(&mut reducer.clone());
-            let mut output = input.clone();
+            let mut output = input;
             for inst in &reduced_program {
                 inst.run(&mut output);
             }
@@ -220,9 +220,10 @@ where
     // Generate a first input
     println!("Checking empty program");
     match globals.oracle_reduced.check_program(&[]) {
+        // TODO: What if the reduced program is equivalent but not the unreduced?
         Ok(()) => return Some(vec![]), // Turns out it's actually the empty program 🤷
         Err((inp, out)) => {
-            tui.found_counter_example(inp.clone(), out.clone());
+            tui.found_counter_example(inp, out);
             globals.inputs.push(inp);
             globals.outputs.push(out);
         }
@@ -369,11 +370,8 @@ fn connect_and_refine<WT: Word, WS: Word>(
                                     },
                                 ),
                                 Err((inp, out)) => {
-                                    tui.found_counter_example(
-                                        inp.clone(),
-                                        out.clone(),
-                                    );
-                                    let mut actual = inp.clone();
+                                    tui.found_counter_example( inp, out,);
+                                    let mut actual = inp;
                                     program.iter().for_each(|i| i.run(&mut actual));
                                     debug_assert!(
                                         !has_counter_example_been_seen(globals, &inp, &out),
@@ -515,7 +513,7 @@ fn expand_forward_or_backward<W: Word, StepRet: IntoIterator<Item = State<W>>>(
             }
             Graph::Nest(hash_map) => {
                 for (state, sub_graph) in hash_map.iter() {
-                    for out_state in step(state.clone(), inst) {
+                    for out_state in step(*state, inst) {
                         out_states.push(out_state);
                         recurse(sub_graph, new_graph, inst, out_states, step);
                         out_states.pop();
@@ -543,7 +541,7 @@ fn build_backward<W: Word>(graph: &mut Graph<W>, input: &State<W>, bm: &Backward
         for inst in program.iter().rev() {
             for state in states.drain(..) {
                 for new_state in inst.run_backward(state, bm) {
-                    new_states.push(new_state.clone());
+                    new_states.push(*new_state);
                 }
             }
             std::mem::swap(&mut states, &mut new_states);
@@ -567,7 +565,7 @@ fn build_forwards_or_backwards<W: Word, StepRet: IntoIterator<Item = State<W>>>(
     old_graph.for_each(&mut |programs| {
         programs.each(|program| {
             let programs: Rc<Programs<W>> = Rc::new(program.iter().cloned().collect());
-            for output in step(&program, input.clone()) {
+            for output in step(&program, *input) {
                 graph.insert(output, &programs);
             }
         });

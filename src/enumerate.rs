@@ -75,7 +75,7 @@ impl Enumerator {
         // Take the index, and index into the correct array.
         let i = self.arg_indices[arg];
         match self.arg_types()[arg] {
-            ArgType::Reg => match &ei.registers {
+            ArgType::Reg(..) => match &ei.registers {
                 EnumerationInfoOptions::Limited(r) => usize::from(r[i].0).into(),
                 EnumerationInfoOptions::Unlimited => i.into(),
             },
@@ -92,7 +92,7 @@ impl Enumerator {
         debug_assert_arg_in_range(arg);
         debug_assert_valid_enumeration_info(ei);
         match self.arg_types()[arg] {
-            ArgType::Reg => match &ei.registers {
+            ArgType::Reg(..) => match &ei.registers {
                 EnumerationInfoOptions::Limited(r) => r.len() - 1,
                 EnumerationInfoOptions::Unlimited => Register::COUNT as usize - 1,
             },
@@ -275,7 +275,7 @@ mod tests {
                     .iter()
                     .zip(inst.op_code.arg_types())
                     .filter_map(|(arg, arg_type)| {
-                        if arg_type == ArgType::Reg {
+                        if arg_type.is_reg() {
                             Some(Register(u8::from(*arg)))
                         } else {
                             None
@@ -315,7 +315,7 @@ mod tests {
         let registers = v
             .iter()
             .filter_map(|x| {
-                if x.op_code.arg_types()[0] == ArgType::Reg {
+                if x.op_code.arg_types()[0].is_reg() {
                     Some(Register(x.args[0].into()))
                 } else {
                     None
