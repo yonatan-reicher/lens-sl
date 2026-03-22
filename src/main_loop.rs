@@ -7,7 +7,6 @@ use crate::arm::state::Masked as MaskedState;
 use crate::arm::{
     BackwardMap, Flags, Inst, Register, State, StateVars, SymbolicState, extend_program_for_each,
 };
-use crate::arm::state::Masked as MaskedState;
 use crate::collect_registers::Collector;
 use crate::enumerate::{EnumerationInfo, EnumerationInfoOptions, Enumerator};
 use crate::graph;
@@ -25,8 +24,6 @@ use std::ops::ControlFlow::{Break, Continue};
 use crate::smtlib_utils::bool_term_to_bool;
 
 use functionality::prelude::*;
-
-use itertools::Itertools;
 
 // =========================================== Graph ==============================================
 
@@ -67,7 +64,7 @@ impl<W: Word> oracle::smt::Inst for Inst<W> {
     fn extract_from_model<'st>(
         model: &smtlib::Model<'st>,
         s: StateVars<'st, W::SmtWord<'st>>,
-    ) -> State<W> {
+    ) -> Self::State {
         // == Registers ==
         let mut state = State::default();
         for (i, var) in s.registers.iter().enumerate() {
@@ -147,7 +144,7 @@ where
         .mutate(|r| r.dedup());
 
     let oracle = SmtOracle::new(program.to_vec());
-    let oracle_reduced = SmtOracle::new(reduced_program);
+    let oracle_reduced = SmtOracle::new(reduced_program.clone());
 
     synthesize::<WT, WS>(
         &registers,
@@ -156,6 +153,7 @@ where
         oracle_reduced,
         reducer,
         program.len(),
+        reduced_program,
         tui,
     )
 }
@@ -169,6 +167,7 @@ fn synthesize<WT: Word, W: Word + serde::de::DeserializeOwned>(
     // The length of the original program.
     // In the future, this could be max_cost.
     original_length: usize,
+    original_reduced: Program<W>,
     tui: &impl for<'a> TuiHook<&'a Graph<W>, State<W>>,
 ) -> Option<Program<WT>>
 where
@@ -193,6 +192,7 @@ where
         tui,
         backward_map: BackwardMap::new(registers).unwrap(),
         total_instructions: Enumerator::new().into_iter(enumeration_info).count(),
+        original_reduced,
     };
     // Generate a first input
     println!("Checking empty program");
@@ -201,7 +201,11 @@ where
         Ok(()) => return Some(vec![]), // Turns out it's actually the empty program 🤷
         Err((inp, out)) => {
             tui.found_counter_example(inp, out);
-            globals.inputs.push(inp);
+            let (inp_mask, out) = crate::arm::run_program_masked(
+                globals.original_reduced.iter().cloned(),
+                inp,
+            );
+            globals.inputs.push(inp.masked(inp_mask.into()));
             globals.outputs.push(out);
         }
     }
@@ -235,6 +239,7 @@ where
             return None;
         }
         let should_expand_forward = 2 * globals.backward_length >= globals.forward_length;
+        let should_expand_forward = true;
         let direction = Direction::from_is_forward(should_expand_forward);
         tui.expanding(direction);
         if should_expand_forward {
@@ -278,8 +283,8 @@ struct Globals<
     oracle: OT,
     /// The oracle that checks program in the reduced word size.
     oracle_reduced: OS,
-    inputs: Vec<State<WS>>,
-    outputs: Vec<State<WS>>,
+    inputs: Vec<MaskedState<WS>>,
+    outputs: Vec<MaskedState<WS>>,
     /// The length of the prefixes of the program being built.
     forward_length: usize,
     backward_length: usize,
@@ -289,6 +294,7 @@ struct Globals<
     backward_map: BackwardMap<WS>,
     /// The total instructions we are enumerating
     total_instructions: usize,
+    original_reduced: Program<WS>,
 }
 
 enum ProgramOrRetry<W: Word> {
@@ -348,13 +354,15 @@ fn connect_and_refine<WT: Word, WS: Word>(
                                 ),
                                 Err((inp, out)) => {
                                     tui.found_counter_example( inp, out,);
-                                    let mut actual = inp;
-                                    program.iter().for_each(|i| i.run(&mut actual));
+                                    let (inp_mask, out) = crate::arm::run_program_masked(
+                                        globals.original_reduced.iter().cloned(),
+                                        inp,
+                                    );
+                                    let inp = inp.masked(inp_mask.into_mask());
                                     debug_assert!(
                                         !has_counter_example_been_seen(globals, &inp, &out),
                                         "Counter-example from reduced oracle should not have been seen before."
                                     );
-                                    debug_assert!(actual != out, "Found mismatched interpreter behaviours!");
                                     globals.inputs.push(inp);
                                     globals.outputs.push(out);
                                     counter_example_added = true;
@@ -410,10 +418,11 @@ fn connect_and_refine<WT: Word, WS: Word>(
         panic!();
     };
 
-    let mut next = MaskedState::default();
     for (forward_output, forward_subgraph) in forward_outputs {
-        next = *forward_output;
-        inst.run(&mut next);
+        let Some(next) = inst.run_masked(*forward_output) else {
+            // If we cannot run this instruction, we cannot connect.
+            continue;
+        };
         if let Some(backward_subgraph) = backward_outputs.get_mut(&next) {
             let res = connect_and_refine(globals, forward_subgraph, backward_subgraph, inst, k + 1);
             match res {
@@ -436,9 +445,8 @@ fn expand_forward<W: Word>(
     tui: &impl for<'g> TuiHook<&'g Graph<W>, State<W>>,
     total_inst: usize,
 ) {
-    expand_forward_or_backward(graph, ei, tui, total_inst, |mut state, inst| {
-        inst.run(&mut state);
-        [state]
+    expand_forward_or_backward(graph, ei, tui, total_inst, |state, inst| {
+        inst.run_masked(state)
     })
 }
 
@@ -450,16 +458,16 @@ fn expand_backward<W: Word>(
     bm: &BackwardMap<W>,
 ) {
     expand_forward_or_backward(graph, ei, tui, total_inst, |state, inst| {
-        inst.run_backward(state, bm).into_iter().cloned()
+        inst.run_backward_masked(state, bm).into_iter().cloned()
     });
 }
 
-fn expand_forward_or_backward<W: Word, StepRet: IntoIterator<Item = State<W>>>(
+fn expand_forward_or_backward<W: Word, StepRet: IntoIterator<Item = MaskedState<W>>>(
     graph: &mut Graph<W>,
     ei: &EnumerationInfo<W>,
     tui: &impl for<'g> TuiHook<&'g Graph<W>, State<W>>,
     total_inst: usize,
-    step: impl Fn(State<W>, Inst<W>) -> StepRet,
+    step: impl Fn(MaskedState<W>, Inst<W>) -> StepRet,
 ) {
     // let old_graph = std::mem::replace(graph, Graph::Nest(Default::default()));
     let old_graph = std::mem::replace(graph, Graph::Leaf(Default::default()));
@@ -475,12 +483,12 @@ fn expand_forward_or_backward<W: Word, StepRet: IntoIterator<Item = State<W>>>(
     tui.progress(total_inst, total_inst);
     debug_assert_ne!(graph.n_programs(), 0);
 
-    fn recurse<W: Word, StepRet: IntoIterator<Item = State<W>>>(
+    fn recurse<W: Word, StepRet: IntoIterator<Item = MaskedState<W>>>(
         old_graph: &Graph<W>,
         new_graph: &mut Graph<W>,
         inst: Inst<W>,
-        out_states: &mut Vec<State<W>>,
-        step: &impl Fn(State<W>, Inst<W>) -> StepRet,
+        out_states: &mut Vec<MaskedState<W>>,
+        step: &impl Fn(MaskedState<W>, Inst<W>) -> StepRet,
     ) {
         match old_graph {
             Graph::Leaf(programs) if programs.is_empty() => (),
@@ -501,23 +509,23 @@ fn expand_forward_or_backward<W: Word, StepRet: IntoIterator<Item = State<W>>>(
     }
 }
 
-fn build_forward<W: Word>(graph: &mut Graph<W>, input: &State<W>) {
+fn build_forward<W: Word>(graph: &mut Graph<W>, input: &MaskedState<W>) {
     build_forwards_or_backwards(graph, input, |program, mut state| {
         for inst in program {
-            inst.run(&mut state);
+            state = inst.run_masked(state)?;
         }
-        [state]
+        Some(state)
     });
 }
 
-fn build_backward<W: Word>(graph: &mut Graph<W>, input: &State<W>, bm: &BackwardMap<W>) {
+fn build_backward<W: Word>(graph: &mut Graph<W>, input: &MaskedState<W>, bm: &BackwardMap<W>) {
     build_forwards_or_backwards(graph, input, |program, output| {
         // A vector of reaching states, that we push backwards in time, one instruction at a time.
         let mut states = vec![output];
         let mut new_states = vec![];
         for inst in program.iter().rev() {
             for state in states.drain(..) {
-                for new_state in inst.run_backward(state, bm) {
+                for new_state in inst.run_backward_masked(state, bm) {
                     new_states.push(*new_state);
                 }
             }
@@ -528,10 +536,10 @@ fn build_backward<W: Word>(graph: &mut Graph<W>, input: &State<W>, bm: &Backward
     });
 }
 
-fn build_forwards_or_backwards<W: Word, StepRet: IntoIterator<Item = State<W>>>(
+fn build_forwards_or_backwards<W: Word, StepRet: IntoIterator<Item = MaskedState<W>>>(
     graph: &mut Graph<W>,
-    input: &State<W>,
-    step: impl Fn(&Program<W>, State<W>) -> StepRet,
+    input: &MaskedState<W>,
+    step: impl Fn(&Program<W>, MaskedState<W>) -> StepRet,
 ) {
     debug_assert!(matches!(graph, Graph::Leaf(..)));
     // Rebuild the graph.
@@ -560,8 +568,8 @@ fn has_counter_example_been_seen<WT: Word, WS: Word>(
         impl Oracle<[Inst<WS>], State<WS>>,
         impl for<'g> TuiHook<&'g Graph<WS>, State<WS>>,
     >,
-    inp: &State<WS>,
-    out: &State<WS>,
+    inp: &MaskedState<WS>,
+    out: &MaskedState<WS>,
 ) -> bool {
     globals
         .inputs
