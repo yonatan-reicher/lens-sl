@@ -220,12 +220,6 @@ impl<W: Word> collect_registers::State<W> for State<W> {
     }
 }
 
-impl<W: Word> oracle::test_cases::State for State<W> {
-    fn clone_to(&self, output: &mut Self) {
-        self.clone_to(output);
-    }
-}
-
 impl<'st, W: SmtWord<'st>> From<StateVars<'st, W>> for SymbolicState<'st, W> {
     fn from(value: StateVars<'st, W>) -> Self {
         Self {

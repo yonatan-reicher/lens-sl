@@ -2,7 +2,7 @@ use super::{CounterExample, Oracle};
 
 /// An oracle that only checks against a fixed set of input-output pairs.
 #[derive(Debug)]
-pub struct TestCasesOracle<S: State> {
+pub struct TestCasesOracle<S> {
     pub test_cases: Vec<CounterExample<S>>,
 }
 
@@ -10,16 +10,12 @@ pub trait Program<S> {
     fn run(&self, state: &mut S);
 }
 
-pub trait State: Clone + Default + Eq {
-    fn clone_to(&self, output: &mut Self);
-}
-
-impl<P: Program<S> + ?Sized, S: State> Oracle<P, S> for TestCasesOracle<S> {
+impl<P: Program<S> + ?Sized, S: Clone + Default + Eq> Oracle<P, S> for TestCasesOracle<S> {
     fn check_program(&mut self, program: &P) -> Result<(), CounterExample<S>> {
         // Maybe we could not check test cases again, but it's probably not really slowing us down.
         let mut output = S::default();
         for (input, expected_output) in self.test_cases.iter() {
-            input.clone_to(&mut output);
+            output = input.clone();
             program.run(&mut output);
             if &output != expected_output {
                 return Err((input.clone(), output));
