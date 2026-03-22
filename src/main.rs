@@ -1,10 +1,10 @@
 #[allow(unused_imports)]
 use lens_sl::{NoTui, Tui};
 #[allow(unused_imports)]
-use lens_sl::{Register, Word4, Word8, Word64, inst, optimize, sl_optimize};
+use lens_sl::{Register, Word4, Word8, Word64, inst, optimize};
 
 fn main() {
-    let p = sl_optimize::<Word64, Word4>(
+    let p = optimize::<Word64, Word4>(
         &[
             inst!(AddI, 0, 0, 5),
             inst!(AddI Eq, 1, 0, 1),
@@ -17,15 +17,7 @@ fn main() {
             inst!(AddI Eq, 1, 0, 1),
         ],
         [Register(0), Register(1)],
-        [
-            0.into(),
-            1.into(),
-            8.into(),
-            11.into(),
-            20.into(),
-            92.into(),
-            93.into(),
-        ],
+        [0.into(), 1.into(), 20.into(), 8.into(), 11.into(), 92.into(), 93.into()],
         &Tui::default(), // */ &NoTui,
     );
     let Some(p) = p else {

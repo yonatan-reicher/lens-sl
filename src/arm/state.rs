@@ -3,10 +3,10 @@
 use super::Register;
 use crate::all::All;
 use crate::all_permutations::Iter as PermutationIter;
+use crate::bool::all_eq;
 use crate::bool::prelude::*;
 use crate::collect_registers;
 use crate::enumerate::EnumerationInfoOptions;
-use crate::oracle;
 use crate::reduce_bit_width::Reducer;
 use crate::word::prelude::*;
 use std::fmt::{self, Display, Formatter};
@@ -33,7 +33,6 @@ pub struct State<W> {
 pub struct SymbolicState<'st, W> {
     pub registers: [W; Register::COUNT as usize],
     pub flags: Flags<SmtBool<'st>>,
-    // TODO: Live mask
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -71,21 +70,21 @@ bitflags::bitflags! {
 
 /// A liveness mask. For each register, is it used or not. Has just one flag for the whole flags
 /// register (because flags are used and written to together).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, Hash)]
 pub struct Mask<B = bool> {
     pub registers: [B; Register::COUNT as usize],
     pub flags: B,
 }
 
 /// [Mask], but compacted to a bit-field.
-#[derive(Clone, Copy, Debug, Display, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Display, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[debug("{:?}", Mask::from(*self))]
 #[display("{}", Mask::from(*self))]
 pub struct BitMask(u32);
 
 // =========================== Masked State ===========================
 
-#[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Masked<W> {
     state: State<W>,
     mask: BitMask,
@@ -132,6 +131,13 @@ impl<W: Copy> State<W> {
     {
         self.registers = [W::default(); _];
         self.flags = FlagsBitField::empty();
+    }
+
+    pub fn masked(self, mask: Mask) -> Masked<W>
+    where
+        W: Default,
+    {
+        Masked::from(self) & mask
     }
 
     pub fn all_each(ei: &EnumerationInfoOptions<Register>, mut f: impl FnMut(&Self))
@@ -220,12 +226,6 @@ impl<W: Word> collect_registers::State<W> for State<W> {
     }
 }
 
-impl<W: Word> oracle::test_cases::State for State<W> {
-    fn clone_to(&self, output: &mut Self) {
-        self.clone_to(output);
-    }
-}
-
 impl<'st, W: SmtWord<'st>> From<StateVars<'st, W>> for SymbolicState<'st, W> {
     fn from(value: StateVars<'st, W>) -> Self {
         Self {
@@ -237,12 +237,16 @@ impl<'st, W: SmtWord<'st>> From<StateVars<'st, W>> for SymbolicState<'st, W> {
 
 impl<'st, W: SmtWord<'st>> SymbolicState<'st, W> {
     pub fn eq(&self, other: Self) -> SmtBool<'st> {
-        let regs = self.registers.iter().zip(other.registers);
+        let SymbolicState {
+            registers,
+            flags,
+        } = self;
+        let regs = registers.iter().zip(other.registers);
         let regs_eq = regs
             .map(|(ra, rb)| ra._eq(rb))
             .reduce(|b1, b2| b1 & b2)
             .unwrap();
-        regs_eq & self.flags.eq(&other.flags)
+        regs_eq & flags.eq(&other.flags)
     }
 }
 
@@ -258,7 +262,7 @@ impl<'st, W: SmtWord<'st>> StateVars<'st, W> {
 //     State Masking
 
 impl<W: Copy + Default> State<W> {
-    pub fn mask(self, mask: Mask) -> Self {
+    pub fn mask_or_default(self, mask: Mask) -> Self {
         State {
             flags: if mask.flags {
                 self.flags
@@ -521,9 +525,31 @@ impl Mask {
     }
 }
 
+impl<B> Mask<B> {
+    pub fn map<B2>(self, mut f: impl FnMut(B) -> B2) -> Mask<B2> {
+        Mask {
+            registers: self.registers.map(&mut f),
+            flags: f(self.flags),
+        }
+    }
+}
+
+impl<B: Bool> BoolEq<B> for Mask<B> {
+    fn eq(&self, other: &Self) -> B {
+        let Mask { registers, flags } = self;
+        all_eq(registers.iter().zip(&other.registers)) & flags.eq(&other.flags)
+    }
+}
+
 impl BitMask {
+    pub const EMPTY: BitMask = BitMask(0);
+
     pub fn into_mask(self) -> Mask {
         self.into()
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.0 == 0
     }
 }
 
@@ -709,7 +735,7 @@ impl<W: Copy + Default> BitAnd<Mask> for Masked<W> {
     fn bitand(self, mask: Mask) -> Self {
         Self {
             mask: self.mask & mask.into(),
-            state: self.state.mask(mask),
+            state: self.state.mask_or_default(mask),
             // mask mask mask mask...
         }
     }

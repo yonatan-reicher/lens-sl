@@ -9,6 +9,7 @@ default-run = "lens-sl"
 bitflags = { version = "2.10.0", features = ["serde"] }
 derive_more = { version = "2.1.1", features = ["full"] }
 functionality = "1.0.0"
+itertools = "0.14"
 rustc-hash = "2.1.1"
 smtlib = "0.3.0"
 # Most standard rust serialization

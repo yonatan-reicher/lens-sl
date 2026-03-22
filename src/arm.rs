@@ -2,6 +2,7 @@
 
 use crate::all::All;
 use crate::all_permutations::Iter as PermutationIter;
+use crate::arm::state::BitMask;
 use crate::bool::prelude::*;
 use crate::enumerate::{EnumerationInfo, EnumerationInfoOptions, Enumerator};
 use crate::iter_slice_or_single::Iter as SliceOrSingle;
@@ -601,6 +602,36 @@ impl<W: Word> Inst<W> {
         &bm[(*self, state)]
     }
 
+    pub fn run_masked(&self, masked: state::Masked<W>) -> Option<state::Masked<W>> {
+        // Check if we can run
+        let input_mask: BitMask = masked.mask();
+        let missing_inputs_mask = self.read_mask().into_bit_mask() & !input_mask;
+        if !missing_inputs_mask.is_empty() {
+            return None;
+        }
+        // We can. Run!
+        let mut state = *masked.state();
+        self.run(&mut state);
+        let change_mask = state.diff(masked.state());
+        let output_mask = change_mask | input_mask.into_mask();
+        Some(state.masked(output_mask))
+    }
+
+    pub fn run_backward_masked<'a>(
+        &self,
+        output: state::Masked<W>,
+        bm: &'a BackwardMap<W>,
+    ) -> impl IntoIterator<Item = &'a state::Masked<W>> + use<'a, W> {
+        // let unmasked_outputs = output.mask().;
+        // self.run_backward(*output.state(), bm)
+        //     .into_iter()
+        //     .map(|input| {
+        //         todo!()
+        //     })
+        todo!();
+        []
+    }
+
     pub fn reduce<WSmall: Word>(&self, reducer: &mut Reducer<W, WSmall>) -> Inst<WSmall> {
         fn reduce_arg<W: Word, WSmall: Word>(
             reducer: &mut Reducer<W, WSmall>,
@@ -728,6 +759,24 @@ where
         f(&ret)?;
     }
     ControlFlow::Continue(())
+}
+
+/// Returns a mask for the input and the masked output.
+pub fn run_program_masked<W: Word>(prog: impl IntoIterator<Item=Inst<W>>, input: State<W>) -> (BitMask, state::Masked<W>) {
+    let (mut input_mask, mut output_mask) = (BitMask::EMPTY, BitMask::EMPTY);
+    let mut current_state = input;
+    for inst in prog {
+        let prev = current_state;
+        inst.run(&mut current_state);
+        let read_mask = inst.read_mask().into_bit_mask();
+        let change_mask = current_state.diff(&prev).into_bit_mask();
+        let old_output_mask = output_mask;
+        // Add to input whatever you read and didn't write to earlier
+        input_mask = input_mask | (read_mask & !old_output_mask);
+        // Add to output whatever you are writing to
+        output_mask = output_mask | change_mask;
+    }
+    (input_mask, current_state.masked(output_mask.into_mask()))
 }
 
 #[cfg(test)]

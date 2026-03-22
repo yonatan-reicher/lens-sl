@@ -93,6 +93,17 @@ where T: Copy + StaticSorted<'st> + IntoWithStorage<'st, T::Inner>
     fn neq(&self, other: &T) -> SmtBool<'st> { self._neq(*other) }
 }
 
+pub fn all_eq<'a, T: 'a + BoolEq<B>, B: Bool>(iter: impl IntoIterator<Item = (&'a T, &'a T)>) -> B {
+    iter.into_iter()
+        .map(|(x, y)| x.eq(y))
+        .reduce(B::bitand)
+        .unwrap_or(B::r#true())
+}
+
+// ==========================================================================================
+//                                            Other
+// ==========================================================================================
+
 pub mod prelude {
     pub use super::{Bool, BoolEq, IfThenElse, SmtBool};
 }
