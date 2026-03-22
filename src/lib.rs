@@ -19,6 +19,8 @@ mod collect_registers;
 mod tui;
 /// Main loop where the big picture stuff happens.
 mod main_loop;
+/// Rewrite of main loop with separation logic.
+mod main_loop_sl;
 
 // Here is a diagram of the dependency structure between some of the main modules:
 //
@@ -79,5 +81,6 @@ impl Direction {
 
 pub use arm::{BackwardMap, CondCode, Flags, FlagsBitField, Inst, OpCode, Register, State};
 pub use main_loop::optimize;
+pub use main_loop_sl::optimize as optimize_sl;
 pub use tui::{NoTui, Tui, TuiHook};
 pub use word::{Word, Word4, Word8, Word64};
