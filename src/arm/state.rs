@@ -17,6 +17,8 @@ use serde::{Deserialize, Serialize};
 use smtlib::Storage;
 use smtlib::prelude::*;
 use smtlib::terms::Const;
+// other
+use itertools::Itertools;
 
 // ============================= State =============================
 
@@ -519,6 +521,16 @@ impl Mask {
                 None
             }
         }
+    }
+
+    /// This is the power-set!
+    pub fn sub_masks(self) -> impl Iterator<Item = Mask> {
+        self.singleton_sub_masks().powerset().map(|singletons| {
+            singletons
+                .into_iter()
+                .reduce(|x, y| x | y)
+                .unwrap_or_default()
+        })
     }
 }
 
