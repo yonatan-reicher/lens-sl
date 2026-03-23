@@ -166,19 +166,23 @@ where
     }
 }
 
-impl<S, P> Graph<S, P>
-where
-    S: Eq + Hash + Display,
-    P: Display,
-{
-    pub fn pretty_print_lines(&self) -> Vec<String> {
+// ================================================================================================
+//                                        Pretty Printing
+// ================================================================================================
+
+impl<S, P> Graph<S, P> {
+    pub fn pretty_print_lines_with(
+        &self,
+        pretty_prog: &mut impl FnMut(&P) -> String,
+        pretty_state: &mut impl FnMut(&S) -> String,
+    ) -> Vec<String> {
         match self {
-            Graph::Leaf(programs) => programs.to_string().lines().map(String::from).collect(),
+            Graph::Leaf(programs) => pretty_prog(programs).lines().map(String::from).collect(),
             Graph::Nest(hash_map) => {
                 let mut lines = vec![];
                 for (state, sub_graph) in hash_map {
-                    let sub_lines = sub_graph.pretty_print_lines();
-                    lines.push(format!("State: {state}"));
+                    let sub_lines = sub_graph.pretty_print_lines_with(pretty_prog, pretty_state);
+                    lines.push(format!("State: {}", pretty_state(state)));
                     for sub_line in sub_lines {
                         lines.push(format!("  {sub_line}"));
                     }
@@ -186,6 +190,24 @@ where
                 lines
             }
         }
+    }
+
+    pub fn pretty_print_with(
+        &self,
+        mut p: impl FnMut(&P) -> String,
+        mut s: impl FnMut(&S) -> String,
+    ) -> String {
+        self.pretty_print_lines_with(&mut p, &mut s).join("\n")
+    }
+}
+
+impl<S, P> Graph<S, P>
+where
+    S: Display,
+    P: Display,
+{
+    pub fn pretty_print_lines(&self) -> Vec<String> {
+        self.pretty_print_lines_with(&mut |p| p.to_string(), &mut |s| s.to_string())
     }
 
     pub fn pretty_print(&self) -> String {
