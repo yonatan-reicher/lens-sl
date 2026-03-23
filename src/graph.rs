@@ -1,5 +1,5 @@
 use crate::len::Len;
-use functionality::{Pipe, Mutate};
+use functionality::{Mutate, Pipe};
 use rustc_hash::FxHashMap;
 use std::fmt::Display;
 use std::hash::Hash;
@@ -138,11 +138,10 @@ where
     {
         match self {
             Graph::Leaf(p) => p,
-            Graph::Nest(map) => {
-                map.into_values()
-                    .map(|sub_graph| sub_graph.flatten())
-                    .pipe(|iter| P::default().mutate(|p| p.extend(iter)))
-            }
+            Graph::Nest(map) => map
+                .into_values()
+                .map(|sub_graph| sub_graph.flatten())
+                .pipe(|iter| P::default().mutate(|p| p.extend(iter))),
         }
     }
 
