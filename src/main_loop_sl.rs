@@ -402,6 +402,7 @@ fn build_forward<W: Word>(graph: &mut Graph<W>, input: &MaskedState<W>) {
         dont_matter
             .into_mask()
             .sub_masks()
+            // TODO: Filter additional masks that have more than like 2 or 3 registers.
             .map(move |additional| {
                 let input = input & (necessary.into_mask() | additional);
                 (input, output | input)
