@@ -6,6 +6,7 @@ use crate::all::All;
 use crate::arm::state::Masked as MaskedState;
 use crate::arm::{
     BackwardMap, Flags, Inst, Register, State, StateVars, SymbolicState, extend_program_for_each,
+    run_program_masked, what_program_reads,
 };
 use crate::collect_registers::Collector;
 use crate::enumerate::{EnumerationInfo, EnumerationInfoOptions, Enumerator};
@@ -18,7 +19,7 @@ use crate::tui::TuiHook;
 use crate::word::prelude::*;
 
 // std imports
-use std::ops::ControlFlow::{Break, Continue};
+use std::ops::ControlFlow::{self, Break, Continue};
 
 // smt stuff!
 use crate::smtlib_utils::bool_term_to_bool;
@@ -31,7 +32,7 @@ type Program<W> = programs::Program<Inst<W>>;
 
 type Programs<W> = programs::Programs<Inst<W>>;
 
-type Graph<W> = graph::Graph<MaskedState<W>, Programs<W>>;
+type Graph<W> = graph::Graph<(MaskedState<W>, MaskedState<W>), Programs<W>>;
 
 // ========================================== Oracle ==============================================
 
@@ -113,7 +114,7 @@ pub fn optimize<WT: Word, WS: Word + serde::de::DeserializeOwned>(
     program: &[Inst<WT>],
     additional_registers: impl IntoIterator<Item = Register>,
     additional_immediates: impl IntoIterator<Item = WT>,
-    tui: &impl for<'g> TuiHook<&'g Graph<WS>, State<WS>>,
+    tui: &impl for<'g> TuiHook<&'g Graph<WS>, MaskedState<WS>>,
 ) -> Option<Program<WT>>
 where
     <WS as All>::Iter: Clone,
@@ -168,15 +169,13 @@ fn synthesize<WT: Word, W: Word + serde::de::DeserializeOwned>(
     // In the future, this could be max_cost.
     original_length: usize,
     original_reduced: Program<W>,
-    tui: &impl for<'a> TuiHook<&'a Graph<W>, State<W>>,
+    tui: &impl for<'a> TuiHook<&'a Graph<W>, MaskedState<W>>,
 ) -> Option<Program<WT>>
 where
     <W as All>::Iter: Clone,
 {
-    // The forward and backward graphs start while having the empty program.
-    let empty_program = Programs::empty_program();
-    let mut forward_graph = Graph::Leaf(empty_program.clone());
-    let mut backward_graph = Graph::Leaf(empty_program);
+    // The graph starts with having just the empty program.
+    let mut graph = Graph::Leaf(Programs::empty_program());
     let enumeration_info = &EnumerationInfo::<W> {
         registers: EnumerationInfoOptions::Limited(registers),
         immediates: EnumerationInfoOptions::Limited(immediates),
@@ -196,58 +195,42 @@ where
     };
     // Generate a first input
     println!("Checking empty program");
-    match globals.oracle_reduced.check_program(&[]) {
-        // TODO: What if the reduced program is equivalent but not the unreduced?
-        Ok(()) => return Some(vec![]), // Turns out it's actually the empty program 🤷
-        Err((inp, out)) => {
-            tui.found_counter_example(inp, out);
-            let (inp_mask, out) = crate::arm::run_program_masked(
-                globals.original_reduced.iter().cloned(),
-                inp,
-            );
-            globals.inputs.push(inp.masked(inp_mask.into()));
-            globals.outputs.push(out);
-        }
+    match verify(&[], &mut globals) {
+        // Excuse the confusing case names please.
+        // TODO: Make an enum for this.
+        Continue(()) => panic!("Could not generate the first counter example"), // TODO: Keep trying programs until something works?
+        Break(ProgramOrRetry::Program(p)) => return Some(p),
+        Break(ProgramOrRetry::Retry) => (), // Found a counter example, keep going
     }
-    tui.report_graph(Direction::Forward, &forward_graph);
-    tui.report_graph(Direction::Backward, &backward_graph);
+    tui.report_graph(Direction::Forward, &graph);
     loop {
         // ------------------------------ Search Phase --------------------------------------------
         tui.searching();
-        for (i, inst) in Enumerator::new().into_iter(enumeration_info).enumerate() {
-            tui.progress(i, globals.total_instructions);
-            let res = connect_and_refine::<WT, W>(
-                &mut globals,
-                &mut forward_graph,
-                &mut backward_graph,
-                inst,
-                1,
-            );
-            match res {
-                ConnectAndRefineResult::Found(prog) => {
-                    println!("Found program of length {}", prog.len());
-                    return Some(prog);
-                }
-                ConnectAndRefineResult::Continue => {}
+        tui.progress(0, globals.total_instructions);
+        let res = connect_and_refine::<WT, W>(&mut globals, &mut graph, 1);
+        match res {
+            ConnectAndRefineResult::Found(prog) => {
+                println!("Found program of length {}", prog.len());
+                return Some(prog);
             }
+            ConnectAndRefineResult::Continue => {}
         }
         // ------------------------------ Expand Phase --------------------------------------------
         tui.progress(globals.total_instructions, globals.total_instructions);
-        tui.report_graph(Direction::Forward, &forward_graph);
-        tui.report_graph(Direction::Backward, &backward_graph);
-        if globals.forward_length + globals.backward_length + 1 == original_length - 1 {
+        tui.report_graph(Direction::Forward, &graph);
+        if globals.forward_length == original_length - 1 {
             return None;
         }
         let direction = Direction::Forward;
         tui.expanding(direction);
         expand_forward(
-            &mut forward_graph,
+            &mut graph,
             enumeration_info,
             globals.tui,
             globals.total_instructions,
         );
         globals.forward_length += 1;
-        tui.report_graph(Direction::Forward, &forward_graph);
+        tui.report_graph(Direction::Forward, &graph);
     }
 }
 
@@ -263,7 +246,7 @@ struct Globals<
     WS: Word,
     OT: Oracle<[Inst<WT>], State<WT>>,
     OS: Oracle<[Inst<WS>], State<WS>>,
-    TUI: for<'g> TuiHook<&'g Graph<WS>, State<WS>>,
+    TUI: for<'g> TuiHook<&'g Graph<WS>, MaskedState<WS>>,
 > {
     oracle: OT,
     /// The oracle that checks program in the reduced word size.
@@ -294,126 +277,50 @@ fn connect_and_refine<WT: Word, WS: Word>(
         WS,
         impl Oracle<[Inst<WT>], State<WT>>,
         impl Oracle<[Inst<WS>], State<WS>>,
-        impl for<'a> TuiHook<&'a Graph<WS>, State<WS>>,
+        impl for<'a> TuiHook<&'a Graph<WS>, MaskedState<WS>>,
     >,
-    forward_graph: &mut Graph<WS>,
-    backward_graph: &mut Graph<WS>,
-    inst: Inst<WS>,
+    graph: &mut Graph<WS>,
     // This is the index of the input/output pair we are currently trying to connect.
     k: usize,
 ) -> ConnectAndRefineResult<WT> {
-    let tui = globals.tui;
     if k > globals.inputs.len() {
-        let mut counter_example_added = false;
-        match (&forward_graph, &backward_graph) {
-            (Graph::Leaf(prefixes), Graph::Leaf(postfixes)) => {
-                let ret = {
-                    // We found a class of candidate programs.
-                    // Try each one. If one works, return it. If none work, adds all counter-examples.
-                    // First, make a buffer to hold the program.
-                    let program_length = globals.forward_length + 1 + globals.backward_length;
-                    let mut program = Vec::with_capacity(program_length);
-                    prefixes.try_each(|prefix| {
-                        debug_assert_eq!(prefix.len(), globals.forward_length);
-                        postfixes.try_each(|postfix| {
-                            debug_assert_eq!(postfix.len(), globals.backward_length);
-                            // Build the current candidate (reduced) program.
-                            program.clear();
-                            program.extend(prefix.iter());
-                            program.push(inst);
-                            program.extend(postfix.iter());
-                            match globals.oracle_reduced.check_program(&program) {
-                                // Found!
-                                Ok(()) => extend_program_for_each(
-                                    &program,
-                                    &globals.extender,
-                                    |extended_program| match globals
-                                        .oracle
-                                        .check_program(extended_program)
-                                    {
-                                        Ok(()) => {
-                                            Break(ProgramOrRetry::Program(extended_program.to_vec()))
-                                        }
-                                        Err(_) => Continue(()),
-                                    },
-                                ),
-                                Err((inp, out)) => {
-                                    tui.found_counter_example( inp, out,);
-                                    let (inp_mask, out) = crate::arm::run_program_masked(
-                                        globals.original_reduced.iter().cloned(),
-                                        inp,
-                                    );
-                                    let inp = inp.masked(inp_mask.into_mask());
-                                    debug_assert!(
-                                        !has_counter_example_been_seen(globals, &inp, &out),
-                                        "Counter-example from reduced oracle should not have been seen before."
-                                    );
-                                    globals.inputs.push(inp);
-                                    globals.outputs.push(out);
-                                    counter_example_added = true;
-                                    Break(ProgramOrRetry::Retry)
-                                }
-                            }
-                        })
-                    })
-                };
+        match &graph {
+            Graph::Leaf(programs) => {
+                // We found a class of candidate programs.
+                // Try each one. If one works, return it. If none work, adds all counter-examples.
+                let ret = programs.try_each(|program| verify(&program, globals));
                 match ret {
-                    Break(ProgramOrRetry::Program(prog)) => {
-                        return ConnectAndRefineResult::Found(prog);
-                    }
-                    Break(ProgramOrRetry::Retry) => {
-                        return connect_and_refine(globals, forward_graph, backward_graph, inst, k);
-                    }
+                    Break(ProgramOrRetry::Program(p)) => return ConnectAndRefineResult::Found(p),
+                    Break(ProgramOrRetry::Retry) => return connect_and_refine(globals, graph, k),
                     Continue(()) => (),
                 }
             }
             _ => {
-                println!("Graphs are not leaves at the end.");
-                // println!("Forward Graph: \n{}", forward_graph.pretty_print());
-                // println!("Backward Graph: \n{}", backward_graph.pretty_print());
+                println!("Graph is not leaves at the end.");
                 panic!();
             }
         }
-        if !counter_example_added {
-            // When we don't find a counter-example, we know that we are already at the deepest part of
-            // the graph, a leaf. When you are at a leaf, it means you don't have any more input-output
-            // pairs to match between the forward and backward graph, so you can't connect the forward
-            // and backwards graphs. That is to say, you are done!
-            return ConnectAndRefineResult::Continue;
-        }
     }
 
-    if matches!(forward_graph, Graph::Leaf(..)) {
-        build_forward(forward_graph, &globals.inputs[k - 1]);
+    if matches!(graph, Graph::Leaf(..)) {
+        build_forward(graph, &globals.inputs[k - 1]);
     }
 
-    if matches!(backward_graph, Graph::Leaf(..)) {
-        build_backward(
-            backward_graph,
-            &globals.outputs[k - 1],
-            &globals.backward_map,
-        );
-    }
-
-    // Must be nests, because build_forwards/backwards always turn leaves into nests.
-    let Graph::Nest(forward_outputs) = forward_graph else {
+    let Graph::Nest(map) = graph else {
         panic!();
     };
-    let Graph::Nest(backward_outputs) = backward_graph else {
-        panic!();
-    };
-
-    for (forward_output, forward_subgraph) in forward_outputs {
-        let Some(next) = inst.run_masked(*forward_output) else {
-            // If we cannot run this instruction, we cannot connect.
-            continue;
-        };
-        if let Some(backward_subgraph) = backward_outputs.get_mut(&next) {
-            let res = connect_and_refine(globals, forward_subgraph, backward_subgraph, inst, k + 1);
+    for ((inp, out), sub_graph) in map {
+        // Check if the input and output feel good to match against the real ones.
+        // The input just needs to be at least as general as the real input.
+        // The output needs to match exactly.
+        let (ce_inp, ce_out) = (&globals.inputs[k - 1], &globals.outputs[k - 1]);
+        let missing_inputs = inp.mask() & !ce_inp.mask();
+        let ce_inp_masked = *ce_inp & inp.mask().into_mask();
+        let good = missing_inputs.is_empty() && ce_inp_masked == *inp && ce_out == out;
+        if good {
+            let res = connect_and_refine(globals, sub_graph, k + 1);
             match res {
-                ConnectAndRefineResult::Found(prog) => {
-                    return ConnectAndRefineResult::Found(prog);
-                }
+                ConnectAndRefineResult::Found(prog) => return ConnectAndRefineResult::Found(prog),
                 ConnectAndRefineResult::Continue => {}
             }
         }
@@ -427,7 +334,7 @@ fn connect_and_refine<WT: Word, WS: Word>(
 fn expand_forward<W: Word>(
     graph: &mut Graph<W>,
     ei: &EnumerationInfo<W>,
-    tui: &impl for<'g> TuiHook<&'g Graph<W>, State<W>>,
+    tui: &impl for<'g> TuiHook<&'g Graph<W>, MaskedState<W>>,
     total_inst: usize,
 ) {
     expand_forward_or_backward(graph, ei, tui, total_inst, |state, inst| {
@@ -438,11 +345,10 @@ fn expand_forward<W: Word>(
 fn expand_forward_or_backward<W: Word, StepRet: IntoIterator<Item = MaskedState<W>>>(
     graph: &mut Graph<W>,
     ei: &EnumerationInfo<W>,
-    tui: &impl for<'g> TuiHook<&'g Graph<W>, State<W>>,
+    tui: &impl for<'g> TuiHook<&'g Graph<W>, MaskedState<W>>,
     total_inst: usize,
     step: impl Fn(MaskedState<W>, Inst<W>) -> StepRet,
 ) {
-    // let old_graph = std::mem::replace(graph, Graph::Nest(Default::default()));
     let old_graph = std::mem::replace(graph, Graph::Leaf(Default::default()));
     debug_assert_ne!(old_graph.n_programs(), 0);
     let mut out_states = vec![];
@@ -460,7 +366,7 @@ fn expand_forward_or_backward<W: Word, StepRet: IntoIterator<Item = MaskedState<
         old_graph: &Graph<W>,
         new_graph: &mut Graph<W>,
         inst: Inst<W>,
-        out_states: &mut Vec<MaskedState<W>>,
+        out_states: &mut Vec<(MaskedState<W>, MaskedState<W>)>,
         step: &impl Fn(MaskedState<W>, Inst<W>) -> StepRet,
     ) {
         match old_graph {
@@ -470,9 +376,9 @@ fn expand_forward_or_backward<W: Word, StepRet: IntoIterator<Item = MaskedState<
                 new_graph.insert_all(out_states, [programs]);
             }
             Graph::Nest(hash_map) => {
-                for (state, sub_graph) in hash_map.iter() {
-                    for out_state in step(*state, inst) {
-                        out_states.push(out_state);
+                for ((inp, prev_out), sub_graph) in hash_map.iter() {
+                    for out in step(*prev_out, inst) {
+                        out_states.push((*inp, out));
                         recurse(sub_graph, new_graph, inst, out_states, step);
                         out_states.pop();
                     }
@@ -483,16 +389,23 @@ fn expand_forward_or_backward<W: Word, StepRet: IntoIterator<Item = MaskedState<
 }
 
 fn build_forward<W: Word>(graph: &mut Graph<W>, input: &MaskedState<W>) {
-    build_forwards_or_backwards(graph, input, |program, mut state| {
+    build_forwards_or_backwards(graph, input, |program, input| {
+        // TODO: we need to use this actually and return a bunch of options based on like
+        // every possible subset
+        // run_program_masked(program, state);
+        let mut output = input;
         for inst in program {
-            state = inst.run_masked(state)?;
+            output = inst.run_masked(output)?;
         }
-        Some(state)
+        Some((input, output))
     });
 }
 
 fn build_backward<W: Word>(graph: &mut Graph<W>, input: &MaskedState<W>, bm: &BackwardMap<W>) {
     build_forwards_or_backwards(graph, input, |program, output| {
+        todo!();
+        []
+        /*
         // A vector of reaching states, that we push backwards in time, one instruction at a time.
         let mut states = vec![output];
         let mut new_states = vec![];
@@ -506,10 +419,14 @@ fn build_backward<W: Word>(graph: &mut Graph<W>, input: &MaskedState<W>, bm: &Ba
             debug_assert!(new_states.is_empty());
         }
         states
+        */
     });
 }
 
-fn build_forwards_or_backwards<W: Word, StepRet: IntoIterator<Item = MaskedState<W>>>(
+fn build_forwards_or_backwards<
+    W: Word,
+    StepRet: IntoIterator<Item = (MaskedState<W>, MaskedState<W>)>,
+>(
     graph: &mut Graph<W>,
     input: &MaskedState<W>,
     step: impl Fn(&Program<W>, MaskedState<W>) -> StepRet,
@@ -539,7 +456,7 @@ fn has_counter_example_been_seen<WT: Word, WS: Word>(
         WS,
         impl Oracle<[Inst<WT>], State<WT>>,
         impl Oracle<[Inst<WS>], State<WS>>,
-        impl for<'g> TuiHook<&'g Graph<WS>, State<WS>>,
+        impl for<'g> TuiHook<&'g Graph<WS>, MaskedState<WS>>,
     >,
     inp: &MaskedState<WS>,
     out: &MaskedState<WS>,
@@ -549,4 +466,40 @@ fn has_counter_example_been_seen<WT: Word, WS: Word>(
         .iter()
         .zip(&globals.outputs)
         .any(|(i, o)| i == inp && o == out)
+}
+
+fn verify<WBig: Word, W: Word>(
+    prog: &[Inst<W>],
+    globals: &mut Globals<
+        WBig,
+        W,
+        impl Oracle<[Inst<WBig>], State<WBig>>,
+        impl Oracle<[Inst<W>], State<W>>,
+        impl for<'g> TuiHook<&'g Graph<W>, MaskedState<W>>,
+    >,
+) -> ControlFlow<ProgramOrRetry<WBig>> {
+    match dbg!(globals.oracle_reduced.check_program(dbg!(prog))) {
+        // Found!
+        Ok(()) => {
+            extend_program_for_each(prog, &globals.extender, |extended_program| {
+                match globals.oracle.check_program(extended_program) {
+                    Ok(()) => Break(ProgramOrRetry::Program(extended_program.to_vec())),
+                    Err(_) => Continue(()),
+                }
+            })
+        }
+        Err((inp, _out)) => {
+            let read_mask = what_program_reads(globals.original_reduced.iter().cloned(), &inp);
+            let inp = inp.masked(read_mask.into());
+            let out = run_program_masked(globals.original_reduced.iter().cloned(), inp).expect("the counter example found by the oracle must be runnable and the input mask for the program must be enough for it to run");
+            globals.tui.found_counter_example(inp, out);
+            debug_assert!(
+                !has_counter_example_been_seen(globals, &inp, &out),
+                "Counter-example from reduced oracle should not have been seen before."
+            );
+            globals.inputs.push(inp);
+            globals.outputs.push(out);
+            Break(ProgramOrRetry::Retry)
+        }
+    }
 }
