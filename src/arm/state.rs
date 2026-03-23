@@ -768,3 +768,19 @@ impl<W: Copy + Default> BitOr for Masked<W> {
         Masked { state, mask }
     }
 }
+
+impl<W: Clone + Display> Display for Masked<W> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        let mask = self.mask().into_mask();
+        let state = self.state().clone();
+        let mut parts = vec![];
+        if mask.flags {
+            parts.push(state.flags.to_string());
+        }
+        for r in Register::all().filter(|r| mask[*r]) {
+            parts.push(format!("{r}={}", state[r]));
+        }
+        write!(f, "{}", parts.join(" "))?;
+        Ok(())
+    }
+}
