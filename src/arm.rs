@@ -2,7 +2,6 @@
 
 use crate::all::All;
 use crate::all_permutations::Iter as PermutationIter;
-use crate::arm::state::BitMask;
 use crate::bool::prelude::*;
 use crate::enumerate::{EnumerationInfo, EnumerationInfoOptions, Enumerator};
 use crate::iter_slice_or_single::Iter as SliceOrSingle;
@@ -299,6 +298,7 @@ pub struct Inst<W> {
 
 pub mod state;
 
+use state::{BitMask, Mask};
 pub use state::{Flags, FlagsBitField, State, StateVars, SymbolicState};
 
 fn run_instruction<W: Word>(inst: &Inst<W>, state: &mut State<W>) {
@@ -559,30 +559,6 @@ impl<W: Copy + Into<Register>> Inst<W> {
         }
         ret.into_iter()
     }
-
-    // The parts of the state that this instruction reads.
-    pub fn read_mask(&self) -> state::Mask {
-        let mut ret = state::Mask::default();
-        for (a, t) in self.args_with_types() {
-            if let ArgType::Reg(RegArgType::Inp) = t {
-                ret[a.into()] |= true
-            }
-        }
-        ret.flags = self.cond_code != CondCode::Al;
-        ret
-    }
-
-    /// The parts of the state that this instruction writes.
-    pub fn write_mask(&self) -> state::Mask {
-        let mut ret = state::Mask::default();
-        for (a, t) in self.args_with_types() {
-            if let ArgType::Reg(RegArgType::Out) = t {
-                ret[a.into()] |= true
-            }
-        }
-        ret.flags = self.op_code.affects_flags();
-        ret
-    }
 }
 
 impl<W: Word> Inst<W> {
@@ -602,10 +578,37 @@ impl<W: Word> Inst<W> {
         &bm[(*self, state)]
     }
 
+    /// What the instruction reads from, given a state. This is not exact, just a best
+    /// approximation.
+    pub fn read_mask(&self, state: &State<W>) -> Mask {
+        let mut ret = Mask::EMPTY;
+        // Condition
+        if self.cond_code != CondCode::Al {
+            ret.flags = true;
+            if !self.cond_code.check(state.flags.into()) {
+                return ret;
+            }
+        }
+        // Operation
+        let regs = self.args.map(Register::from);
+        use OpCode::*;
+        match self.op_code {
+            Nop | MovI => (),
+            AddI | SubI | Mov => {
+                ret[regs[1]] = true;
+            }
+            Add | Sub | And | Eor | Mul | Orr => {
+                ret[regs[1]] = true;
+                ret[regs[2]] = true;
+            }
+        }
+        ret
+    }
+
     pub fn run_masked(&self, masked: state::Masked<W>) -> Option<state::Masked<W>> {
         // Check if we can run
         let input_mask: BitMask = masked.mask();
-        let missing_inputs_mask = self.read_mask().into_bit_mask() & !input_mask;
+        let missing_inputs_mask = self.read_mask(masked.state()).into_bit_mask() & !input_mask;
         if !missing_inputs_mask.is_empty() {
             return None;
         }
@@ -613,14 +616,14 @@ impl<W: Word> Inst<W> {
         let mut state = *masked.state();
         self.run(&mut state);
         let change_mask = state.diff(masked.state());
-        let output_mask = change_mask | input_mask.into_mask();
+        let output_mask = input_mask.into_mask() | change_mask;
         Some(state.masked(output_mask))
     }
 
     pub fn run_backward_masked<'a>(
         &self,
-        output: state::Masked<W>,
-        bm: &'a BackwardMap<W>,
+        _output: state::Masked<W>,
+        _bm: &'a BackwardMap<W>,
     ) -> impl IntoIterator<Item = &'a state::Masked<W>> + use<'a, W> {
         // let unmasked_outputs = output.mask().;
         // self.run_backward(*output.state(), bm)
@@ -761,26 +764,41 @@ where
     ControlFlow::Continue(())
 }
 
-/// Returns a mask for the input and the masked output.
-pub fn run_program_masked<W: Word>(prog: impl IntoIterator<Item=Inst<W>>, input: State<W>) -> (BitMask, state::Masked<W>) {
-    let (mut input_mask, mut output_mask) = (BitMask::EMPTY, BitMask::EMPTY);
-    let mut current_state = input;
+/// Returns a mask having only those parts of the input state that affect the output of the
+/// program.
+pub fn what_program_reads<W: Word>(
+    prog: impl IntoIterator<Item = Inst<W>>,
+    input: &State<W>,
+) -> BitMask {
+    let mut input_mask = BitMask::EMPTY;
+    let mut current = state::Masked::<W>::default();
     for inst in prog {
-        let prev = current_state;
-        inst.run(&mut current_state);
-        let read_mask = inst.read_mask().into_bit_mask();
-        let change_mask = current_state.diff(&prev).into_bit_mask();
-        let old_output_mask = output_mask;
-        // Add to input whatever you read and didn't write to earlier
-        input_mask = input_mask | (read_mask & !old_output_mask);
-        // Add to output whatever you are writing to
-        output_mask = output_mask | change_mask;
+        let read_mask = inst.read_mask(current.state()).into_bit_mask();
+        // Add things that we are reading that we haven't seen yet.
+        let newly_read_mask = read_mask & !current.mask();
+        input_mask = input_mask | newly_read_mask;
+        current = current | input.masked(input_mask.into());
+        // Now update. This also marks things that we update as seen, so they won't be in the final
+        // output mask.
+        current = inst.run_masked(current).expect("The updating of the current state above should take care of this");
     }
-    (input_mask, current_state.masked(output_mask.into_mask()))
+    input_mask
+}
+
+pub fn run_program_masked<W: Word>(
+    prog: impl IntoIterator<Item = Inst<W>>,
+    input: state::Masked<W>,
+) -> Option<state::Masked<W>> {
+    prog.into_iter()
+        .try_fold(input, |current, inst| inst.run_masked(current))
 }
 
 #[cfg(test)]
 mod tests {
+    use functionality::Mutate;
+
+    use crate::arm::state::Mask;
+
     use super::*;
     use std::collections::HashSet;
 
@@ -975,5 +993,45 @@ mod tests {
             }
         }
         panic!("No instruction produced non-empty input states for the given output state!");
+    }
+
+    #[test]
+    fn what_program_reads_example_1() {
+        type W = Word8;
+        let p: Vec<Inst<W>> = vec![inst!(AddI, 0, 0, 5)];
+        let input = State::default();
+        let input_mask = what_program_reads(p.clone(), &input);
+        let output = run_program_masked(p, input.masked(input_mask.into()));
+        assert_eq!(
+            input_mask,
+            Mask::EMPTY.mutate(|m| m[Register(0)] = true).into()
+        );
+        assert_eq!(
+            output.unwrap(),
+            input
+                .mutate(|i| i[Register(0)] = 5.into())
+                .masked(Mask::EMPTY.mutate(|m| m[Register(0)] = true))
+        );
+    }
+
+    #[test]
+    fn what_program_reads_example_2() {
+        type W = Word8;
+        let p: Vec<Inst<W>> = vec![
+            inst!(AddI, 0, 0, 5),
+            inst!(AddI Eq, 1, 0, 1),
+            inst!(Mul Eq, 1, 0, 1),
+        ];
+        let input = State::default();
+        let input_mask = what_program_reads(p.clone(), &input);
+        let output = run_program_masked(p, input.masked(input_mask.into()));
+        let m = Mask::EMPTY
+            .mutate(|m| m[Register(0)] = true)
+            .mutate(|m| m.flags = true);
+        assert_eq!(input_mask, m.into(),);
+        assert_eq!(
+            output.unwrap(),
+            input.mutate(|i| i[Register(0)] = 5.into()).masked(m),
+        );
     }
 }
