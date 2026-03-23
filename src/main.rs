@@ -4,6 +4,7 @@ use lens_sl::{NoTui, Tui};
 use lens_sl::{Register, Word4, Word8, Word64, inst, optimize};
 
 fn main() {
+    let tui = Tui::default();
     let p = optimize::<Word64, Word4>(
         &[
             inst!(AddI, 0, 0, 5),
@@ -18,8 +19,9 @@ fn main() {
         ],
         [Register(0), Register(1)],
         [0.into(), 1.into(), 20.into(), 8.into(), 11.into(), 92.into(), 93.into()],
-        &Tui::default(), // */ &NoTui,
+        &tui, // */ &NoTui,
     );
+    tui.close();
     let Some(p) = p else {
         println!("No equivalent program found");
         return;
