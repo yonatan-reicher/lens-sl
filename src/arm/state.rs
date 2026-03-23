@@ -11,12 +11,15 @@ use crate::reduce_bit_width::Reducer;
 use crate::word::prelude::*;
 use std::fmt::{self, Display, Formatter};
 // derive macros
-use derive_more::{Debug, Display};
+use derive_more::Display;
 use serde::{Deserialize, Serialize};
 // smt
 use smtlib::Storage;
 use smtlib::prelude::*;
 use smtlib::terms::Const;
+// proptest
+#[cfg(test)]
+use proptest::prelude::*;
 // other
 use itertools::Itertools;
 
@@ -79,7 +82,9 @@ pub struct Mask<B = bool> {
 }
 
 /// [Mask], but compacted to a bit-field.
-#[derive(Clone, Copy, Debug, Display, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, derive_more::Debug, Display, Default, PartialEq, Eq, Hash, Serialize, Deserialize,
+)]
 #[debug("{:?}", Mask::from(*self))]
 #[display("{}", Mask::from(*self))]
 pub struct BitMask(u32);
@@ -635,6 +640,15 @@ impl All for BitMask {
     }
 }
 
+#[cfg(test)]
+impl Arbitrary for BitMask {
+    type Parameters = ();
+    type Strategy = prop::strategy::Map<std::ops::Range<u32>, fn(u32) -> BitMask>;
+    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+        (0..Mask::FULL.into_bit_mask().0 + 1).prop_map(BitMask)
+    }
+}
+
 // --- Mask operations ---
 use std::ops::{BitAnd, BitOr, BitXor, Index, IndexMut, Not};
 
@@ -794,5 +808,25 @@ impl<W: Clone + Display> Display for Masked<W> {
         }
         write!(f, "{}", parts.join(" "))?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::property_test;
+
+    #[property_test]
+    fn test_singleton_sub_masks_length(mask: BitMask) {
+        let mask = mask.into_mask();
+        let count = (if mask.flags { 1 } else { 0 }) + mask.registers().count();
+        prop_assert_eq!(mask.singleton_sub_masks().count(), count);
+    }
+
+    #[property_test]
+    fn test_sub_masks_length(mask: BitMask) {
+        let mask = mask.into_mask();
+        let count = (if mask.flags { 1 } else { 0 }) + mask.registers().count();
+        prop_assert_eq!(mask.sub_masks().count(), 2usize.pow(count as _));
     }
 }
