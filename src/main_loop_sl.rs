@@ -390,14 +390,23 @@ fn expand_forward_or_backward<W: Word, StepRet: IntoIterator<Item = MaskedState<
 
 fn build_forward<W: Word>(graph: &mut Graph<W>, input: &MaskedState<W>) {
     build_forwards_or_backwards(graph, input, |program, input| {
-        // TODO: we need to use this actually and return a bunch of options based on like
-        // every possible subset
-        // run_program_masked(program, state);
-        let mut output = input;
-        for inst in program {
-            output = inst.run_masked(output)?;
-        }
-        Some((input, output))
+        use itertools::Either;
+        // Check what we need to run and that we have it
+        let necessary = what_program_reads(program.iter().cloned(), input.state());
+        let Some(output) = run_program_masked(program.iter().cloned(), input & necessary.into())
+        else {
+            return Either::Left(std::iter::empty());
+        };
+        // What do we not need to run? (we add with it to the graph anyway)
+        let dont_matter = input.mask() & !necessary;
+        dont_matter
+            .into_mask()
+            .sub_masks()
+            .map(move |additional| {
+                let input = input & (necessary.into_mask() | additional);
+                (input, output | input)
+            })
+            .pipe(Either::Right)
     });
 }
 
@@ -478,7 +487,7 @@ fn verify<WBig: Word, W: Word>(
         impl for<'g> TuiHook<&'g Graph<W>, MaskedState<W>>,
     >,
 ) -> ControlFlow<ProgramOrRetry<WBig>> {
-    match dbg!(globals.oracle_reduced.check_program(dbg!(prog))) {
+    match globals.oracle_reduced.check_program(prog) {
         // Found!
         Ok(()) => {
             extend_program_for_each(prog, &globals.extender, |extended_program| {
