@@ -780,7 +780,9 @@ pub fn what_program_reads<W: Word>(
         current = current | input.masked(input_mask.into());
         // Now update. This also marks things that we update as seen, so they won't be in the final
         // output mask.
-        current = inst.run_masked(current).expect("The updating of the current state above should take care of this");
+        current = inst
+            .run_masked(current)
+            .expect("The updating of the current state above should take care of this");
     }
     input_mask
 }
