@@ -422,6 +422,7 @@ fn run_instruction_symbolic<'st, W: Word>(
         Orr => set! { r![0] <- r![1] | r![2] },
     }
 }
+mod semantics;
 
 /// A hash-map between instructions and output states to input states that send to the output. The
 /// states use a liveness mask to mark which registers are ignored, and they all ignore the
