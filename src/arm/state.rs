@@ -23,6 +23,28 @@ use proptest::prelude::*;
 // other
 use itertools::Itertools;
 
+// ========================================== Traits ==============================================
+
+pub trait Get<W: AbstractWord> {
+    fn reg(&self, r: Register) -> W;
+    fn flags(&self) -> Flags<W::Bool>;
+}
+
+pub trait Set<W: AbstractWord> {
+    fn maybe_set_reg(&mut self, r: Register, cond: W::Bool, w: W);
+    fn maybe_set_flags(&mut self, cond: W::Bool, f: Flags<W::Bool>);
+    fn set_reg(&mut self, r: Register, x: W) {
+        self.maybe_set_reg(r, W::Bool::r#true(), x);
+    }
+    fn set_flags(&mut self, f: Flags<W::Bool>) {
+        self.maybe_set_flags(W::Bool::r#true(), f)
+    }
+}
+
+pub trait StateTrait<W: AbstractWord>: Get<W> + Set<W> {
+    fn default_from(arg: W::FromParam) -> Self;
+}
+
 // ============================= State =============================
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -95,6 +117,63 @@ pub struct BitMask(u32);
 pub struct Masked<W> {
     state: State<W>,
     mask: BitMask,
+}
+
+// ================================== Implementing The Trait =======================================
+
+// --- State ---
+
+#[rustfmt::skip]
+impl<W: Word> Get<W> for State<W> {
+    fn reg(&self, r: Register) -> W { self[r] }
+    fn flags(&self) -> Flags        { self.flags.into() }
+}
+
+#[rustfmt::skip]
+impl<W: Word> Set<W> for State<W> {
+    fn maybe_set_reg(&mut self, r: Register, cond: bool, w: W) { if cond { self[r] = w; } }
+    fn maybe_set_flags(&mut self, cond: bool, f: Flags)        { if cond { self.flags = f.into(); } }
+}
+
+#[rustfmt::skip]
+impl<W: Word> StateTrait<W> for State<W> {
+    fn default_from((): ()) -> Self { Self::default() }
+}
+
+// --- Symbolic State ---
+
+#[rustfmt::skip]
+impl<'st, W: SmtWord<'st>> Get<W> for SymbolicState<'st, W> {
+    fn reg(&self, r: Register) -> W        { self[r] }
+    fn flags(&self) -> Flags<SmtBool<'st>> { self.flags }
+}
+
+impl<'st, W: SmtWord<'st>> Set<W> for SymbolicState<'st, W> {
+    fn maybe_set_reg(&mut self, r: Register, cond: SmtBool<'st>, w: W) {
+        self[r] = cond.if_then_else(w, self[r]);
+    }
+    fn maybe_set_flags(&mut self, cond: SmtBool<'st>, f: Flags<SmtBool<'st>>) {
+        self.flags = Flags {
+            z: cond.if_then_else(f.z, self.flags.z),
+            n: cond.if_then_else(f.n, self.flags.n),
+            c: cond.if_then_else(f.c, self.flags.c),
+            v: cond.if_then_else(f.v, self.flags.v),
+        };
+    }
+}
+
+impl<'st, W: SmtWord<'st>> StateTrait<W> for SymbolicState<'st, W> {
+    fn default_from(st: &'st Storage) -> Self {
+        Self {
+            flags: Flags {
+                z: Bool::r#false(),
+                n: Bool::r#false(),
+                c: Bool::r#false(),
+                v: Bool::r#false(),
+            },
+            registers: [W::Word::from(0).into_abstract_word(st); _],
+        }
+    }
 }
 
 // ============================ State impl ============================
@@ -233,6 +312,21 @@ impl<W: Word> collect_registers::State<W> for State<W> {
     }
 }
 
+// ======================================= Symbolic State ==========================================
+
+impl<'st, W> Index<Register> for SymbolicState<'st, W> {
+    type Output = W;
+    fn index(&self, r: Register) -> &W {
+        &self.registers[r.0 as usize]
+    }
+}
+
+impl<'st, W> IndexMut<Register> for SymbolicState<'st, W> {
+    fn index_mut(&mut self, r: Register) -> &mut W {
+        &mut self.registers[r.0 as usize]
+    }
+}
+
 impl<'st, W: SmtWord<'st>> From<StateVars<'st, W>> for SymbolicState<'st, W> {
     fn from(value: StateVars<'st, W>) -> Self {
         Self {
@@ -317,77 +411,34 @@ impl<'st> From<Flags<Const<'st, SmtBool<'st>>>> for Flags<SmtBool<'st>> {
     }
 }
 
-impl<'st> Flags<SmtBool<'st>> {
-    pub(crate) fn update_from_add<W: SmtWord<'st>>(
-        &mut self,
-        op1: W,
-        op2: W,
-        enabled: SmtBool<'st>,
-    ) {
+impl<B: Bool> Flags<B> {
+    pub fn from_add<W: AbstractWord<Bool = B>>(op1: W, op2: W) -> Self {
         let sum = op1 + op2;
-        self.z = enabled.if_then_else(sum.is_zero(), self.z);
-        self.n = enabled.if_then_else(sum.is_negative(), self.n);
-        self.c = enabled.if_then_else(sum.unsigned_lt(op1), self.c);
-        let both_positive = op1.is_positive() & op2.is_positive();
-        let both_negative = op1.is_negative() & op2.is_negative();
-        self.v = enabled.if_then_else(
-            (both_positive & sum.signed_lt(op1)) | (both_negative & sum.is_positive()),
-            self.v,
-        );
+        let z = sum.is_zero();
+        let n = sum.signed_negative();
+        let c = sum.unsigned_lt(&op1);
+        let both_positive = op1.signed_positive() & op2.signed_positive();
+        let both_negative = op1.signed_negative() & op2.signed_negative();
+        let v = (both_positive & sum.signed_lt(&op1)) | (both_negative & sum.signed_positive());
+        Flags { z, n, c, v }
     }
 
-    pub(crate) fn update_from_sub<W: SmtWord<'st>>(
-        &mut self,
-        op1: W,
-        op2: W,
-        enabled: SmtBool<'st>,
-    ) {
-        let diff = op1.sub(op2);
-        self.z = enabled.if_then_else(diff.is_zero(), self.z);
-        self.n = enabled.if_then_else(diff.is_negative(), self.n);
-        self.c = enabled.if_then_else(op2.unsigned_le(op1), self.c);
-        let op1_positive = op1.is_positive();
-        let op2_negative = op2.is_negative();
-        let op1_negative = op1.is_negative();
-        let op2_positive = op2.is_positive();
-        self.v = enabled.if_then_else(
-            (op1_positive & op2_negative & diff.is_negative())
-                | (op1_negative & op2_positive & diff.is_positive()),
-            self.v,
-        );
-    }
-}
-
-impl Flags<bool> {
-    pub(crate) fn update_from_add<W: Word>(&mut self, op1: W, op2: W, enabled: bool) {
-        if !enabled {
-            return;
-        }
-        let sum = op1 + op2;
-        self.z = sum.is_zero();
-        self.n = sum.signed_negative();
-        self.c = sum < op1;
-        let both_positive = op1.signed_positive() && op2.signed_positive();
-        let both_negative = op1.signed_negative() && op2.signed_negative();
-        self.v = (both_positive && sum.signed_lt(op1)) || (both_negative && sum.signed_positive());
-    }
-
-    pub(crate) fn update_from_sub<W: Word>(&mut self, op1: W, op2: W, enabled: bool) {
-        if !enabled {
-            return;
-        }
-        let diff = op1 - op2;
-        self.z = diff.is_zero();
-        self.n = diff.signed_negative();
-        self.c = op1 >= op2;
+    pub fn from_sub<W: AbstractWord<Bool = B>>(op1: W, op2: W) -> Self {
+        let diff = op1 + (-op2);
+        let z = diff.is_zero();
+        let n = diff.signed_negative();
+        let c = !op1.unsigned_lt(&op2);
         let op1_positive = op1.signed_positive();
         let op2_negative = op2.signed_negative();
         let op1_negative = op1.signed_negative();
         let op2_positive = op2.signed_positive();
-        self.v = (op1_positive && op2_negative && diff.signed_negative())
-            || (op1_negative && op2_positive && diff.signed_positive());
+        let v = (op1_positive & op2_negative & diff.signed_negative())
+            | (op1_negative & op2_positive & diff.signed_positive());
+        Flags { z, n, c, v }
     }
+}
 
+impl Flags {
     /// Contains all possible combinations of flags.
     #[rustfmt::skip]
     pub const ALL: [Flags; 16 /* 2^4 */] = [
@@ -544,6 +595,16 @@ impl<B> Mask<B> {
         Mask {
             registers: self.registers.map(&mut f),
             flags: f(self.flags),
+        }
+    }
+
+    pub fn empty() -> Self
+    where
+        B: Bool,
+    {
+        Mask {
+            flags: B::r#false(),
+            registers: [B::r#false(); _],
         }
     }
 }

@@ -15,6 +15,8 @@ pub type SmtBool<'st> = smtlib::Bool<'st>;
 pub trait Bool:
     Clone
     + Copy
+    + std::fmt::Debug
+    + std::fmt::Display
     + BitAnd<Output = Self>
     + BitOr<Output = Self>
     + BitXor<Output = Self>
