@@ -138,10 +138,7 @@ impl<'a, W: AbstractWord, State: StateTrait<W>> OutputAndWriteMaskAndEnabledFlag
     }
 
     pub fn set_reg(&mut self, r: Register, w: W) {
-        dbg!(("before", self.output.reg(Register(0))));
-        dbg!(("cond", self.enabled));
         self.output.maybe_set_reg(r, self.enabled, w);
-        dbg!(("after", self.output.reg(Register(0))));
         self.write[r] = self.enabled;
     }
 
