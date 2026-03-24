@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 5d70924b759967ac976bb320910da1cd46fbe4fda28285569c3f21826f142bdc # shrinks to TestSubMasksLengthArgs = TestSubMasksLengthArgs { mask: Mask { registers: [false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false], flags: false } }
