@@ -301,127 +301,8 @@ pub mod state;
 use state::{BitMask, Mask};
 pub use state::{Flags, FlagsBitField, State, StateVars, SymbolicState};
 
-fn run_instruction<W: Word>(inst: &Inst<W>, state: &mut State<W>) {
-    /// Get a register value.
-    macro_rules! r {
-        ($i:literal) => {{
-            debug_assert!($i < 3);
-            debug_assert!(inst.op_code.arg_types()[$i].is_reg());
-            let r = Register(inst.args[$i].into_word::<Word8>().into());
-            state.get_register(r)
-        }};
-    }
-    /// Set a register value.
-    macro_rules! set {
-        (r![$i:literal] <- $value:expr) => {{
-            debug_assert!($i < 3);
-            debug_assert!(inst.op_code.arg_types()[$i].is_reg());
-            let r = Register(inst.args[$i].into_word::<Word8>().into());
-            state.set_register(r, $value)
-        }};
-        (flags <- $f:ident( $($e:expr),* )) => {{
-            let mut flags: Flags = state.get_flags().into();
-            flags.$f::<W>( $($e),*, true );
-            state.set_flags(flags.into());
-        }};
-    }
-    /// Get an immediate value.
-    macro_rules! imm {
-        ($i:literal) => {
-            inst.args[$i]
-        };
-    }
+// ========================================= Semantics =============================================
 
-    // Skip the instruction if it is skipped by the flags.
-    if !inst.cond_code.check(state.get_flags().into()) {
-        return;
-    }
-
-    use OpCode::*;
-    match inst.op_code {
-        Nop => (),
-        Add => {
-            set! { flags <- update_from_add(r![1], r![2]) };
-            set! { r![0] <- r![1] + r![2] };
-        }
-        AddI => {
-            set! { flags <- update_from_add(r![1], imm![2]) };
-            set! { r![0] <- r![1] + imm![2] };
-        }
-        Sub => {
-            set! { flags <- update_from_sub(r![1], r![2]) };
-            set! { r![0] <- r![1] - r![2] };
-        }
-        SubI => {
-            set! { flags <- update_from_sub(r![1], imm![2]) };
-            set! { r![0] <- r![1] - imm![2] };
-        }
-        And => set!(r![0] <- r![1] & r![2]),
-        Eor => set!(r![0] <- r![1] ^ r![2]),
-        Mov => set!(r![0] <- r![1]),
-        MovI => set!(r![0] <- imm![1]),
-        // Mul => set!(r![0 i] <- r![1 i].overflowing_mul(r![2 i]).0),
-        Mul => set!(r![0] <- r![1] * r![2]),
-        Orr => set!(r![0] <- r![1] | r![2]),
-    }
-}
-
-fn run_instruction_symbolic<'st, W: Word>(
-    inst: &Inst<W>,
-    state: &mut SymbolicState<'st, W::SmtWord<'st>>,
-) {
-    let enabled = inst.cond_code.check(state.flags);
-
-    /// Get a register value.
-    macro_rules! r {
-        ($i:literal) => {
-            state.registers[{
-                debug_assert!($i < 3);
-                debug_assert!(inst.op_code.arg_types()[$i].is_reg());
-                let r = Register(inst.args[$i].into_word::<Word8>().into());
-                r.0 as usize
-            }]
-        };
-    }
-    /// Set a register value. Also checks the condition code.
-    macro_rules! set {
-        (r![$i:literal] <- $e:expr) => {{ r![$i] = enabled.if_then_else($e, r![$i]); }};
-        (flags <- $f:ident($($e:expr),*)) => {{ state.flags.$f::<W::SmtWord<'st>>($($e),* , enabled); }};
-    }
-    /// Get an immediate value.
-    macro_rules! imm {
-        ($i:literal) => {
-            inst.args[$i].into_smt_word(state.registers[0].st())
-        };
-    }
-
-    use OpCode::*;
-    match inst.op_code {
-        Nop => (),
-        Add => {
-            set! { flags <- update_from_add(r![1], r![2]) };
-            set! { r![0] <- r![1] + r![2] };
-        }
-        AddI => {
-            set! { flags <- update_from_add(r![1], imm![2]) };
-            set! { r![0] <- r![1] + imm![2] };
-        }
-        Sub => {
-            set! { flags <- update_from_sub(r![1], r![2]) };
-            set! { r![0] <- r![1] + -r![2] };
-        }
-        SubI => {
-            set! { flags <- update_from_sub(r![1], imm![2]) };
-            set! { r![0] <- r![1] + -imm![2] };
-        }
-        And => set! { r![0] <- r![1] & r![2] },
-        Eor => set! { r![0] <- r![1] ^ r![2] },
-        Mov => set! { r![0] <- r![1] },
-        MovI => set! { r![0] <- imm![1] },
-        Mul => set! { r![0] <- r![1] * r![2] },
-        Orr => set! { r![0] <- r![1] | r![2] },
-    }
-}
 mod semantics;
 
 /// A hash-map between instructions and output states to input states that send to the output. The
@@ -564,11 +445,16 @@ impl<W: Copy + Into<Register>> Inst<W> {
 
 impl<W: Word> Inst<W> {
     pub fn run(&self, state: &mut State<W>) {
-        run_instruction(self, state)
+        let input = *state;
+        let (mut read_mask, mut write_mask) = Default::default();
+        *state = semantics::run(self, &input, &mut read_mask, &mut write_mask, &())
     }
 
     pub fn run_symbolic<'st>(&self, state: &mut SymbolicState<'st, W::SmtWord<'st>>) {
-        run_instruction_symbolic(self, state)
+        let input = *state;
+        let (mut read_mask, mut write_mask) = (Mask::empty(), Mask::empty());
+        let st = state.registers[0].st();
+        *state = semantics::run(self, &input, &mut read_mask, &mut write_mask, &st);
     }
 
     pub fn run_backward<'a>(
@@ -579,46 +465,25 @@ impl<W: Word> Inst<W> {
         &bm[(*self, state)]
     }
 
-    /// What the instruction reads from, given a state. This is not exact, just a best
-    /// approximation.
+    /// What the instruction reads from, given a state.
     pub fn read_mask(&self, state: &State<W>) -> Mask {
-        let mut ret = Mask::EMPTY;
-        // Condition
-        if self.cond_code != CondCode::Al {
-            ret.flags = true;
-            if !self.cond_code.check(state.flags.into()) {
-                return ret;
-            }
-        }
-        // Operation
-        let regs = self.args.map(Register::from);
-        use OpCode::*;
-        match self.op_code {
-            Nop | MovI => (),
-            AddI | SubI | Mov => {
-                ret[regs[1]] = true;
-            }
-            Add | Sub | And | Eor | Mul | Orr => {
-                ret[regs[1]] = true;
-                ret[regs[2]] = true;
-            }
-        }
-        ret
+        let input = *state;
+        let (mut read_mask, mut write_mask) = Default::default();
+        semantics::run(self, &input, &mut read_mask, &mut write_mask, &());
+        read_mask
     }
 
     pub fn run_masked(&self, masked: state::Masked<W>) -> Option<state::Masked<W>> {
-        // Check if we can run
+        let (mut read_mask, mut write_mask) = Default::default();
+        let out = semantics::run(self, masked.state(), &mut read_mask, &mut write_mask, &());
+        // Check if we didn't read something that's not actually allowed
         let input_mask: BitMask = masked.mask();
-        let missing_inputs_mask = self.read_mask(masked.state()).into_bit_mask() & !input_mask;
+        let missing_inputs_mask = read_mask.into_bit_mask() & !input_mask;
         if !missing_inputs_mask.is_empty() {
             return None;
         }
-        // We can. Run!
-        let mut state = *masked.state();
-        self.run(&mut state);
-        let change_mask = state.diff(masked.state());
-        let output_mask = input_mask.into_mask() | change_mask;
-        Some(state.masked(output_mask))
+        // Nope, everything is fine and fun
+        Some(out.masked(input_mask.into_mask() | write_mask))
     }
 
     pub fn run_backward_masked<'a>(
@@ -832,9 +697,8 @@ mod tests {
     }
 
     #[test]
-    fn test_update_from_sub_zero() {
-        let mut flags = Flags::<bool>::default();
-        flags.update_from_sub::<Word64>(5usize.into(), 5usize.into(), true);
+    fn test_flags_from_sub_zero() {
+        let flags = Flags::from_sub::<Word64>(5usize.into(), 5usize.into());
         assert!(flags.z);
         assert!(!flags.n);
         assert!(flags.c); // no borrow
@@ -842,9 +706,8 @@ mod tests {
     }
 
     #[test]
-    fn test_update_from_sub_positive() {
-        let mut flags = Flags::<bool>::default();
-        flags.update_from_sub::<Word64>(10usize.into(), 3usize.into(), true);
+    fn test_flags_from_sub_positive() {
+        let flags = Flags::from_sub::<Word64>(10usize.into(), 3usize.into());
         assert!(!flags.z);
         assert!(!flags.n); // 7 is positive
         assert!(flags.c); // no borrow (10 >= 3)
@@ -852,9 +715,8 @@ mod tests {
     }
 
     #[test]
-    fn test_update_from_sub_negative() {
-        let mut flags = Flags::<bool>::default();
-        flags.update_from_sub::<Word64>(3usize.into(), 10usize.into(), true);
+    fn test_flags_from_sub_negative() {
+        let flags = Flags::from_sub::<Word64>(3usize.into(), 10usize.into());
         assert!(!flags.z);
         assert!(flags.n); // result is negative (wraps)
         assert!(!flags.c); // borrow occurred (3 < 10)
@@ -862,39 +724,21 @@ mod tests {
     }
 
     #[test]
-    fn test_update_from_sub_overflow_positive() {
+    fn test_flags_from_sub_overflow_positive() {
         // Positive - Negative = Negative (overflow)
         // For u8: 127 - (-128) = 127 - 128 (as unsigned) = 127 - 128 (wraps)
-        let mut flags = Flags::<bool>::default();
-        flags.update_from_sub::<Word8>(127usize.into(), 128usize.into(), true); // 127 - (-128 as u8)
+        let flags = Flags::from_sub::<Word8>(127usize.into(), 128usize.into()); // 127 - (-128 as u8)
         assert!(flags.n); // wrapped to negative
         assert!(flags.v); // overflow occurred
     }
 
     #[test]
-    fn test_update_from_sub_overflow_negative() {
+    fn test_flags_from_sub_overflow_negative() {
         // Negative - Positive = Positive (overflow)
         // For u8: 128 (as -128 signed) - 1 = wraps to 127
-        let mut flags = Flags::<bool>::default();
-        flags.update_from_sub::<Word8>(128usize.into(), 1usize.into(), true);
+        let flags = Flags::from_sub::<Word8>(128usize.into(), 1usize.into());
         assert!(!flags.n); // wrapped to positive
         assert!(flags.v); // overflow occurred
-    }
-
-    #[test]
-    fn test_update_from_sub_disabled() {
-        let mut flags = Flags {
-            z: true,
-            n: true,
-            c: true,
-            v: true,
-        };
-        flags.update_from_sub::<Word64>(10usize.into(), 3usize.into(), false);
-        // All flags should remain unchanged
-        assert!(flags.z);
-        assert!(flags.n);
-        assert!(flags.c);
-        assert!(flags.v);
     }
 
     #[test]
@@ -1011,9 +855,11 @@ mod tests {
         );
         assert_eq!(
             output.unwrap(),
-            input
-                .mutate(|i| i[Register(0)] = 5.into())
-                .masked(Mask::EMPTY.mutate(|m| m[Register(0)] = true))
+            input.mutate(|i| i[Register(0)] = 5.into()).masked(
+                Mask::EMPTY
+                    .mutate(|m| m[Register(0)] = true)
+                    .mutate(|m| m.flags = true)
+            )
         );
     }
 
@@ -1028,13 +874,13 @@ mod tests {
         let input = State::default();
         let input_mask = what_program_reads(p.clone(), &input);
         let output = run_program_masked(p, input.masked(input_mask.into()));
-        let m = Mask::EMPTY
-            .mutate(|m| m[Register(0)] = true)
-            .mutate(|m| m.flags = true);
-        assert_eq!(input_mask, m.into(),);
+        let m = Mask::EMPTY.mutate(|m| m[Register(0)] = true);
+        assert_eq!(input_mask, m.into());
         assert_eq!(
             output.unwrap(),
-            input.mutate(|i| i[Register(0)] = 5.into()).masked(m),
+            input
+                .mutate(|i| i[Register(0)] = 5.into())
+                .masked(m | Mask::JUST_FLAGS),
         );
     }
 }
