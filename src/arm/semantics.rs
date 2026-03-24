@@ -127,7 +127,9 @@ struct OutputAndWriteMaskAndEnabledFlag<'a, B, W, State> {
     _marker: std::marker::PhantomData<W>,
 }
 
-impl<'a, W: AbstractWord, State: StateTrait<W>> OutputAndWriteMaskAndEnabledFlag<'a, W::Bool, W, State> {
+impl<'a, W: AbstractWord, State: StateTrait<W>>
+    OutputAndWriteMaskAndEnabledFlag<'a, W::Bool, W, State>
+{
     pub fn new(output: &'a mut State, write: &'a mut Mask<W::Bool>, enabled: W::Bool) -> Self {
         Self {
             output,
