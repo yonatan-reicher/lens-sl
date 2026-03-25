@@ -1,30 +1,38 @@
-Working on building backwards feels like the logical step ahead, but Hila
-specifically requested I reuse different parts of the program independently of
-being backwards and forwards. For that I need to work on concatenation. It
-should not be hard to implement naively, the hard part is doing it without
-duplicates.
+ I have 2 things that I'm currently working on:
+- How to add concatenations in a good way, avoiding duplicates
+- Building backwards with liveness.
+I am focusing on the first one.
 
-## What do I mean by duplicates?
+## Concatenations
 
-given the following set of programs:
-1. add r0, r0, 1
-2. add r0, r0, r0
-3. mov r1, 1
+In Lens, we are using a structure that's pretty much:
+```rust
+enum Programs {
+    EmptyProgram,
+    Concat(Vec<Programs>, Instruction)
+}
+```
 
-Concatenating whatever we can might give us:
-1.  add r0, r0, 1
-2.  add r0, r0, r0
-3.  mov r1, 1
-4.  add r0, r0, 1 ; add r0, r0, 1
-5.  add r0, r0, 1 ; add r0, r0, r0
-6.  add r0, r0, 1 ; mov r1, 1
-7.  add r0, r0, r0 ; add r0, r0, 1
-8.  add r0, r0, r0 ; add r0, r0, r0
-9.  add r0, r0, r0 ; mov r1, 1
-10. mov r1, 1 ; add r0, r0, 1
-11. mov r1, 1 ; add r0, r0, r0
-12. mov r1, 1 ; mov r1, 1
+So the natural thing to try for concatenation would be
 
+```rust
+enum Programs {
+    EmptyProgram,
+    Concat(Vec<Programs>, Programs)
+}
+```
+
+Two further optimizations would be to store these programs objects in an arena
+of their own, and to calculate that Vec lazely. If you combine them you can
+actually achieve something really cool, by storing just a pointer to the index
+of the last program object, you have a slice of all programs created, which you
+can iterate over lazely.
+
+Anddd you can of course also memoize! I am not sure but I think this could
+really improve results.
+
+
+Anyway what I really should do is start with a naive implementation.
 Now, every time we add another round of concatenations like this we are going to
 add many duplicates, and I am convinced this will be a very bad idea. One thing
 we can try, is just checking for each program if we already encountered it. We
@@ -49,11 +57,3 @@ flat, with almost no indirection.
   ID 23)).
 - Each individual program is also referenced by 
 
-
-## What else?
-
-The Lens SL first draft is going well. Restarting from the Lens code was a good
-decision. Thinking about the following:
-- How to add concatenations in a good way, avoiding duplicates
-- Building backwards with liveness.
-- Unify code responsible for instruction semantics.
