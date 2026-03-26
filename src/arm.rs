@@ -288,6 +288,13 @@ impl<W: Word> From<W> for Register {
     }
 }
 
+// impl<W: Word> From<Register> for W { // Some weird orphan rule conflict :/
+impl From<Register> for Word8 {
+    fn from(r: Register) -> Word8 {
+        r.0.into()
+    }
+}
+
 /// A single instruction.
 #[derive(Clone, Copy, derive_more::Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(test, derive(proptest_derive::Arbitrary))]
