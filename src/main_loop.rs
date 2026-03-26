@@ -203,6 +203,10 @@ where
         Break(ProgramOrRetry::Retry) => (), // Found a counter example, keep going
     }
     tui.report_graph(Direction::Forward, &graph);
+    // ------------------------------- Initialization ---------------------------------------------
+    for inst in Enumerator::new().into_iter(&enumeration_info) {
+        graph.insert_all(&[], [inst.into()]);
+    }
     loop {
         // ------------------------------ Search Phase --------------------------------------------
         tui.searching();
