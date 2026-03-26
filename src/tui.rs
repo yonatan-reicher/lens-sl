@@ -1,7 +1,7 @@
 use crate::Direction;
-use humantime;
 use crate::len::Len;
 use derive_more::Display;
+use humantime;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::ops::{Index, IndexMut};
 use std::sync::mpsc::{Receiver, RecvError, Sender, channel};
@@ -281,7 +281,12 @@ impl<S: Display> Display for IoThreadState<S> {
         writeln!(f)?;
         writeln!(f, "Times:")?;
         for (p, i, t) in &self.phases {
-            writeln!(f, "  Iteration {i} Phase {:<15}   {}", p.to_string(), humantime::Duration::from(*t))?;
+            writeln!(
+                f,
+                "  Iteration {i} Phase {:<15}   {}",
+                p.to_string(),
+                humantime::Duration::from(*t)
+            )?;
         }
         writeln!(f)?;
         writeln!(f, "Counter Examples:")?;

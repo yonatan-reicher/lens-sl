@@ -2,9 +2,9 @@
 
 use crate::all::All;
 use crate::all_permutations::Iter as PermutationIter;
+use crate::arm::enumerate::{EnumerationInfo, EnumerationInfoOptions, Enumerator};
 use crate::arm::state::BitMask;
 use crate::bool::prelude::*;
-use crate::arm::enumerate::{EnumerationInfo, EnumerationInfoOptions, Enumerator};
 use crate::iter_slice_or_single::Iter as SliceOrSingle;
 use crate::reduce_bit_width::{ImmediateInfo, Reducer};
 use crate::word::prelude::*;
@@ -708,7 +708,7 @@ impl<W: Word> Inst<W> {
 
 pub mod enumerate;
 impl<W: Word> Inst<W> {
-    pub fn enumerate<'a>(ei: EnumerationInfo<'a, W>) -> impl Iterator<Item=Self> + use<'a, W> {
+    pub fn enumerate<'a>(ei: EnumerationInfo<'a, W>) -> impl Iterator<Item = Self> + use<'a, W> {
         enumerate::Enumerator::new(ei)
     }
 }
@@ -785,7 +785,10 @@ where
 }
 
 /// Returns a mask for the input and the masked output.
-pub fn run_program_masked<W: Word>(prog: impl IntoIterator<Item=Inst<W>>, input: State<W>) -> (BitMask, state::Masked<W>) {
+pub fn run_program_masked<W: Word>(
+    prog: impl IntoIterator<Item = Inst<W>>,
+    input: State<W>,
+) -> (BitMask, state::Masked<W>) {
     let (mut input_mask, mut output_mask) = (BitMask::EMPTY, BitMask::EMPTY);
     let mut current_state = input;
     for inst in prog {

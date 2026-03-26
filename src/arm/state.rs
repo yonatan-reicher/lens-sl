@@ -3,10 +3,10 @@
 use super::Register;
 use crate::all::All;
 use crate::all_permutations::Iter as PermutationIter;
+use crate::arm::enumerate::EnumerationInfoOptions;
 use crate::bool::all_eq;
 use crate::bool::prelude::*;
 use crate::collect_registers;
-use crate::arm::enumerate::EnumerationInfoOptions;
 use crate::reduce_bit_width::Reducer;
 use crate::word::prelude::*;
 use std::fmt::{self, Display, Formatter};
@@ -237,10 +237,7 @@ impl<'st, W: SmtWord<'st>> From<StateVars<'st, W>> for SymbolicState<'st, W> {
 
 impl<'st, W: SmtWord<'st>> SymbolicState<'st, W> {
     pub fn eq(&self, other: Self) -> SmtBool<'st> {
-        let SymbolicState {
-            registers,
-            flags,
-        } = self;
+        let SymbolicState { registers, flags } = self;
         let regs = registers.iter().zip(other.registers);
         let regs_eq = regs
             .map(|(ra, rb)| ra._eq(rb))

@@ -261,7 +261,7 @@ impl<I: Clone> FromIterator<I> for Programs<I> {
 }
 
 impl<I: Clone + Debug + Eq + Hash> Extend<Programs<I>> for Programs<I> {
-    fn extend<It: IntoIterator<Item=Self>>(&mut self, iter: It) {
+    fn extend<It: IntoIterator<Item = Self>>(&mut self, iter: It) {
         for p in iter {
             self.extend(&p);
         }
