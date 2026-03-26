@@ -434,14 +434,35 @@ impl<'a> Lexer<'a> {
             let line = self.line;
             let col = self.col;
             match self.peek() {
-                None => { tokens.push(Token::new(TokenKind::Eof, "", line, col)); break; }
-                Some(b',')  => { self.advance(); tokens.push(Token::new(TokenKind::Comma,  ",",  line, col)); }
-                Some(b'"')  => { self.advance(); tokens.push(Token::new(TokenKind::Dquote, "\"", line, col)); }
-                Some(b'?')  => { self.advance(); tokens.push(Token::new(TokenKind::Hole,   "?",  line, col)); }
-                Some(b'#')  => { self.advance(); tokens.push(Token::new(TokenKind::Hash,   "#",  line, col)); }
-                Some(b'[')  => { self.advance(); tokens.push(Token::new(TokenKind::Lsqbr,  "[",  line, col)); }
-                Some(b']')  => { self.advance(); tokens.push(Token::new(TokenKind::Rsqbr,  "]",  line, col)); }
-                Some(b';')  => {
+                None => {
+                    tokens.push(Token::new(TokenKind::Eof, "", line, col));
+                    break;
+                }
+                Some(b',') => {
+                    self.advance();
+                    tokens.push(Token::new(TokenKind::Comma, ",", line, col));
+                }
+                Some(b'"') => {
+                    self.advance();
+                    tokens.push(Token::new(TokenKind::Dquote, "\"", line, col));
+                }
+                Some(b'?') => {
+                    self.advance();
+                    tokens.push(Token::new(TokenKind::Hole, "?", line, col));
+                }
+                Some(b'#') => {
+                    self.advance();
+                    tokens.push(Token::new(TokenKind::Hash, "#", line, col));
+                }
+                Some(b'[') => {
+                    self.advance();
+                    tokens.push(Token::new(TokenKind::Lsqbr, "[", line, col));
+                }
+                Some(b']') => {
+                    self.advance();
+                    tokens.push(Token::new(TokenKind::Rsqbr, "]", line, col));
+                }
+                Some(b';') => {
                     // Must be a block comment here (line comments already consumed above).
                     let tok = self.lex_block_comment(line, col)?;
                     tokens.push(tok);
