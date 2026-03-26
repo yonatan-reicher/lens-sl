@@ -3,11 +3,11 @@
 
 use crate::Direction;
 use crate::all::All;
+use crate::arm::enumerate::{EnumerationInfo, EnumerationInfoOptions};
 use crate::arm::{
     BackwardMap, Flags, Inst, Register, State, StateVars, SymbolicState, extend_program_for_each,
 };
 use crate::collect_registers::Collector;
-use crate::enumerate::{EnumerationInfo, EnumerationInfoOptions, Enumerator};
 use crate::graph;
 use crate::len::Len;
 use crate::oracle::{self, Oracle, SmtOracle};
@@ -207,7 +207,7 @@ where
         extender: reducer,
         tui,
         backward_map: BackwardMap::new(registers).unwrap(),
-        total_instructions: Enumerator::new().into_iter(enumeration_info).count(),
+        total_instructions: Inst::enumerate(*enumeration_info).count(),
     };
     // Generate a first input
     println!("Checking empty program");
@@ -225,7 +225,9 @@ where
     loop {
         // ------------------------------ Search Phase --------------------------------------------
         tui.searching();
-        for (i, inst) in Enumerator::new().into_iter(enumeration_info).enumerate() {
+        for (i, inst) in Inst::enumerate(*enumeration_info).enumerate()
+        /* Inst::enumerate - go through everything, .enumerate() - give indices */
+        {
             tui.progress(i, globals.total_instructions);
             let res = connect_and_refine::<WT, W>(
                 &mut globals,
@@ -482,7 +484,9 @@ fn expand_forward_or_backward<W: Word, StepRet: IntoIterator<Item = State<W>>>(
     let mut out_states = vec![];
     // TODO: I think this would be faster if we iterate through the graph only once, and have this
     // for loop on each leaf. Or maybe, iterate on like a 100 instructions at once.
-    for (i, inst) in Enumerator::new().into_iter(ei).enumerate() {
+    for (i, inst) in Inst::enumerate(*ei).enumerate()
+    /* Inst::enumerate - go through everything, .enumerate() - give indices */
+    {
         tui.progress(i, total_inst);
         out_states.clear();
         recurse(&old_graph, graph, inst, &mut out_states, &step);

@@ -9,8 +9,6 @@ mod programs;
 mod reduce_bit_width;
 /// The instruction set.
 mod arm;
-/// Enumerating all instructions and whatever.
-mod enumerate;
 /// Responsible for things which find counter examples when checking programs for equivalence to
 /// the original.
 mod oracle;

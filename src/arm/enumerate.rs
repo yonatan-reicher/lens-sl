@@ -1,14 +1,16 @@
 //! Implements enumerating over instructions.
 
+use functionality::Pipe;
+
 use crate::arm::{ArgType, CondCode, Inst, OpCode, Register};
 use crate::word::prelude::*;
 use std::fmt::Debug;
 
-/// Enumerates over the instruction space. Needs an `EnumerationInfo` borrow in
-/// order to actually enumerate. Does not go over all actual instructions, as
-/// not all registers and immediates are used.
 #[derive(Clone, Copy, Debug)]
-pub struct Enumerator {
+pub struct Enumerator<'a, W> {
+    ei: EnumerationInfo<'a, W>,
+    /// Are we done?
+    done: bool,
     /// The op-code of the current instruction of this enumerator.
     op_code: OpCode,
     /// The current condition code of the instruction.
@@ -56,9 +58,11 @@ fn debug_assert_valid_enumeration_info<W: Debug>(ei: &EnumerationInfo<W>) {
     validate_options(&ei.immediates, "immediates");
 }
 
-impl Enumerator {
-    pub fn new() -> Self {
+impl<'a, W> Enumerator<'a, W> {
+    pub fn new(ei: EnumerationInfo<'a, W>) -> Self {
         Self {
+            ei,
+            done: false,
             op_code: unsafe { std::mem::transmute::<u8, OpCode>(0) },
             cond_code: unsafe { std::mem::transmute::<u8, CondCode>(0) },
             arg_indices: [0; 3],
@@ -68,10 +72,12 @@ impl Enumerator {
     fn arg_types(&self) -> [ArgType; 3] {
         self.op_code.arg_types()
     }
+}
 
-    fn current_arg<W: Word>(&self, arg: usize, ei: &EnumerationInfo<W>) -> W {
+impl<'a, W: Word> Enumerator<'a, W> {
+    fn current_arg(&self, arg: usize, ei: &EnumerationInfo<W>) -> W {
         debug_assert_arg_in_range(arg);
-        debug_assert_valid_enumeration_info(ei);
+        debug_assert_valid_enumeration_info(&self.ei);
         // Take the index, and index into the correct array.
         let i = self.arg_indices[arg];
         match self.arg_types()[arg] {
@@ -88,7 +94,7 @@ impl Enumerator {
     }
 
     /// Returns the length of the array that the given argument index indexes into.
-    fn arg_max<W: Word>(&self, arg: usize, ei: &EnumerationInfo<W>) -> usize {
+    fn arg_max(&self, arg: usize, ei: &EnumerationInfo<W>) -> usize {
         debug_assert_arg_in_range(arg);
         debug_assert_valid_enumeration_info(ei);
         match self.arg_types()[arg] {
@@ -104,7 +110,7 @@ impl Enumerator {
         }
     }
 
-    pub fn current<W: Word>(&self, ei: &EnumerationInfo<W>) -> Inst<W> {
+    pub fn current(&self, ei: &EnumerationInfo<W>) -> Inst<W> {
         debug_assert_valid_enumeration_info(ei);
         Inst {
             op_code: self.op_code,
@@ -141,7 +147,7 @@ impl Enumerator {
         }
     }
 
-    fn advance_arg<W: Word>(&mut self, arg: usize, ei: &EnumerationInfo<W>) -> Option<()> {
+    fn advance_arg(&mut self, arg: usize, ei: &EnumerationInfo<W>) -> Option<()> {
         debug_assert_arg_in_range(arg);
         debug_assert_valid_enumeration_info(ei);
         let max = self.arg_max(arg, ei);
@@ -154,7 +160,8 @@ impl Enumerator {
         Some(())
     }
 
-    pub fn advance<W: Word>(&mut self, ei: &EnumerationInfo<W>) -> Option<()> {
+    pub fn advance(&mut self) -> Option<()> {
+        let ei = &self.ei.clone();
         debug_assert_valid_enumeration_info(ei);
         if self.advance_arg(0, ei).is_none() {
             self.arg_indices[0] = 0;
@@ -166,26 +173,30 @@ impl Enumerator {
                     self.arg_indices[2] = 0;
                     if self.advance_op_code().is_none() {
                         self.op_code = unsafe { std::mem::transmute::<u8, OpCode>(0) };
-                        self.advance_cond_code()?;
+                        if self.advance_cond_code().is_none() {
+                            self.done = true;
+                            return None;
+                        }
                     }
                 }
             }
         }
         Some(())
     }
+}
 
-    pub fn into_iter<W: Word>(self, ei: &EnumerationInfo<W>) -> impl Iterator<Item = Inst<W>> {
-        Iter {
-            done: false,
-            ei,
-            enumerator: self,
-        }
+impl<'a, W> Default for Enumerator<'a, W> {
+    fn default() -> Self {
+        Self::new(EnumerationInfo::default())
     }
 }
 
-impl Default for Enumerator {
+impl<'a, W> Default for EnumerationInfo<'a, W> {
     fn default() -> Self {
-        Self::new()
+        Self {
+            registers: Default::default(),
+            immediates: Default::default(),
+        }
     }
 }
 
@@ -201,21 +212,20 @@ impl<'a> IntoIterator for EnumerationInfoOptions<'a, Register> {
     }
 }
 
-struct Iter<'a, W: Word> {
-    done: bool,
-    ei: &'a EnumerationInfo<'a, W>,
-    enumerator: Enumerator,
+impl<'a, T> Default for EnumerationInfoOptions<'a, T> {
+    fn default() -> Self {
+        Self::Unlimited
+    }
 }
 
-impl<'a, W: Word> Iterator for Iter<'a, W> {
+impl<'a, W: Word> Iterator for Enumerator<'a, W> {
     type Item = Inst<W>;
-
     fn next(&mut self) -> Option<Self::Item> {
         if self.done {
             return None;
         }
-        let ret = self.enumerator.current(self.ei);
-        self.done = self.enumerator.advance(self.ei).is_none();
+        let ret = self.current(&self.ei);
+        self.advance();
         Some(ret)
     }
 }
@@ -230,11 +240,11 @@ mod tests {
     use std::collections::HashSet;
 
     fn to_vec<W: Word>(ei: &EnumerationInfo<W>) -> Vec<Inst<W>> {
-        let mut e = Enumerator::new();
+        let mut e = Enumerator::new(*ei);
         let mut ret = vec![];
         loop {
             ret.push(e.current(ei));
-            let r = e.advance(ei);
+            let r = e.advance();
             if r.is_none() {
                 break;
             }
@@ -268,8 +278,7 @@ mod tests {
                 &immediates.iter().copied().collect::<Box<[_]>>(),
             ),
         };
-        let registers_used: std::collections::HashSet<_> = Enumerator::new()
-            .into_iter(&ei)
+        let registers_used: std::collections::HashSet<_> = Enumerator::new(ei)
             .flat_map(|inst| {
                 inst.args
                     .iter()
@@ -284,8 +293,7 @@ mod tests {
                     .collect::<Vec<_>>()
             })
             .collect();
-        let immediates_used = Enumerator::new()
-            .into_iter(&ei)
+        let immediates_used = Enumerator::new(ei)
             .flat_map(|inst| {
                 inst.args
                     .iter()

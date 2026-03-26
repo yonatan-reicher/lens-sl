@@ -6,7 +6,7 @@ use crate::all_permutations::Iter as PermutationIter;
 use crate::bool::all_eq;
 use crate::bool::prelude::*;
 use crate::collect_registers;
-use crate::enumerate::EnumerationInfoOptions;
+use crate::arm::enumerate::EnumerationInfoOptions;
 use crate::reduce_bit_width::Reducer;
 use crate::word::prelude::*;
 use std::fmt::{self, Display, Formatter};
