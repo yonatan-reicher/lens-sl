@@ -634,8 +634,8 @@ impl<W: Word> Inst<W> {
 
     pub fn run_backward_masked<'a>(
         &self,
-        output: state::Masked<W>,
-        bm: &'a BackwardMap<W>,
+        _output: state::Masked<W>,
+        _bm: &'a BackwardMap<W>,
     ) -> impl IntoIterator<Item = &'a state::Masked<W>> + use<'a, W> {
         // let unmasked_outputs = output.mask().;
         // self.run_backward(*output.state(), bm)
@@ -644,6 +644,7 @@ impl<W: Word> Inst<W> {
         //         todo!()
         //     })
         todo!();
+        #[allow(unreachable_code)]
         []
     }
 
