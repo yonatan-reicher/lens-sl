@@ -13,6 +13,7 @@ it faster and easier to maintain and expand.
 - `cargo test --lib` - Run unit tests for the library.
 - `cargo test` - Run all tests (excluding ignored).
 - `cargo run --bin arm` - Run the arm interpreter binary.
+- `cargo run --bin benchmark` - Run the benchmarks!
 - `cargo run` - Run the main entry point.
 
 ## Changes
