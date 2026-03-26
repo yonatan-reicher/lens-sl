@@ -237,12 +237,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "itertools"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
+dependencies = [
+ "either",
+]
+
+[[package]]
 name = "lens-sl"
 version = "0.1.0"
 dependencies = [
  "bitflags",
  "derive_more",
  "functionality",
+ "itertools 0.14.0",
  "postcard",
  "proptest",
  "proptest-derive",
@@ -582,7 +592,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "516ce9fd6e1ac140108629c5039128abd5b3f116ed75861bd1fbbdc20c0d37bf"
 dependencies = [
  "indexmap",
- "itertools",
+ "itertools 0.12.1",
  "miette",
  "smtlib-lowlevel",
  "thiserror 1.0.69",
@@ -595,7 +605,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2e48ee399efb51e84d25d4ac02b7e61141f47781d84d8bfc934b8791b30f6c52"
 dependencies = [
  "bumpalo",
- "itertools",
+ "itertools 0.12.1",
  "logos",
  "miette",
  "thiserror 1.0.69",
