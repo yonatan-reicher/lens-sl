@@ -1,20 +1,12 @@
-/// This function parses an input ARM program into our in-code representation.
-// Code taken from `arm-parser.rkt` at `https://github.com/mangpo/greenthumb`, the original Lens
-// implementation.
+//! This module parses an input ARM program into our in-code representation.
+//! Code taken from `arm-parser.rkt` at `https://github.com/mangpo/greenthumb`, the original Lens
+//! implementation.
+//!
+//! Public surface:
+//!   - `parse<W: Word>(src: &str) -> Result<Vec<arm::Inst<W>>, ParseError>`
+//!   - `liveness_from_file(path: &str) -> Result<HashMap<String,Vec<usize>>, ...>`
+//!   - `info_from_file(path: &str) -> Result<Vec<LiveValue>, ...>`
 
-/// ARM assembly parser — translated from Racket (parser-tools/lex + yacc) to
-/// hand-rolled Rust (no external dependencies).
-///
-/// Mirrors the original's data model exactly:
-///   - `Inst { op: Vec<String>, args: Vec<String> }`
-///     where op is always `[opcode, cond_suffix, shift_op]` (empty string when
-///     not present) and args is the operand list.
-///   - A hole instruction is represented with all fields empty (op=[], args=[]).
-///
-/// Public surface:
-///   - `parse(src: &str) -> Result<Vec<Inst>, ParseError>`
-///   - `liveness_from_file(path: &str) -> Result<HashMap<String,Vec<usize>>, ...>`
-///   - `info_from_file(path: &str) -> Result<Vec<LiveValue>, ...>`
 use std::collections::HashMap;
 use std::fmt;
 use std::fs;
