@@ -13,7 +13,7 @@ use crate::enumerate::{EnumerationInfo, EnumerationInfoOptions, Enumerator};
 use crate::graph;
 use crate::len::Len;
 use crate::oracle::{self, Oracle, SmtOracle};
-use crate::programs;
+use crate::programs_sl as programs;
 use crate::reduce_bit_width::{ImmediateInfo, Reducer};
 use crate::tui::TuiHook;
 use crate::word::prelude::*;
@@ -225,12 +225,7 @@ where
         }
         let direction = Direction::Forward;
         tui.expanding(direction);
-        expand_forward(
-            &mut graph,
-            enumeration_info,
-            globals.tui,
-            globals.total_instructions,
-        );
+        expand(&mut graph, globals.tui);
         globals.forward_length += 1;
         tui.report_graph(Direction::Forward, &graph);
     }
@@ -290,7 +285,7 @@ fn connect_and_refine<WT: Word, WS: Word>(
             Graph::Leaf(programs) => {
                 // We found a class of candidate programs.
                 // Try each one. If one works, return it. If none work, adds all counter-examples.
-                let ret = programs.try_each(|program| verify(&program, globals));
+                let ret = programs.try_each(&mut |program| verify(&program, globals));
                 match ret {
                     Break(ProgramOrRetry::Program(p)) => return ConnectAndRefineResult::Found(p),
                     Break(ProgramOrRetry::Retry) => return connect_and_refine(globals, graph, k),
@@ -333,57 +328,67 @@ fn connect_and_refine<WT: Word, WS: Word>(
 /// Go through each program prefix in the graph, and expand it by one
 /// instruction forward. This is done for each program, and for each
 /// instruction.
-fn expand_forward<W: Word>(
-    graph: &mut Graph<W>,
-    ei: &EnumerationInfo<W>,
-    tui: &impl for<'g> TuiHook<&'g Graph<W>, MaskedState<W>>,
-    total_inst: usize,
-) {
-    expand_forward_or_backward(graph, ei, tui, total_inst, |state, inst| {
-        inst.run_masked(state)
-    })
-}
-
-fn expand_forward_or_backward<W: Word, StepRet: IntoIterator<Item = MaskedState<W>>>(
-    graph: &mut Graph<W>,
-    ei: &EnumerationInfo<W>,
-    tui: &impl for<'g> TuiHook<&'g Graph<W>, MaskedState<W>>,
-    total_inst: usize,
-    step: impl Fn(MaskedState<W>, Inst<W>) -> StepRet,
-) {
+fn expand<W: Word>(graph: &mut Graph<W>, tui: &impl for<'g> TuiHook<&'g Graph<W>, MaskedState<W>>) {
     let old_graph = std::mem::replace(graph, Graph::Leaf(Default::default()));
     debug_assert_ne!(old_graph.n_programs(), 0);
     let mut out_states = vec![];
-    // TODO: I think this would be faster if we iterate through the graph only once, and have this
-    // for loop on each leaf. Or maybe, iterate on like a 100 instructions at once.
-    for (i, inst) in Enumerator::new().into_iter(ei).enumerate() {
-        tui.progress(i, total_inst);
+    let mut effects = vec![];
+    let mut i = 0;
+    let total = old_graph.n_leaves();
+    recurse_outer(&old_graph, &mut effects, &mut |progs, effects| {
+        tui.progress(i, total);
         out_states.clear();
-        recurse(&old_graph, graph, inst, &mut out_states, &step);
-    }
-    tui.progress(total_inst, total_inst);
+        recurse_inner(&old_graph, graph, progs, effects, &mut out_states);
+        i += 1;
+    });
+    tui.progress(total, total);
     debug_assert_ne!(graph.n_programs(), 0);
 
-    fn recurse<W: Word, StepRet: IntoIterator<Item = MaskedState<W>>>(
+    fn recurse_outer<W: Word>(
+        old_graph: &Graph<W>,
+        effects: &mut Vec<(MaskedState<W>, MaskedState<W>)>,
+        f: &mut impl FnMut(&Programs<W>, &[(MaskedState<W>, MaskedState<W>)]),
+    ) {
+        match old_graph {
+            graph::Graph::Leaf(progs) => f(progs, effects),
+            graph::Graph::Nest(hash_map) => {
+                for (effect, sub_graph) in hash_map {
+                    effects.push(effect.clone());
+                    recurse_outer(sub_graph, effects, f);
+                    effects.pop();
+                }
+            }
+        }
+    }
+
+    fn recurse_inner<W: Word>(
         old_graph: &Graph<W>,
         new_graph: &mut Graph<W>,
-        inst: Inst<W>,
+        progs: &Programs<W>,
+        effects: &[(MaskedState<W>, MaskedState<W>)],
         out_states: &mut Vec<(MaskedState<W>, MaskedState<W>)>,
-        step: &impl Fn(MaskedState<W>, Inst<W>) -> StepRet,
     ) {
         match old_graph {
             Graph::Leaf(programs) if programs.is_empty() => (),
             Graph::Leaf(programs) => {
-                let programs = programs.clone().concat(inst);
-                new_graph.insert_all(out_states, [programs]);
+                // TODO
+                // Move this composition to the match arm below!
+                let Some(effects): Option<Vec<_>> = effects
+                    .iter()
+                    .zip(out_states)
+                    .map(|(e1, e2)| MaskedState::compose(*e1, *e2))
+                    .collect()
+                else {
+                    return;
+                };
+                let programs = progs.clone().concat(programs.clone());
+                new_graph.insert_all(&effects, [programs]);
             }
             Graph::Nest(hash_map) => {
-                for ((inp, prev_out), sub_graph) in hash_map.iter() {
-                    for out in step(*prev_out, inst) {
-                        out_states.push((*inp, out));
-                        recurse(sub_graph, new_graph, inst, out_states, step);
-                        out_states.pop();
-                    }
+                for (e, sub_graph) in hash_map.iter() {
+                    out_states.push(*e);
+                    recurse_inner(sub_graph, new_graph, progs, effects, out_states);
+                    out_states.pop();
                 }
             }
         }

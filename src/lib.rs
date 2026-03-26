@@ -5,6 +5,8 @@ mod word;
 mod graph;
 /// Definitions of how we represent programs in an efficient way.
 mod programs;
+/// Rewrite of programs module for separation logic!
+mod programs_sl;
 /// Converting programs to equivalent ones with a reduced bit-width.
 mod reduce_bit_width;
 /// The instruction set.
