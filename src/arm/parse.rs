@@ -86,6 +86,194 @@ impl fmt::Display for ParseError {
 impl std::error::Error for ParseError {}
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Parser
+// ─────────────────────────────────────────────────────────────────────────────
+// Grammar (from the Racket source):
+//
+//   arg       ::= REG | HASH NUM | NUM
+//   arg-pair  ::= WORD arg | '[' REG ',' arg ']'
+//   args      ::= arg | arg-pair | arg ',' args | arg-pair ',' args
+//   instruction ::= WORD args | WORD _WORD | NOP | '?'
+//   inst-list ::= ε | instruction inst-list
+//   code      ::= inst-list
+
+struct Parser {
+    tokens: Vec<Token>,
+    pos:    usize,
+}
+
+impl Parser {
+    fn new(tokens: Vec<Token>) -> Self {
+        Parser { tokens, pos: 0 }
+    }
+
+    fn peek(&self) -> &Token {
+        &self.tokens[self.pos]
+    }
+
+    fn advance(&mut self) -> &Token {
+        let t = &self.tokens[self.pos];
+        if self.pos + 1 < self.tokens.len() { self.pos += 1; }
+        t
+    }
+
+    fn expect(&mut self, kind: &TokenKind) -> Result<Token, ParseError> {
+        let t = self.peek().clone();
+        if &t.kind == kind {
+            self.advance();
+            Ok(t)
+        } else {
+            Err(ParseError {
+                message: format!("expected {:?}, got {:?} ('{}') ", kind, t.kind, t.value),
+                line: t.line,
+                col:  t.col,
+            })
+        }
+    }
+
+    // arg ::= REG | HASH NUM | NUM
+    fn parse_arg(&mut self) -> Result<String, ParseError> {
+        match self.peek().kind {
+            TokenKind::Reg => { let t = self.advance().clone(); Ok(t.value) }
+            TokenKind::Hash => {
+                self.advance(); // consume '#'
+                let n = self.expect(&TokenKind::Num)?;
+                Ok(n.value)
+            }
+            TokenKind::Num => { let t = self.advance().clone(); Ok(t.value) }
+            _ => {
+                let t = self.peek();
+                Err(ParseError {
+                    message: format!("expected arg (REG / # NUM / NUM), got {:?} ('{}')", t.kind, t.value),
+                    line: t.line, col: t.col,
+                })
+            }
+        }
+    }
+
+    // arg-pair ::= WORD arg | '[' REG ',' arg ']'
+    // Returns (Option<String>, String) where the first is the optional WORD prefix
+    // or base-register-from-brackets, and the second is the arg value.
+    fn try_parse_arg_pair(&mut self) -> Result<Option<Vec<String>>, ParseError> {
+        match self.peek().kind {
+            TokenKind::Word => {
+                // Could be `WORD arg` (arg-pair) or just `WORD args` (instruction).
+                // The grammar is ambiguous here: `WORD` can be either the instruction
+                // opcode or the first element of arg-pair inside an arg list.
+                // In context this is only called from inside `parse_args` where we
+                // already consumed the opcode word, so a WORD here is always the
+                // arg-pair modifier (e.g. shift modifier like "lsl").
+                let w = self.advance().clone();
+                let a = self.parse_arg()?;
+                Ok(Some(vec![w.value, a]))
+            }
+            TokenKind::Lsqbr => {
+                self.advance(); // '['
+                let reg = self.expect(&TokenKind::Reg)?;
+                self.expect(&TokenKind::Comma)?;
+                let a = self.parse_arg()?;
+                self.expect(&TokenKind::Rsqbr)?;
+                Ok(Some(vec![reg.value, a]))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    // args ::= (arg | arg-pair) (',' (arg | arg-pair))*
+    fn parse_args(&mut self) -> Result<Vec<String>, ParseError> {
+        let mut result = Vec::new();
+
+        // First element: try arg-pair, then arg
+        if let Some(pair) = self.try_parse_arg_pair()? {
+            result.extend(pair);
+        } else {
+            result.push(self.parse_arg()?);
+        }
+
+        while self.peek().kind == TokenKind::Comma {
+            self.advance(); // consume ','
+            if let Some(pair) = self.try_parse_arg_pair()? {
+                result.extend(pair);
+            } else {
+                result.push(self.parse_arg()?);
+            }
+        }
+        Ok(result)
+    }
+
+    // instruction ::= WORD args | WORD _WORD | NOP | '?'
+    fn parse_instruction(&mut self) -> Result<Option<Inst>, ParseError> {
+        match self.peek().kind {
+            TokenKind::Eof => return Ok(None),
+            // Labels and .text directives don't produce instructions; skip them.
+            TokenKind::Label | TokenKind::Block | TokenKind::Text => {
+                self.advance();
+                return Ok(Some(Inst::hole())); // filtered out by caller
+                // Actually we want to skip, not emit a hole — see parse_code.
+            }
+            TokenKind::Hole => {
+                self.advance();
+                return Ok(Some(Inst::hole()));
+            }
+            TokenKind::Nop => {
+                self.advance();
+                return Ok(Some(create_inst("nop", vec![])?));
+            }
+            TokenKind::Word => {
+                let op_tok = self.advance().clone();
+                match self.peek().kind {
+                    TokenKind::UWord => {
+                        let uw = self.advance().clone();
+                        return Ok(Some(create_special_inst(&op_tok.value, &uw.value)?));
+                    }
+                    TokenKind::Eof
+                    | TokenKind::Word   // next instruction
+                    | TokenKind::Nop
+                    | TokenKind::Hole
+                    | TokenKind::Label
+                    | TokenKind::Block
+                    | TokenKind::Text => {
+                        // zero-arg instruction
+                        return Ok(Some(create_inst(&op_tok.value, vec![])?));
+                    }
+                    _ => {
+                        let args = self.parse_args()?;
+                        return Ok(Some(create_inst(&op_tok.value, args)?));
+                    }
+                }
+            }
+            _ => {
+                let t = self.peek();
+                return Err(ParseError {
+                    message: format!("unexpected token {:?} ('{}') at start of instruction", t.kind, t.value),
+                    line: t.line, col: t.col,
+                });
+            }
+        }
+    }
+
+    // code ::= inst-list EOF
+    fn parse_code(&mut self) -> Result<Vec<Inst>, ParseError> {
+        let mut insts = Vec::new();
+        loop {
+            match self.peek().kind {
+                TokenKind::Eof => break,
+                // Skip non-instruction tokens at top level
+                TokenKind::Label | TokenKind::Block | TokenKind::Text => { self.advance(); }
+                _ => {
+                    if let Some(inst) = self.parse_instruction()? {
+                        // Don't emit synthetic holes from label/block skips
+                        insts.push(inst);
+                    }
+                }
+            }
+        }
+        Ok(insts)
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 // Lexer
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -334,193 +522,6 @@ fn is_block_comment_start(src: &[u8]) -> bool {
     while i < src.len() && src[i].is_ascii_digit() { i += 1; }
     if i == start { return false; }
     i < src.len() && src[i] == b':'
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Parser
-// ─────────────────────────────────────────────────────────────────────────────
-// Grammar (from the Racket source):
-//
-//   arg       ::= REG | HASH NUM | NUM
-//   arg-pair  ::= WORD arg | '[' REG ',' arg ']'
-//   args      ::= arg | arg-pair | arg ',' args | arg-pair ',' args
-//   instruction ::= WORD args | WORD _WORD | NOP | '?'
-//   inst-list ::= ε | instruction inst-list
-//   code      ::= inst-list
-
-struct Parser {
-    tokens: Vec<Token>,
-    pos:    usize,
-}
-
-impl Parser {
-    fn new(tokens: Vec<Token>) -> Self {
-        Parser { tokens, pos: 0 }
-    }
-
-    fn peek(&self) -> &Token {
-        &self.tokens[self.pos]
-    }
-
-    fn advance(&mut self) -> &Token {
-        let t = &self.tokens[self.pos];
-        if self.pos + 1 < self.tokens.len() { self.pos += 1; }
-        t
-    }
-
-    fn expect(&mut self, kind: &TokenKind) -> Result<Token, ParseError> {
-        let t = self.peek().clone();
-        if &t.kind == kind {
-            self.advance();
-            Ok(t)
-        } else {
-            Err(ParseError {
-                message: format!("expected {:?}, got {:?} ('{}') ", kind, t.kind, t.value),
-                line: t.line,
-                col:  t.col,
-            })
-        }
-    }
-
-    // arg ::= REG | HASH NUM | NUM
-    fn parse_arg(&mut self) -> Result<String, ParseError> {
-        match self.peek().kind {
-            TokenKind::Reg => { let t = self.advance().clone(); Ok(t.value) }
-            TokenKind::Hash => {
-                self.advance(); // consume '#'
-                let n = self.expect(&TokenKind::Num)?;
-                Ok(n.value)
-            }
-            TokenKind::Num => { let t = self.advance().clone(); Ok(t.value) }
-            _ => {
-                let t = self.peek();
-                Err(ParseError {
-                    message: format!("expected arg (REG / # NUM / NUM), got {:?} ('{}')", t.kind, t.value),
-                    line: t.line, col: t.col,
-                })
-            }
-        }
-    }
-
-    // arg-pair ::= WORD arg | '[' REG ',' arg ']'
-    // Returns (Option<String>, String) where the first is the optional WORD prefix
-    // or base-register-from-brackets, and the second is the arg value.
-    fn try_parse_arg_pair(&mut self) -> Result<Option<Vec<String>>, ParseError> {
-        match self.peek().kind {
-            TokenKind::Word => {
-                // Could be `WORD arg` (arg-pair) or just `WORD args` (instruction).
-                // The grammar is ambiguous here: `WORD` can be either the instruction
-                // opcode or the first element of arg-pair inside an arg list.
-                // In context this is only called from inside `parse_args` where we
-                // already consumed the opcode word, so a WORD here is always the
-                // arg-pair modifier (e.g. shift modifier like "lsl").
-                let w = self.advance().clone();
-                let a = self.parse_arg()?;
-                Ok(Some(vec![w.value, a]))
-            }
-            TokenKind::Lsqbr => {
-                self.advance(); // '['
-                let reg = self.expect(&TokenKind::Reg)?;
-                self.expect(&TokenKind::Comma)?;
-                let a = self.parse_arg()?;
-                self.expect(&TokenKind::Rsqbr)?;
-                Ok(Some(vec![reg.value, a]))
-            }
-            _ => Ok(None),
-        }
-    }
-
-    // args ::= (arg | arg-pair) (',' (arg | arg-pair))*
-    fn parse_args(&mut self) -> Result<Vec<String>, ParseError> {
-        let mut result = Vec::new();
-
-        // First element: try arg-pair, then arg
-        if let Some(pair) = self.try_parse_arg_pair()? {
-            result.extend(pair);
-        } else {
-            result.push(self.parse_arg()?);
-        }
-
-        while self.peek().kind == TokenKind::Comma {
-            self.advance(); // consume ','
-            if let Some(pair) = self.try_parse_arg_pair()? {
-                result.extend(pair);
-            } else {
-                result.push(self.parse_arg()?);
-            }
-        }
-        Ok(result)
-    }
-
-    // instruction ::= WORD args | WORD _WORD | NOP | '?'
-    fn parse_instruction(&mut self) -> Result<Option<Inst>, ParseError> {
-        match self.peek().kind {
-            TokenKind::Eof => return Ok(None),
-            // Labels and .text directives don't produce instructions; skip them.
-            TokenKind::Label | TokenKind::Block | TokenKind::Text => {
-                self.advance();
-                return Ok(Some(Inst::hole())); // filtered out by caller
-                // Actually we want to skip, not emit a hole — see parse_code.
-            }
-            TokenKind::Hole => {
-                self.advance();
-                return Ok(Some(Inst::hole()));
-            }
-            TokenKind::Nop => {
-                self.advance();
-                return Ok(Some(create_inst("nop", vec![])?));
-            }
-            TokenKind::Word => {
-                let op_tok = self.advance().clone();
-                match self.peek().kind {
-                    TokenKind::UWord => {
-                        let uw = self.advance().clone();
-                        return Ok(Some(create_special_inst(&op_tok.value, &uw.value)?));
-                    }
-                    TokenKind::Eof
-                    | TokenKind::Word   // next instruction
-                    | TokenKind::Nop
-                    | TokenKind::Hole
-                    | TokenKind::Label
-                    | TokenKind::Block
-                    | TokenKind::Text => {
-                        // zero-arg instruction
-                        return Ok(Some(create_inst(&op_tok.value, vec![])?));
-                    }
-                    _ => {
-                        let args = self.parse_args()?;
-                        return Ok(Some(create_inst(&op_tok.value, args)?));
-                    }
-                }
-            }
-            _ => {
-                let t = self.peek();
-                return Err(ParseError {
-                    message: format!("unexpected token {:?} ('{}') at start of instruction", t.kind, t.value),
-                    line: t.line, col: t.col,
-                });
-            }
-        }
-    }
-
-    // code ::= inst-list EOF
-    fn parse_code(&mut self) -> Result<Vec<Inst>, ParseError> {
-        let mut insts = Vec::new();
-        loop {
-            match self.peek().kind {
-                TokenKind::Eof => break,
-                // Skip non-instruction tokens at top level
-                TokenKind::Label | TokenKind::Block | TokenKind::Text => { self.advance(); }
-                _ => {
-                    if let Some(inst) = self.parse_instruction()? {
-                        // Don't emit synthetic holes from label/block skips
-                        insts.push(inst);
-                    }
-                }
-            }
-        }
-        Ok(insts)
-    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
