@@ -57,3 +57,10 @@ flat, with almost no indirection.
   ID 23)).
 - Each individual program is also referenced by 
 
+
+One more thing that I hadn't thought of is that the output mask is not
+necessarily a super-mask of the input mask (for running a program). An example
+of this is the program:  add r1, r1, r1 ; mov r1, #0. This program, overall,
+ignores r1. And we can see it very clearly. It would be very helpful if we
+tracked not only which registers are written to, but which are _overwritten_
+completely, or something like that.
