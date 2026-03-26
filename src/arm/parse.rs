@@ -19,6 +19,9 @@ use std::collections::HashMap;
 use std::fmt;
 use std::fs;
 
+use super::{ArgType, CondCode, Inst as TypedInst, OpCode};
+use crate::word::Word;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Data types
 // ─────────────────────────────────────────────────────────────────────────────
@@ -733,6 +736,225 @@ pub fn parse(src: &str) -> Result<Vec<Inst>, ParseError> {
     parser.parse_code()
 }
 
+#[derive(Clone, Copy)]
+enum ParsedArg {
+    Reg(u8),
+    Imm(i64),
+}
+
+fn parse_cond_code(cond: &str) -> Result<CondCode, ParseError> {
+    match cond {
+        "" => Ok(CondCode::Al),
+        "eq" => Ok(CondCode::Eq),
+        "ne" => Ok(CondCode::Ne),
+        "cs" => Ok(CondCode::Cs),
+        "cc" => Ok(CondCode::Cc),
+        "mi" => Ok(CondCode::Mi),
+        "pl" => Ok(CondCode::Pl),
+        "vs" => Ok(CondCode::Vs),
+        "vc" => Ok(CondCode::Vc),
+        "hi" => Ok(CondCode::Hi),
+        "ls" => Ok(CondCode::Ls),
+        "ge" => Ok(CondCode::Ge),
+        "lt" => Ok(CondCode::Lt),
+        "gt" => Ok(CondCode::Gt),
+        "le" => Ok(CondCode::Le),
+        _ => Err(ParseError {
+            message: format!("unsupported condition code suffix '{cond}'"),
+            line: 0,
+            col: 0,
+        }),
+    }
+}
+
+fn parse_reg(s: &str) -> Option<u8> {
+    let s = match s {
+        "sb" => "r9",
+        "sl" => "r10",
+        "fp" => "r11",
+        "ip" => "r12",
+        "sp" => "r13",
+        "lr" => "r14",
+        "pc" => "r15",
+        _ => s,
+    };
+    if let Some(num) = s.strip_prefix('r') {
+        let reg = num.parse::<u8>().ok()?;
+        if reg < 16 {
+            return Some(reg);
+        }
+    }
+    None
+}
+
+fn parse_old_arg(s: &str) -> Option<ParsedArg> {
+    parse_reg(s)
+        .map(ParsedArg::Reg)
+        .or_else(|| s.parse::<i64>().ok().map(ParsedArg::Imm))
+}
+
+fn map_opcode(op: &str, args: &[ParsedArg]) -> Result<OpCode, ParseError> {
+    match op {
+        "nop" if args.is_empty() => Ok(OpCode::Nop),
+        "mov" => match args {
+            [ParsedArg::Reg(_), ParsedArg::Reg(_)] => Ok(OpCode::Mov),
+            [ParsedArg::Reg(_), ParsedArg::Imm(_)] => Ok(OpCode::MovI),
+            _ => Err(ParseError {
+                message: "unsupported mov operands".into(),
+                line: 0,
+                col: 0,
+            }),
+        },
+        "add" => match args {
+            [ParsedArg::Reg(_), ParsedArg::Reg(_), ParsedArg::Reg(_)] => Ok(OpCode::Add),
+            [ParsedArg::Reg(_), ParsedArg::Reg(_), ParsedArg::Imm(_)] => Ok(OpCode::AddI),
+            _ => Err(ParseError {
+                message: "unsupported add operands".into(),
+                line: 0,
+                col: 0,
+            }),
+        },
+        "sub" => match args {
+            [ParsedArg::Reg(_), ParsedArg::Reg(_), ParsedArg::Reg(_)] => Ok(OpCode::Sub),
+            [ParsedArg::Reg(_), ParsedArg::Reg(_), ParsedArg::Imm(_)] => Ok(OpCode::SubI),
+            _ => Err(ParseError {
+                message: "unsupported sub operands".into(),
+                line: 0,
+                col: 0,
+            }),
+        },
+        "and" => match args {
+            [ParsedArg::Reg(_), ParsedArg::Reg(_), ParsedArg::Reg(_)] => Ok(OpCode::And),
+            _ => Err(ParseError {
+                message: "unsupported and operands".into(),
+                line: 0,
+                col: 0,
+            }),
+        },
+        "eor" => match args {
+            [ParsedArg::Reg(_), ParsedArg::Reg(_), ParsedArg::Reg(_)] => Ok(OpCode::Eor),
+            _ => Err(ParseError {
+                message: "unsupported eor operands".into(),
+                line: 0,
+                col: 0,
+            }),
+        },
+        "mul" => match args {
+            [ParsedArg::Reg(_), ParsedArg::Reg(_), ParsedArg::Reg(_)] => Ok(OpCode::Mul),
+            _ => Err(ParseError {
+                message: "unsupported mul operands".into(),
+                line: 0,
+                col: 0,
+            }),
+        },
+        "orr" => match args {
+            [ParsedArg::Reg(_), ParsedArg::Reg(_), ParsedArg::Reg(_)] => Ok(OpCode::Orr),
+            _ => Err(ParseError {
+                message: "unsupported orr operands".into(),
+                line: 0,
+                col: 0,
+            }),
+        },
+        _ => Err(ParseError {
+            message: format!("unsupported opcode '{op}'"),
+            line: 0,
+            col: 0,
+        }),
+    }
+}
+
+fn translate_inst<W: Word>(inst: &Inst) -> Result<TypedInst<W>, ParseError> {
+    if inst.is_hole() {
+        return Err(ParseError {
+            message: "cannot translate hole instruction".into(),
+            line: 0,
+            col: 0,
+        });
+    }
+    if inst.op.len() != 3 {
+        return Err(ParseError {
+            message: "invalid old Inst.op shape".into(),
+            line: 0,
+            col: 0,
+        });
+    }
+    if !inst.op[2].is_empty() {
+        return Err(ParseError {
+            message: format!("cannot translate folded shift op '{}'", inst.op[2]),
+            line: 0,
+            col: 0,
+        });
+    }
+
+    let cond_code = parse_cond_code(&inst.op[1])?;
+    let parsed_args: Vec<ParsedArg> = inst
+        .args
+        .iter()
+        .map(|a| {
+            parse_old_arg(a).ok_or_else(|| ParseError {
+                message: format!("invalid operand '{a}'"),
+                line: 0,
+                col: 0,
+            })
+        })
+        .collect::<Result<_, _>>()?;
+    let op_code = map_opcode(&inst.op[0], &parsed_args)?;
+    let arg_types = op_code.arg_types();
+    let mut args = [W::from(0usize); 3];
+
+    for (i, arg_type) in arg_types.iter().enumerate() {
+        match (arg_type, parsed_args.get(i).copied()) {
+            (ArgType::Unused, _) => {}
+            (ArgType::Reg(_), Some(ParsedArg::Reg(r))) => args[i] = (r as usize).into(),
+            (ArgType::Imm, Some(ParsedArg::Imm(n))) => args[i] = (n as usize).into(),
+            (ArgType::Reg(_), Some(ParsedArg::Imm(_))) => {
+                return Err(ParseError {
+                    message: format!("expected register for argument {}", i + 1),
+                    line: 0,
+                    col: 0,
+                });
+            }
+            (ArgType::Imm, Some(ParsedArg::Reg(_))) => {
+                return Err(ParseError {
+                    message: format!("expected immediate for argument {}", i + 1),
+                    line: 0,
+                    col: 0,
+                });
+            }
+            (_, None) => {
+                return Err(ParseError {
+                    message: "too few operands".into(),
+                    line: 0,
+                    col: 0,
+                });
+            }
+        }
+    }
+
+    let used_arg_count = arg_types
+        .iter()
+        .filter(|k| !matches!(k, ArgType::Unused))
+        .count();
+    if parsed_args.len() > used_arg_count {
+        return Err(ParseError {
+            message: "too many operands".into(),
+            line: 0,
+            col: 0,
+        });
+    }
+
+    Ok(TypedInst {
+        op_code,
+        cond_code,
+        args,
+    })
+}
+
+/// Parse to the old stringy Inst format, then translate each instruction to typed arm::Inst.
+pub fn parse_typed<W: Word>(src: &str) -> Result<Vec<TypedInst<W>>, ParseError> {
+    parse(src)?.iter().map(translate_inst::<W>).collect()
+}
+
 /// Corresponds to `liveness-from-file` in the original.
 ///
 /// Each line has the form `<key>:<n1>,<n2>,...`; the result maps the key
@@ -784,6 +1006,7 @@ pub fn info_from_file(path: &str) -> Result<Vec<LiveValue>, Box<dyn std::error::
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{CondCode, OpCode, Word4};
 
     fn op(inst: &Inst) -> (&str, &str, &str) {
         (&inst.op[0], &inst.op[1], &inst.op[2])
@@ -867,5 +1090,30 @@ mod tests {
         let src = "mov r0, #0\nadd r1, r0, r2\nstr r1, [r3, #4]\n";
         let insts = parse(src).unwrap();
         assert_eq!(insts.len(), 3);
+    }
+
+    #[test]
+    fn test_parse_typed_simple_mov() {
+        let insts = parse_typed::<Word4>("mov r0, r1").unwrap();
+        assert_eq!(insts.len(), 1);
+        assert_eq!(insts[0].op_code, OpCode::Mov);
+        assert_eq!(insts[0].cond_code, CondCode::Al);
+        assert_eq!(usize::from(insts[0].args[0]), 0);
+        assert_eq!(usize::from(insts[0].args[1]), 1);
+    }
+
+    #[test]
+    fn test_parse_typed_preserves_old_hole_parse_but_rejects_translation() {
+        assert!(parse("?").unwrap()[0].is_hole());
+        let err = parse_typed::<Word4>("?").unwrap_err();
+        assert!(err.message.contains("hole"));
+    }
+
+    #[test]
+    fn test_parse_typed_rejects_shift_folded_inst() {
+        let folded = parse("add r0, r1, r2, lsl #2").unwrap();
+        assert_eq!(folded[0].op[2], "lsl");
+        let err = parse_typed::<Word4>("add r0, r1, r2, lsl #2").unwrap_err();
+        assert!(err.message.contains("folded shift"));
     }
 }
