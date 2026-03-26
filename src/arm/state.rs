@@ -793,14 +793,35 @@ impl<W> Masked<W> {
     pub fn state(&self) -> &State<W> { &self.state }
 }
 
-impl<W: Copy + Default> Masked<W> {
+impl<W> Masked<W> {
     /// Returns the singleton sub-masked-states of this masked state. That is, the states that
     /// contain only a single part of this state's mask.
-    pub fn singleton_sub_states(self) -> impl Iterator<Item = Self> {
+    pub fn singleton_sub_states(self) -> impl Iterator<Item = Self>
+    where
+        W: Copy + Default,
+    {
         self.mask
             .into_mask()
             .singleton_sub_masks()
             .map(move |m| self & m)
+    }
+
+    /// TODO: Move to a new 'Effect' type?
+    pub fn compose((i1, o1): (Self, Self), (i2, o2): (Self, Self)) -> Option<(Self, Self)>
+    where
+        W: Word,
+    {
+        let conflict: Mask = (o1.mask() & i2.mask()).into_mask();
+        // The inputs don't match
+        if o1 & conflict != i2 & conflict {
+            return None;
+        }
+        // Run!
+        // The input is whatever both take as input, and the first guy doesn't give to the second
+        let i = i1 | (i2 & !conflict);
+        // The output is just whatever both of them give
+        let o = o2 | o1;
+        Some((i, o))
     }
 }
 
