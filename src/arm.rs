@@ -280,6 +280,8 @@ impl Register {
     ];
 }
 
+/// TODO: This (and a bunch of other impls in the crate) is actually kind of bad. The docs say From
+/// conversions should be lossless. Oh well.
 impl<W: Word> From<W> for Register {
     fn from(x: W) -> Self {
         Register(x.into_word::<Word8>().into())
