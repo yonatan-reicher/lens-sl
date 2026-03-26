@@ -366,10 +366,6 @@ impl<'a> Lexer<'a> {
         self.src.get(self.pos).copied()
     }
 
-    fn peek2(&self) -> Option<u8> {
-        self.src.get(self.pos + 1).copied()
-    }
-
     fn advance(&mut self) -> Option<u8> {
         let ch = self.src.get(self.pos).copied()?;
         self.pos += 1;
