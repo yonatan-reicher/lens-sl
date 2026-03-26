@@ -1,7 +1,5 @@
 //! Implements enumerating over instructions.
 
-use functionality::Pipe;
-
 use crate::arm::{ArgType, CondCode, Inst, OpCode, Register};
 use crate::word::prelude::*;
 use std::fmt::Debug;
@@ -37,27 +35,6 @@ pub enum EnumerationInfoOptions<'a, T> {
     Unlimited,
 }
 
-fn debug_assert_arg_in_range(arg: usize) {
-    debug_assert!(
-        arg < 3,
-        "the argument selector must be in 0-2, but was {arg}."
-    );
-}
-
-fn debug_assert_valid_enumeration_info<W: Debug>(ei: &EnumerationInfo<W>) {
-    fn validate_options<T: Debug>(e: &EnumerationInfoOptions<T>, name: &'static str) {
-        match e {
-            EnumerationInfoOptions::Limited(slice) => debug_assert!(
-                !slice.is_empty(),
-                "enumeration info {name} slice must not be empty! {e:?}"
-            ),
-            EnumerationInfoOptions::Unlimited => (),
-        }
-    }
-    validate_options(&ei.registers, "registers");
-    validate_options(&ei.immediates, "immediates");
-}
-
 impl<'a, W> Enumerator<'a, W> {
     pub fn new(ei: EnumerationInfo<'a, W>) -> Self {
         Self {
@@ -75,52 +52,47 @@ impl<'a, W> Enumerator<'a, W> {
 }
 
 impl<'a, W: Word> Enumerator<'a, W> {
-    fn current_arg(&self, arg: usize, ei: &EnumerationInfo<W>) -> W {
-        debug_assert_arg_in_range(arg);
-        debug_assert_valid_enumeration_info(&self.ei);
+    fn try_current_arg(&self, arg: usize, ei: &EnumerationInfo<W>) -> Option<W> {
         // Take the index, and index into the correct array.
         let i = self.arg_indices[arg];
         match self.arg_types()[arg] {
             ArgType::Reg(..) => match &ei.registers {
-                EnumerationInfoOptions::Limited(r) => usize::from(r[i].0).into(),
-                EnumerationInfoOptions::Unlimited => i.into(),
+                EnumerationInfoOptions::Limited(r) => r.get(i).map(|r| Word8::from(*r).into_word()),
+                EnumerationInfoOptions::Unlimited => Some(i.into()),
             },
             ArgType::Imm => match &ei.immediates {
-                EnumerationInfoOptions::Limited(im) => im[i],
-                EnumerationInfoOptions::Unlimited => i.into(),
+                EnumerationInfoOptions::Limited(im) => im.get(i).copied(),
+                EnumerationInfoOptions::Unlimited => Some(i.into()),
             },
-            ArgType::Unused => 0.into(),
+            ArgType::Unused => Some(0.into()),
         }
     }
 
     /// Returns the length of the array that the given argument index indexes into.
-    fn arg_max(&self, arg: usize, ei: &EnumerationInfo<W>) -> usize {
-        debug_assert_arg_in_range(arg);
-        debug_assert_valid_enumeration_info(ei);
+    fn try_arg_max(&self, arg: usize, ei: &EnumerationInfo<W>) -> Option<usize> {
         match self.arg_types()[arg] {
             ArgType::Reg(..) => match &ei.registers {
-                EnumerationInfoOptions::Limited(r) => r.len() - 1,
-                EnumerationInfoOptions::Unlimited => Register::COUNT as usize - 1,
+                EnumerationInfoOptions::Limited(r) => r.len().checked_sub(1),
+                EnumerationInfoOptions::Unlimited => Some(Register::COUNT as usize - 1),
             },
             ArgType::Imm => match &ei.immediates {
-                EnumerationInfoOptions::Limited(i) => i.len() - 1,
-                EnumerationInfoOptions::Unlimited => W::MAX.into(),
+                EnumerationInfoOptions::Limited(i) => i.len().checked_sub(1),
+                EnumerationInfoOptions::Unlimited => Some(W::MAX.into()),
             },
-            ArgType::Unused => 0,
+            ArgType::Unused => Some(0),
         }
     }
 
-    pub fn current(&self, ei: &EnumerationInfo<W>) -> Inst<W> {
-        debug_assert_valid_enumeration_info(ei);
-        Inst {
+    fn try_current(&self, ei: &EnumerationInfo<W>) -> Option<Inst<W>> {
+        Some(Inst {
             op_code: self.op_code,
             cond_code: self.cond_code,
             args: [
-                self.current_arg(0, ei),
-                self.current_arg(1, ei),
-                self.current_arg(2, ei),
+                self.try_current_arg(0, ei)?,
+                self.try_current_arg(1, ei)?,
+                self.try_current_arg(2, ei)?,
             ],
-        }
+        })
     }
 
     fn advance_op_code(&mut self) -> Option<()> {
@@ -148,9 +120,7 @@ impl<'a, W: Word> Enumerator<'a, W> {
     }
 
     fn advance_arg(&mut self, arg: usize, ei: &EnumerationInfo<W>) -> Option<()> {
-        debug_assert_arg_in_range(arg);
-        debug_assert_valid_enumeration_info(ei);
-        let max = self.arg_max(arg, ei);
+        let max = self.try_arg_max(arg, ei)?;
         let current = self.arg_indices[arg];
         debug_assert!(current <= max);
         if current == max {
@@ -162,7 +132,6 @@ impl<'a, W: Word> Enumerator<'a, W> {
 
     pub fn advance(&mut self) -> Option<()> {
         let ei = &self.ei.clone();
-        debug_assert_valid_enumeration_info(ei);
         if self.advance_arg(0, ei).is_none() {
             self.arg_indices[0] = 0;
             if self.advance_arg(1, ei).is_none()
@@ -224,7 +193,10 @@ impl<'a, W: Word> Iterator for Enumerator<'a, W> {
         if self.done {
             return None;
         }
-        let ret = self.current(&self.ei);
+        let Some(ret) = self.try_current(&self.ei) else {
+            self.advance();
+            return self.next();
+        };
         self.advance();
         Some(ret)
     }
@@ -240,16 +212,7 @@ mod tests {
     use std::collections::HashSet;
 
     fn to_vec<W: Word>(ei: &EnumerationInfo<W>) -> Vec<Inst<W>> {
-        let mut e = Enumerator::new(*ei);
-        let mut ret = vec![];
-        loop {
-            ret.push(e.current(ei));
-            let r = e.advance();
-            if r.is_none() {
-                break;
-            }
-        }
-        ret
+        Enumerator::new(*ei).collect()
     }
 
     #[test]
@@ -355,5 +318,20 @@ mod tests {
         });
         assert!(v.contains(&inst![Add, 1, 3, 5]));
         assert!(!v.contains(&inst![Add, 1, 5, 3]));
+    }
+
+    #[test]
+    fn empty_registers() {
+        for inst in Enumerator::new(EnumerationInfo::<Word4> {
+            registers: EnumerationInfoOptions::Limited(&[]),
+            immediates: EnumerationInfoOptions::Limited(&[1.into()]),
+        }) {
+            if false && inst.op_code.arg_types().into_iter().any(|x| x.is_reg()) {
+                panic!(
+                    "Sadly, the enumerator generated the following instruction: '{inst}'. It has \
+                     a register argument, but that should not be possible."
+                );
+            }
+        }
     }
 }
