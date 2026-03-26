@@ -15,7 +15,6 @@
 ///   - `parse(src: &str) -> Result<Vec<Inst>, ParseError>`
 ///   - `liveness_from_file(path: &str) -> Result<HashMap<String,Vec<usize>>, ...>`
 ///   - `info_from_file(path: &str) -> Result<Vec<LiveValue>, ...>`
-
 use std::collections::HashMap;
 use std::fmt;
 use std::fs;
@@ -29,20 +28,23 @@ use std::fs;
 /// `args` — operand strings
 #[derive(Debug, Clone, PartialEq)]
 pub struct Inst {
-    pub op:   Vec<String>,
+    pub op: Vec<String>,
     pub args: Vec<String>,
 }
 
 impl Inst {
     fn real(opcode: &str, cond: &str, shift: &str, args: Vec<String>) -> Self {
         Inst {
-            op:   vec![opcode.to_owned(), cond.to_owned(), shift.to_owned()],
+            op: vec![opcode.to_owned(), cond.to_owned(), shift.to_owned()],
             args,
         }
     }
     /// Hole instruction — `(inst #f #f)` in the original.
     fn hole() -> Self {
-        Inst { op: vec![], args: vec![] }
+        Inst {
+            op: vec![],
+            args: vec![],
+        }
     }
     pub fn is_hole(&self) -> bool {
         self.op.is_empty()
@@ -54,7 +56,11 @@ impl fmt::Display for Inst {
         if self.is_hole() {
             write!(f, "HOLE")
         } else {
-            write!(f, "{}{}{} {:?}", self.op[0], self.op[1], self.op[2], self.args)
+            write!(
+                f,
+                "{}{}{} {:?}",
+                self.op[0], self.op[1], self.op[2], self.args
+            )
         }
     }
 }
@@ -73,13 +79,17 @@ pub enum LiveValue {
 #[derive(Debug, Clone)]
 pub struct ParseError {
     pub message: String,
-    pub line:    usize,
-    pub col:     usize,
+    pub line: usize,
+    pub col: usize,
 }
 
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "parse error at line {} col {}: {}", self.line, self.col, self.message)
+        write!(
+            f,
+            "parse error at line {} col {}: {}",
+            self.line, self.col, self.message
+        )
     }
 }
 
@@ -99,7 +109,7 @@ impl std::error::Error for ParseError {}
 
 struct Parser {
     tokens: Vec<Token>,
-    pos:    usize,
+    pos: usize,
 }
 
 impl Parser {
@@ -113,7 +123,9 @@ impl Parser {
 
     fn advance(&mut self) -> &Token {
         let t = &self.tokens[self.pos];
-        if self.pos + 1 < self.tokens.len() { self.pos += 1; }
+        if self.pos + 1 < self.tokens.len() {
+            self.pos += 1;
+        }
         t
     }
 
@@ -126,7 +138,7 @@ impl Parser {
             Err(ParseError {
                 message: format!("expected {:?}, got {:?} ('{}') ", kind, t.kind, t.value),
                 line: t.line,
-                col:  t.col,
+                col: t.col,
             })
         }
     }
@@ -134,18 +146,28 @@ impl Parser {
     // arg ::= REG | HASH NUM | NUM
     fn parse_arg(&mut self) -> Result<String, ParseError> {
         match self.peek().kind {
-            TokenKind::Reg => { let t = self.advance().clone(); Ok(t.value) }
+            TokenKind::Reg => {
+                let t = self.advance().clone();
+                Ok(t.value)
+            }
             TokenKind::Hash => {
                 self.advance(); // consume '#'
                 let n = self.expect(&TokenKind::Num)?;
                 Ok(n.value)
             }
-            TokenKind::Num => { let t = self.advance().clone(); Ok(t.value) }
+            TokenKind::Num => {
+                let t = self.advance().clone();
+                Ok(t.value)
+            }
             _ => {
                 let t = self.peek();
                 Err(ParseError {
-                    message: format!("expected arg (REG / # NUM / NUM), got {:?} ('{}')", t.kind, t.value),
-                    line: t.line, col: t.col,
+                    message: format!(
+                        "expected arg (REG / # NUM / NUM), got {:?} ('{}')",
+                        t.kind, t.value
+                    ),
+                    line: t.line,
+                    col: t.col,
                 })
             }
         }
@@ -245,8 +267,12 @@ impl Parser {
             _ => {
                 let t = self.peek();
                 return Err(ParseError {
-                    message: format!("unexpected token {:?} ('{}') at start of instruction", t.kind, t.value),
-                    line: t.line, col: t.col,
+                    message: format!(
+                        "unexpected token {:?} ('{}') at start of instruction",
+                        t.kind, t.value
+                    ),
+                    line: t.line,
+                    col: t.col,
                 });
             }
         }
@@ -259,7 +285,9 @@ impl Parser {
             match self.peek().kind {
                 TokenKind::Eof => break,
                 // Skip non-instruction tokens at top level
-                TokenKind::Label | TokenKind::Block | TokenKind::Text => { self.advance(); }
+                TokenKind::Label | TokenKind::Block | TokenKind::Text => {
+                    self.advance();
+                }
                 _ => {
                     if let Some(inst) = self.parse_instruction()? {
                         // Don't emit synthetic holes from label/block skips
@@ -292,10 +320,10 @@ enum TokenKind {
     /// Signed decimal number
     Num,
     Nop,
-    Text,   // .text directive
+    Text, // .text directive
     Comma,
     Dquote,
-    Hole,   // ?
+    Hole, // ?
     Hash,
     Lsqbr,
     Rsqbr,
@@ -304,28 +332,38 @@ enum TokenKind {
 
 #[derive(Debug, Clone)]
 struct Token {
-    kind:  TokenKind,
+    kind: TokenKind,
     value: String,
-    line:  usize,
-    col:   usize,
+    line: usize,
+    col: usize,
 }
 
 impl Token {
     fn new(kind: TokenKind, value: impl Into<String>, line: usize, col: usize) -> Self {
-        Token { kind, value: value.into(), line, col }
+        Token {
+            kind,
+            value: value.into(),
+            line,
+            col,
+        }
     }
 }
 
 struct Lexer<'a> {
-    src:  &'a [u8],
-    pos:  usize,
+    src: &'a [u8],
+    pos: usize,
     line: usize,
-    col:  usize,
+    col: usize,
 }
 
 impl<'a> Lexer<'a> {
     fn new(src: &'a str) -> Self {
-        Lexer { src: src.as_bytes(), pos: 0, line: 1, col: 0 }
+        Lexer {
+            src: src.as_bytes(),
+            pos: 0,
+            line: 1,
+            col: 0,
+        }
     }
 
     fn peek(&self) -> Option<u8> {
@@ -339,7 +377,12 @@ impl<'a> Lexer<'a> {
     fn advance(&mut self) -> Option<u8> {
         let ch = self.src.get(self.pos).copied()?;
         self.pos += 1;
-        if ch == b'\n' { self.line += 1; self.col = 0; } else { self.col += 1; }
+        if ch == b'\n' {
+            self.line += 1;
+            self.col = 0;
+        } else {
+            self.col += 1;
+        }
         Some(ch)
     }
 
@@ -356,13 +399,19 @@ impl<'a> Lexer<'a> {
     /// Skip a line comment that is NOT a block comment.
     /// A block comment looks like `; BB<n>_<n>:` — those must be tokenised.
     fn try_skip_line_comment(&mut self) -> bool {
-        if self.peek() != Some(b';') { return false; }
+        if self.peek() != Some(b';') {
+            return false;
+        }
         // Look ahead to decide if this is a block comment.
         let rest = &self.src[self.pos..];
-        if is_block_comment_start(rest) { return false; }
+        if is_block_comment_start(rest) {
+            return false;
+        }
         // Consume through end of line.
         while let Some(ch) = self.advance() {
-            if ch == b'\n' { break; }
+            if ch == b'\n' {
+                break;
+            }
         }
         true
     }
@@ -370,8 +419,12 @@ impl<'a> Lexer<'a> {
     fn read_digits(&mut self) -> String {
         let mut s = String::new();
         while let Some(ch) = self.peek() {
-            if ch.is_ascii_digit() { s.push(ch as char); self.advance(); }
-            else { break; }
+            if ch.is_ascii_digit() {
+                s.push(ch as char);
+                self.advance();
+            } else {
+                break;
+            }
         }
         s
     }
@@ -384,7 +437,7 @@ impl<'a> Lexer<'a> {
                 self.skip_whitespace();
             }
             let line = self.line;
-            let col  = self.col;
+            let col = self.col;
             match self.peek() {
                 None => { tokens.push(Token::new(TokenKind::Eof, "", line, col)); break; }
                 Some(b',')  => { self.advance(); tokens.push(Token::new(TokenKind::Comma,  ",",  line, col)); }
@@ -422,7 +475,8 @@ impl<'a> Lexer<'a> {
                 Some(ch) => {
                     return Err(ParseError {
                         message: format!("unexpected character '{}'", ch as char),
-                        line, col,
+                        line,
+                        col,
                     });
                 }
             }
@@ -434,14 +488,22 @@ impl<'a> Lexer<'a> {
     /// the grammar only uses integer values in practice).
     fn lex_number(&mut self, line: usize, col: usize) -> Result<Token, ParseError> {
         let mut s = String::new();
-        if self.peek() == Some(b'-') { s.push('-'); self.advance(); }
+        if self.peek() == Some(b'-') {
+            s.push('-');
+            self.advance();
+        }
         let digits = self.read_digits();
         if digits.is_empty() {
-            return Err(ParseError { message: "expected digits after '-'".into(), line, col });
+            return Err(ParseError {
+                message: "expected digits after '-'".into(),
+                line,
+                col,
+            });
         }
         s.push_str(&digits);
         if self.peek() == Some(b'.') {
-            s.push('.'); self.advance();
+            s.push('.');
+            self.advance();
             s.push_str(&self.read_digits());
         }
         Ok(Token::new(TokenKind::Num, s, line, col))
@@ -452,7 +514,9 @@ impl<'a> Lexer<'a> {
         let mut s = String::new();
         // Consume through end of line (block comments are single-line in the original).
         while let Some(ch) = self.peek() {
-            if ch == b'\n' { break; }
+            if ch == b'\n' {
+                break;
+            }
             s.push(ch as char);
             self.advance();
         }
@@ -464,8 +528,12 @@ impl<'a> Lexer<'a> {
         let mut s = String::from("_");
         self.advance(); // consume '_'
         while let Some(ch) = self.peek() {
-            if ch.is_ascii_alphanumeric() || ch == b'_' { s.push(ch as char); self.advance(); }
-            else { break; }
+            if ch.is_ascii_alphanumeric() || ch == b'_' {
+                s.push(ch as char);
+                self.advance();
+            } else {
+                break;
+            }
         }
         Token::new(TokenKind::UWord, s, line, col)
     }
@@ -474,8 +542,12 @@ impl<'a> Lexer<'a> {
     fn lex_bare_identifier(&mut self) -> String {
         let mut s = String::new();
         while let Some(ch) = self.peek() {
-            if ch.is_ascii_alphanumeric() { s.push(ch as char); self.advance(); }
-            else { break; }
+            if ch.is_ascii_alphanumeric() {
+                s.push(ch as char);
+                self.advance();
+            } else {
+                break;
+            }
         }
         s
     }
@@ -504,23 +576,36 @@ impl<'a> Lexer<'a> {
 }
 
 fn is_register(s: &str) -> bool {
-    matches!(s, "fp" | "ip" | "lr" | "sl")
-        || (s.starts_with('r') && s[1..].parse::<u32>().is_ok())
+    matches!(s, "fp" | "ip" | "lr" | "sl") || (s.starts_with('r') && s[1..].parse::<u32>().is_ok())
 }
 
 /// Returns true if the bytes starting at `src` look like `; BB<n>_<n>:`.
 fn is_block_comment_start(src: &[u8]) -> bool {
     // "; BB" followed by digits, '_', digits, ':'
-    if src.len() < 7 { return false; }
-    if &src[..4] != b"; BB" { return false; }
+    if src.len() < 7 {
+        return false;
+    }
+    if &src[..4] != b"; BB" {
+        return false;
+    }
     let mut i = 4;
-    while i < src.len() && src[i].is_ascii_digit() { i += 1; }
-    if i == 4 { return false; }
-    if i >= src.len() || src[i] != b'_' { return false; }
+    while i < src.len() && src[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i == 4 {
+        return false;
+    }
+    if i >= src.len() || src[i] != b'_' {
+        return false;
+    }
     i += 1;
     let start = i;
-    while i < src.len() && src[i].is_ascii_digit() { i += 1; }
-    if i == start { return false; }
+    while i < src.len() && src[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i == start {
+        return false;
+    }
     i < src.len() && src[i] == b':'
 }
 
@@ -528,23 +613,38 @@ fn is_block_comment_start(src: &[u8]) -> bool {
 // Instruction construction  (create-inst / create-special-inst / rename)
 // ─────────────────────────────────────────────────────────────────────────────
 
-const COND_SUFFIXES: &[&str] = &["eq","ne","ls","hi","cc","cs","lt","ge"];
-const SHIFT_OPS:     &[&str] = &["asr","asl","lsr","lsl","ror"];
+const COND_SUFFIXES: &[&str] = &["eq", "ne", "ls", "hi", "cc", "cs", "lt", "ge"];
+const SHIFT_OPS: &[&str] = &["asr", "asl", "lsr", "lsl", "ror"];
 
 fn create_special_inst(op1: &str, op2: &str) -> Result<Inst, ParseError> {
     match op2 {
-        "__aeabi_idiv"  => Ok(Inst::real("sdiv", "", "", vec!["r0".into(),"r0".into(),"r1".into()])),
-        "__aeabi_uidiv" => Ok(Inst::real("udiv", "", "", vec!["r0".into(),"r0".into(),"r1".into()])),
+        "__aeabi_idiv" => Ok(Inst::real(
+            "sdiv",
+            "",
+            "",
+            vec!["r0".into(), "r0".into(), "r1".into()],
+        )),
+        "__aeabi_uidiv" => Ok(Inst::real(
+            "udiv",
+            "",
+            "",
+            vec!["r0".into(), "r0".into(), "r1".into()],
+        )),
         _ => Err(ParseError {
             message: format!("undefined special instruction: {} {}", op1, op2),
-            line: 0, col: 0,
+            line: 0,
+            col: 0,
         }),
     }
 }
 
 fn create_inst(op: &str, mut args: Vec<String>) -> Result<Inst, ParseError> {
     // Normalise asl → lsl at the opcode level
-    let mut op = if op == "asl" { "lsl".to_owned() } else { op.to_owned() };
+    let mut op = if op == "asl" {
+        "lsl".to_owned()
+    } else {
+        op.to_owned()
+    };
 
     let args_len = args.len();
 
@@ -552,11 +652,19 @@ fn create_inst(op: &str, mut args: Vec<String>) -> Result<Inst, ParseError> {
     // fold it into the op vector's third slot (as in the Racket original).
     if args_len >= 4 {
         let candidate = args[args_len - 2].clone();
-        let norm = if candidate == "asl" { "lsl" } else { &candidate };
+        let norm = if candidate == "asl" {
+            "lsl"
+        } else {
+            &candidate
+        };
         if SHIFT_OPS.contains(&norm) {
-            let last      = args.pop().unwrap();
+            let last = args.pop().unwrap();
             let _shift_op = args.pop().unwrap();
-            let shift_str = if candidate == "asl" { "lsl".to_owned() } else { candidate };
+            let shift_str = if candidate == "asl" {
+                "lsl".to_owned()
+            } else {
+                candidate
+            };
             // Recurse on the shorter arg list, then overwrite op[2]
             let mut inst = create_inst(&op, args)?;
             // inner call already produced a 3-slot op vec; overwrite shift slot
@@ -609,7 +717,7 @@ fn rename(x: String) -> String {
         "sp" => "r13".into(),
         "lr" => "r14".into(),
         "pc" => "r15".into(),
-        _    => x,
+        _ => x,
     }
 }
 
@@ -619,7 +727,7 @@ fn rename(x: String) -> String {
 
 /// Parse a string of ARM assembly into a vector of instructions.
 pub fn parse(src: &str) -> Result<Vec<Inst>, ParseError> {
-    let mut lexer  = Lexer::new(src);
+    let mut lexer = Lexer::new(src);
     let tokens = lexer.tokenise_all()?;
     let mut parser = Parser::new(tokens);
     parser.parse_code()
@@ -629,12 +737,14 @@ pub fn parse(src: &str) -> Result<Vec<Inst>, ParseError> {
 ///
 /// Each line has the form `<key>:<n1>,<n2>,...`; the result maps the key
 /// string to a list of register indices (parsed as usize).
-pub fn liveness_from_file(path: &str) -> Result<HashMap<String, Vec<usize>>, Box<dyn std::error::Error>> {
+pub fn liveness_from_file(
+    path: &str,
+) -> Result<HashMap<String, Vec<usize>>, Box<dyn std::error::Error>> {
     let content = fs::read_to_string(path)?;
     let mut map = HashMap::new();
     for line in content.lines() {
         if let Some(colon_pos) = line.find(':') {
-            let key  = &line[..colon_pos];
+            let key = &line[..colon_pos];
             let rest = &line[colon_pos + 1..];
             let regs: Vec<usize> = rest
                 .split(',')
@@ -652,8 +762,8 @@ pub fn liveness_from_file(path: &str) -> Result<HashMap<String, Vec<usize>>, Box
 /// of live-out values: each element is either an integer or a named register.
 pub fn info_from_file(path: &str) -> Result<Vec<LiveValue>, Box<dyn std::error::Error>> {
     let content = fs::read_to_string(path)?;
-    let first   = content.lines().next().unwrap_or("");
-    let values  = first
+    let first = content.lines().next().unwrap_or("");
+    let values = first
         .split(',')
         .map(|s| {
             let s = s.trim();
