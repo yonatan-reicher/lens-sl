@@ -13,9 +13,8 @@ pub trait Program<S> {
 impl<P: Program<S> + ?Sized, S: Clone + Default + Eq> Oracle<P, S> for TestCasesOracle<S> {
     fn check_program(&mut self, program: &P) -> Result<(), CounterExample<S>> {
         // Maybe we could not check test cases again, but it's probably not really slowing us down.
-        let mut output = S::default();
         for (input, expected_output) in self.test_cases.iter() {
-            output = input.clone();
+            let mut output = input.clone();
             program.run(&mut output);
             if &output != expected_output {
                 return Err((input.clone(), output));

@@ -1,4 +1,5 @@
 use crate::Direction;
+use humantime;
 use crate::len::Len;
 use derive_more::Display;
 use std::fmt::{self, Debug, Display, Formatter};
@@ -280,11 +281,7 @@ impl<S: Display> Display for IoThreadState<S> {
         writeln!(f)?;
         writeln!(f, "Times:")?;
         for (p, i, t) in &self.phases {
-            let total_seconds = t.as_secs_f64();
-            let total_minutes = t.as_secs() / 60;
-            let seconds = total_seconds - total_minutes as f64 * 60.0;
-            let t = format!("{total_minutes}m {seconds:.4}s");
-            writeln!(f, "  Iteration {i} Phase {:<15}   {}", p.to_string(), t)?;
+            writeln!(f, "  Iteration {i} Phase {:<15}   {}", p.to_string(), humantime::Duration::from(*t))?;
         }
         writeln!(f)?;
         writeln!(f, "Counter Examples:")?;

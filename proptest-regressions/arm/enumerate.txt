@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 23597d9ac80bbcf485111855e121ceaf8dd6f6c93acec3b2f45c53596b6422bb # shrinks to AllRegistersAndImmediatesAppearArgs = AllRegistersAndImmediatesAppearArgs { registers: {r0}, immediates: {0} }
