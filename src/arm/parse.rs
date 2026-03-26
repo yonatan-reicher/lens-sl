@@ -11,7 +11,8 @@ use std::collections::HashMap;
 use std::fmt;
 use std::fs;
 
-use super::{ArgType, CondCode, Inst as TypedInst, OpCode};
+use super::{ArgType, CondCode, OpCode};
+use crate::arm;
 use crate::word::Word;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -742,7 +743,7 @@ fn rename(x: String) -> String {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Parse a string of ARM assembly into a vector of instructions.
-pub fn parse(src: &str) -> Result<Vec<Inst>, ParseError> {
+fn parse_raw(src: &str) -> Result<Vec<Inst>, ParseError> {
     let mut lexer = Lexer::new(src);
     let tokens = lexer.tokenise_all()?;
     let mut parser = Parser::new(tokens);
@@ -876,7 +877,7 @@ fn map_opcode(op: &str, args: &[ParsedArg]) -> Result<OpCode, ParseError> {
     }
 }
 
-fn translate_inst<W: Word>(inst: &Inst) -> Result<TypedInst<W>, ParseError> {
+fn translate_inst<W: Word>(inst: &Inst) -> Result<arm::Inst<W>, ParseError> {
     if inst.is_hole() {
         return Err(ParseError {
             message: "cannot translate hole instruction".into(),
@@ -956,7 +957,7 @@ fn translate_inst<W: Word>(inst: &Inst) -> Result<TypedInst<W>, ParseError> {
         });
     }
 
-    Ok(TypedInst {
+    Ok(arm::Inst {
         op_code,
         cond_code,
         args,
@@ -964,8 +965,8 @@ fn translate_inst<W: Word>(inst: &Inst) -> Result<TypedInst<W>, ParseError> {
 }
 
 /// Parse to the old stringy Inst format, then translate each instruction to typed arm::Inst.
-pub fn parse_typed<W: Word>(src: &str) -> Result<Vec<TypedInst<W>>, ParseError> {
-    parse(src)?.iter().map(translate_inst::<W>).collect()
+pub fn parse<W: Word>(src: &str) -> Result<Vec<arm::Inst<W>>, ParseError> {
+    parse_raw(src)?.iter().map(translate_inst::<W>).collect()
 }
 
 /// Corresponds to `liveness-from-file` in the original.
@@ -1027,7 +1028,7 @@ mod tests {
 
     #[test]
     fn test_simple_mov() {
-        let insts = parse("mov r0, r1").unwrap();
+        let insts = parse_raw("mov r0, r1").unwrap();
         assert_eq!(insts.len(), 1);
         assert_eq!(op(&insts[0]), ("mov", "", ""));
         assert_eq!(insts[0].args, vec!["r0", "r1"]);
@@ -1035,7 +1036,7 @@ mod tests {
 
     #[test]
     fn test_nop() {
-        let insts = parse("nop").unwrap();
+        let insts = parse_raw("nop").unwrap();
         assert_eq!(insts.len(), 1);
         assert_eq!(op(&insts[0]), ("nop", "", ""));
         assert!(insts[0].args.is_empty());
@@ -1043,21 +1044,21 @@ mod tests {
 
     #[test]
     fn test_hole() {
-        let insts = parse("?").unwrap();
+        let insts = parse_raw("?").unwrap();
         assert_eq!(insts.len(), 1);
         assert!(insts[0].is_hole());
     }
 
     #[test]
     fn test_cond_suffix() {
-        let insts = parse("moveq r0, r1").unwrap();
+        let insts = parse_raw("moveq r0, r1").unwrap();
         assert_eq!(op(&insts[0]), ("mov", "eq", ""));
     }
 
     #[test]
     fn test_shift_fold() {
         // add r0, r1, r2, lsl #2  →  op = ["add", "", "lsl"], args = ["r0","r1","r2","2"]
-        let insts = parse("add r0, r1, r2, lsl #2").unwrap();
+        let insts = parse_raw("add r0, r1, r2, lsl #2").unwrap();
         assert_eq!(op(&insts[0]), ("add", "", "lsl"));
         assert_eq!(insts[0].args, vec!["r0", "r1", "r2", "2"]);
     }
@@ -1065,20 +1066,20 @@ mod tests {
     #[test]
     fn test_ldr_offset_scaling() {
         // ldr r0, [r1, #8]  → offset 8/4 = 2
-        let insts = parse("ldr r0, [r1, #8]").unwrap();
+        let insts = parse_raw("ldr r0, [r1, #8]").unwrap();
         assert_eq!(op(&insts[0]), ("ldr", "", ""));
         assert_eq!(insts[0].args, vec!["r0", "r1", "2"]);
     }
 
     #[test]
     fn test_rename_fp() {
-        let insts = parse("mov r0, fp").unwrap();
+        let insts = parse_raw("mov r0, fp").unwrap();
         assert_eq!(insts[0].args, vec!["r0", "r11"]);
     }
 
     #[test]
     fn test_special_inst_sdiv() {
-        let insts = parse("bl __aeabi_idiv").unwrap();
+        let insts = parse_raw("bl __aeabi_idiv").unwrap();
         assert_eq!(op(&insts[0]), ("sdiv", "", ""));
         assert_eq!(insts[0].args, vec!["r0", "r0", "r1"]);
     }
@@ -1086,7 +1087,7 @@ mod tests {
     #[test]
     fn test_label_and_block_comment_skipped() {
         let src = "main:\n; BB0_1:\nmov r0, r1\n";
-        let insts = parse(src).unwrap();
+        let insts = parse_raw(src).unwrap();
         // Only the mov should survive; labels/block-comments produce no Inst
         assert_eq!(insts.len(), 1);
         assert_eq!(op(&insts[0]), ("mov", "", ""));
@@ -1094,20 +1095,20 @@ mod tests {
 
     #[test]
     fn test_asl_normalised_to_lsl() {
-        let insts = parse("asl r0, r1, #1").unwrap();
+        let insts = parse_raw("asl r0, r1, #1").unwrap();
         assert_eq!(op(&insts[0]), ("lsl", "", ""));
     }
 
     #[test]
     fn test_multiple_instructions() {
         let src = "mov r0, #0\nadd r1, r0, r2\nstr r1, [r3, #4]\n";
-        let insts = parse(src).unwrap();
+        let insts = parse_raw(src).unwrap();
         assert_eq!(insts.len(), 3);
     }
 
     #[test]
-    fn test_parse_typed_simple_mov() {
-        let insts = parse_typed::<Word4>("mov r0, r1").unwrap();
+    fn test_parse_simple_mov() {
+        let insts = parse::<Word4>("mov r0, r1").unwrap();
         assert_eq!(insts.len(), 1);
         assert_eq!(insts[0].op_code, OpCode::Mov);
         assert_eq!(insts[0].cond_code, CondCode::Al);
@@ -1116,17 +1117,17 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_typed_preserves_old_hole_parse_but_rejects_translation() {
-        assert!(parse("?").unwrap()[0].is_hole());
-        let err = parse_typed::<Word4>("?").unwrap_err();
+    fn test_parse_preserves_old_hole_parse_but_rejects_translation() {
+        assert!(parse_raw("?").unwrap()[0].is_hole());
+        let err = parse::<Word4>("?").unwrap_err();
         assert!(err.message.contains("hole"));
     }
 
     #[test]
-    fn test_parse_typed_rejects_shift_folded_inst() {
-        let folded = parse("add r0, r1, r2, lsl #2").unwrap();
+    fn test_parse_rejects_shift_folded_inst() {
+        let folded = parse_raw("add r0, r1, r2, lsl #2").unwrap();
         assert_eq!(folded[0].op[2], "lsl");
-        let err = parse_typed::<Word4>("add r0, r1, r2, lsl #2").unwrap_err();
+        let err = parse::<Word4>("add r0, r1, r2, lsl #2").unwrap_err();
         assert!(err.message.contains("folded shift"));
     }
 }
