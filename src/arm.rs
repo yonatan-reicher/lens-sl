@@ -802,6 +802,9 @@ pub fn run_program_masked<W: Word>(prog: impl IntoIterator<Item=Inst<W>>, input:
     (input_mask, current_state.masked(output_mask.into_mask()))
 }
 
+pub mod parse;
+pub use parse::parse;
+
 #[cfg(test)]
 mod tests {
     use super::*;
