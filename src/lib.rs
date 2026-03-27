@@ -76,6 +76,7 @@ impl Direction {
 // Let's expose just the necessary items.
 
 pub use arm::parse;
+pub use arm::parse::{LiveValue, info_from_file, liveness_from_file};
 pub use arm::{BackwardMap, CondCode, Flags, FlagsBitField, Inst, OpCode, Register, State};
 pub use main_loop::optimize;
 pub use tui::{NoTui, Tui, TuiHook};
