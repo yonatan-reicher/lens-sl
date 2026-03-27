@@ -20,8 +20,6 @@ smtlib = "0.3.0"
 proptest = { version = "1.9.0", features = ["attr-macro"] }
 proptest-derive = "0.7.0"
 
-[profile.release]
-debug = true
 
 [profile.test.package.proptest]
 opt-level = 3
