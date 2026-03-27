@@ -2,9 +2,9 @@
 
 use crate::all::All;
 use crate::all_permutations::Iter as PermutationIter;
+use crate::arm::enumerate::{EnumerationInfo, EnumerationInfoOptions, Enumerator};
 use crate::arm::state::BitMask;
 use crate::bool::prelude::*;
-use crate::enumerate::{EnumerationInfo, EnumerationInfoOptions, Enumerator};
 use crate::iter_slice_or_single::Iter as SliceOrSingle;
 use crate::reduce_bit_width::{ImmediateInfo, Reducer};
 use crate::word::prelude::*;
@@ -200,6 +200,12 @@ macro_rules! define_instructions {
                 }
             }
         }
+
+        impl From<OpCode> for u8 {
+            fn from(o: OpCode) -> u8 {
+                o as u8
+            }
+        }
     };
 }
 
@@ -274,9 +280,18 @@ impl Register {
     ];
 }
 
+/// TODO: This (and a bunch of other impls in the crate) is actually kind of bad. The docs say From
+/// conversions should be lossless. Oh well.
 impl<W: Word> From<W> for Register {
     fn from(x: W) -> Self {
         Register(x.into_word::<Word8>().into())
+    }
+}
+
+// impl<W: Word> From<Register> for W { // Some weird orphan rule conflict :/
+impl From<Register> for Word8 {
+    fn from(r: Register) -> Word8 {
+        r.0.into()
     }
 }
 
@@ -510,7 +525,7 @@ impl<W: Word> BackwardMap<W> {
                 registers: EnumerationInfoOptions::Limited(registers),
                 immediates: EnumerationInfoOptions::Unlimited,
             };
-            for inst in Enumerator::new().into_iter(&ei) {
+            for inst in Enumerator::new(ei) {
                 input.clone_to(&mut output);
                 inst.run(&mut output);
                 // Store!
@@ -619,8 +634,8 @@ impl<W: Word> Inst<W> {
 
     pub fn run_backward_masked<'a>(
         &self,
-        output: state::Masked<W>,
-        bm: &'a BackwardMap<W>,
+        _output: state::Masked<W>,
+        _bm: &'a BackwardMap<W>,
     ) -> impl IntoIterator<Item = &'a state::Masked<W>> + use<'a, W> {
         // let unmasked_outputs = output.mask().;
         // self.run_backward(*output.state(), bm)
@@ -629,6 +644,7 @@ impl<W: Word> Inst<W> {
         //         todo!()
         //     })
         todo!();
+        #[allow(unreachable_code)]
         []
     }
 
@@ -687,6 +703,13 @@ impl<W: Word> Inst<W> {
                 })
             })
         })
+    }
+}
+
+pub mod enumerate;
+impl<W: Word> Inst<W> {
+    pub fn enumerate<'a>(ei: EnumerationInfo<'a, W>) -> impl Iterator<Item = Self> + use<'a, W> {
+        enumerate::Enumerator::new(ei)
     }
 }
 
@@ -762,7 +785,10 @@ where
 }
 
 /// Returns a mask for the input and the masked output.
-pub fn run_program_masked<W: Word>(prog: impl IntoIterator<Item=Inst<W>>, input: State<W>) -> (BitMask, state::Masked<W>) {
+pub fn run_program_masked<W: Word>(
+    prog: impl IntoIterator<Item = Inst<W>>,
+    input: State<W>,
+) -> (BitMask, state::Masked<W>) {
     let (mut input_mask, mut output_mask) = (BitMask::EMPTY, BitMask::EMPTY);
     let mut current_state = input;
     for inst in prog {
@@ -778,6 +804,9 @@ pub fn run_program_masked<W: Word>(prog: impl IntoIterator<Item=Inst<W>>, input:
     }
     (input_mask, current_state.masked(output_mask.into_mask()))
 }
+
+pub mod parse;
+pub use parse::parse;
 
 #[cfg(test)]
 mod tests {
@@ -965,7 +994,7 @@ mod tests {
             registers: EnumerationInfoOptions::Limited(&[Register(0), Register(1)]),
             immediates: EnumerationInfoOptions::Limited(&[0.into(), 1.into(), 5.into()]),
         };
-        for inst in Enumerator::new().into_iter(&ei) {
+        for inst in Inst::enumerate(ei) {
             let x = &bm[(inst, state)];
             println!("Instruction: {inst}, Output State: {state}");
             println!("Input States: {x:?}");

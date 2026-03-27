@@ -9,20 +9,25 @@ default-run = "lens-sl"
 bitflags = { version = "2.10.0", features = ["serde"] }
 derive_more = { version = "2.1.1", features = ["full"] }
 functionality = "1.0.0"
+humantime = "2.3"
 itertools = "0.14"
+postcard = { version = "1.1", features = ["use-std"] } # A should-be-quick-enough binary format
 rustc-hash = "2.1.1"
+serde = { version = "1", features = ["derive"] } # Most standard rust serialization
 smtlib = "0.3.0"
-# Most standard rust serialization
-serde = { version = "1", features = ["derive"] }
-# A should-be-quick-enough binary format
-postcard = { version = "1.1", features = ["use-std"] }
 
 [dev-dependencies]
 proptest = { version = "1.9.0", features = ["attr-macro"] }
 proptest-derive = "0.7.0"
 
-[profile.release]
-debug = true
+[profile.dev]
+opt-level = 3
+lto = true
+debug = false
+debug-assertions = false
+overflow-checks = false
+codegen-units = 16
+incremental = false
 
 [profile.test.package.proptest]
 opt-level = 3

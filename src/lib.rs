@@ -9,8 +9,6 @@ mod programs;
 mod reduce_bit_width;
 /// The instruction set.
 mod arm;
-/// Enumerating all instructions and whatever.
-mod enumerate;
 /// Responsible for things which find counter examples when checking programs for equivalence to
 /// the original.
 mod oracle;
@@ -77,6 +75,8 @@ impl Direction {
 
 // Let's expose just the necessary items.
 
+pub use arm::parse;
+pub use arm::parse::{LiveValue, info_from_file, liveness_from_file};
 pub use arm::{BackwardMap, CondCode, Flags, FlagsBitField, Inst, OpCode, Register, State};
 pub use main_loop::optimize;
 pub use tui::{NoTui, Tui, TuiHook};
