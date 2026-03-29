@@ -797,6 +797,20 @@ impl<W: Display> Display for Inst<W> {
     }
 }
 
+impl ShiftCode {
+    fn apply<W: AbstractWord>(&self, x: W) -> W {
+        use ShiftCode::*;
+        match *self {
+            None => x,
+            Asr(i) => todo!(),
+            Lsl(i) => todo!(),
+            Lsr(i) => todo!(),
+            Ror(i) => todo!(),
+            Rrx => todo!(),
+        }
+    }
+}
+
 /// A macro to create an instruction more easily.
 #[macro_export]
 macro_rules! inst {
