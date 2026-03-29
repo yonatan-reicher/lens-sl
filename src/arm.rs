@@ -60,6 +60,7 @@ impl ArgType {
 )]
 #[cfg_attr(test, derive(proptest_derive::Arbitrary))]
 #[display("{}", self.to_string())]
+/// TODO: Rename to cond
 pub enum CondCode {
     /// Always (unconditional)
     /// In real Arm, this is actually the 15th condition code, but for we put it first because we
