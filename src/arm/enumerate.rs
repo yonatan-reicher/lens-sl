@@ -279,14 +279,39 @@ mod tests {
     }
 
     #[test]
+    fn does_not_repeat() {
+        assert!(
+            Enumerator::new(EnumerationInfo::<Word8> {
+                registers: EnumerationInfoOptions::Limited(&[Register(2)]),
+                immediates: EnumerationInfoOptions::Limited(&[42.into()]),
+            })
+            .counts()
+            .into_iter()
+            .all(|(_, c)| c == 1)
+        );
+    }
+
+    #[test]
     pub fn test_count() {
-        let v = to_vec(&EnumerationInfo::<Word8> {
+        let c = Enumerator::new(EnumerationInfo::<Word8> {
             registers: EnumerationInfoOptions::Limited(&[Register(2)]),
-            immediates: EnumerationInfoOptions::Limited(&[42.into()]),
-        });
+            immediates: EnumerationInfoOptions::Limited(&[5.into()]),
+        })
+        .count();
         assert_eq!(
-            v.len(),
+            c,
             OpCode::COUNT as usize * CondCode::COUNT as usize * 6 /*possible shift codes */
+        );
+    }
+
+    #[test]
+    pub fn test_count_no_shift_if_no_shift_args() {
+        assert!(
+            Enumerator::new(EnumerationInfo::<Word8> {
+                registers: EnumerationInfoOptions::Limited(&[Register(2)]),
+                immediates: EnumerationInfoOptions::Limited(&[105.into(), 202.into()]),
+            })
+            .all(|inst| inst.shift == ShiftCode::None)
         );
     }
 
