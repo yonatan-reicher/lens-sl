@@ -36,72 +36,72 @@ type Graph<W> = graph::Graph<(MaskedState<W>, MaskedState<W>), Programs<W>>;
 
 // ========================================== Oracle ==============================================
 
-impl<W: Word> oracle::smt::Inst<State<W>> for Inst<W> {
-    type StateVars<'st> = StateVars<'st, W::SmtWord<'st>>;
-
-    type SymbolicState<'st> = SymbolicState<'st, W::SmtWord<'st>>;
-
-    fn new_state_vars<'st>(st: &'st smtlib::Storage, name: &str) -> Self::StateVars<'st> {
-        StateVars::new(st, name)
-    }
-
-    fn state_neq<'st>(
-        s1: Self::SymbolicState<'st>,
-        s2: Self::SymbolicState<'st>,
-    ) -> smtlib::Bool<'st> {
-        !s1.eq(s2)
-    }
-
-    fn step_symbolic<'st>(&self, s: &mut Self::SymbolicState<'st>) {
-        self.run_symbolic(s);
-    }
-
-    fn step<'st>(&self, s: &mut State<W>) {
-        self.run(s);
-    }
-
-    fn extract_from_model<'st>(
-        model: &smtlib::Model<'st>,
-        s: StateVars<'st, W::SmtWord<'st>>,
-    ) -> State<W> {
-        // == Registers ==
-        let mut state = State::default();
-        for (i, var) in s.registers.iter().enumerate() {
-            let reg = Register(i as u8);
-            let val = model
-                .eval(*var)
-                .map(W::SmtWord::try_into_word)
-                .unwrap_or_else(|| Some(0.into()))
-                //.try_into()
-                .unwrap_or_else(|| {
-                    panic!(
-                        "Failed to convert variable '{var:?}' to the right type in model {model}."
-                    )
-                });
-            state.set_register(
-                reg,
-                val.into_word(), /* This is actually the same word type but whatever */
-            );
-        }
-        // == Flags ==
-        let load_bool = |b| {
-            model
-                .eval(b)
-                .and_then(|b| bool_term_to_bool(b))
-                .unwrap_or(false /* Arbitrary default, result did not matter */)
-        };
-        state.set_flags(
-            Flags {
-                z: load_bool(s.flags.z),
-                n: load_bool(s.flags.n),
-                c: load_bool(s.flags.c),
-                v: load_bool(s.flags.v),
-            }
-            .into(),
-        );
-        state
-    }
-}
+// impl<W: Word> oracle::smt::Inst<State<W>> for Inst<W> {
+//     type StateVars<'st> = StateVars<'st, W::SmtWord<'st>>;
+//
+//     type SymbolicState<'st> = SymbolicState<'st, W::SmtWord<'st>>;
+//
+//     fn new_state_vars<'st>(st: &'st smtlib::Storage, name: &str) -> Self::StateVars<'st> {
+//         StateVars::new(st, name)
+//     }
+//
+//     fn state_neq<'st>(
+//         s1: Self::SymbolicState<'st>,
+//         s2: Self::SymbolicState<'st>,
+//     ) -> smtlib::Bool<'st> {
+//         !s1.eq(s2)
+//     }
+//
+//     fn step_symbolic<'st>(&self, s: &mut Self::SymbolicState<'st>) {
+//         self.run_symbolic(s);
+//     }
+//
+//     fn step<'st>(&self, s: &mut State<W>) {
+//         self.run(s);
+//     }
+//
+//     fn extract_from_model<'st>(
+//         model: &smtlib::Model<'st>,
+//         s: StateVars<'st, W::SmtWord<'st>>,
+//     ) -> State<W> {
+//         // == Registers ==
+//         let mut state = State::default();
+//         for (i, var) in s.registers.iter().enumerate() {
+//             let reg = Register(i as u8);
+//             let val = model
+//                 .eval(*var)
+//                 .map(W::SmtWord::try_into_word)
+//                 .unwrap_or_else(|| Some(0.into()))
+//                 //.try_into()
+//                 .unwrap_or_else(|| {
+//                     panic!(
+//                         "Failed to convert variable '{var:?}' to the right type in model {model}."
+//                     )
+//                 });
+//             state.set_register(
+//                 reg,
+//                 val.into_word(), /* This is actually the same word type but whatever */
+//             );
+//         }
+//         // == Flags ==
+//         let load_bool = |b| {
+//             model
+//                 .eval(b)
+//                 .and_then(|b| bool_term_to_bool(b))
+//                 .unwrap_or(false /* Arbitrary default, result did not matter */)
+//         };
+//         state.set_flags(
+//             Flags {
+//                 z: load_bool(s.flags.z),
+//                 n: load_bool(s.flags.n),
+//                 c: load_bool(s.flags.c),
+//                 v: load_bool(s.flags.v),
+//             }
+//             .into(),
+//         );
+//         state
+//     }
+// }
 
 // ====================================== Implementation ==========================================
 
