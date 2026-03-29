@@ -1,6 +1,10 @@
 //! Implements enumerating over instructions.
 
-use crate::arm::{ArgType, CondCode, Inst, OpCode, Register};
+use functionality::Pipe;
+use itertools::Either;
+
+use crate::all::All;
+use crate::arm::{ArgType, CondCode, Inst, OpCode, Register, ShiftCode};
 use crate::word::prelude::*;
 use std::fmt::Debug;
 
@@ -13,6 +17,9 @@ pub struct Enumerator<'a, W> {
     op_code: OpCode,
     /// The current condition code of the instruction.
     cond_code: CondCode,
+    /// The current value for the shift field, but if it has an immediate, that immediate is
+    /// actually an index into the immediates slice.
+    shift: ShiftCode,
     /// The indices into the slices of available registers and instructions.
     arg_indices: [usize; 3],
 }
@@ -42,6 +49,7 @@ impl<'a, W> Enumerator<'a, W> {
             done: false,
             op_code: unsafe { std::mem::transmute::<u8, OpCode>(0) },
             cond_code: unsafe { std::mem::transmute::<u8, CondCode>(0) },
+            shift: ShiftCode::None,
             arg_indices: [0; 3],
         }
     }
@@ -83,10 +91,31 @@ impl<'a, W: Word> Enumerator<'a, W> {
         }
     }
 
+    fn possible_shift_args(&self) -> impl Iterator<Item = u8> {
+        self.ei
+            .immediates
+            .into_iter()
+            .filter(|i| 1 <= Into::<usize>::into(*i) && Into::<usize>::into(*i) <= 32)
+            .map(|i| i.into_word::<Word8>().into())
+    }
+
+    fn try_current_shift(&self) -> Option<ShiftCode> {
+        use ShiftCode::*;
+        Some(match self.shift {
+            None => None,
+            Asr(i) => Asr(self.possible_shift_args().nth(i as usize)?),
+            Lsl(i) => Lsl(self.possible_shift_args().nth(i as usize)?),
+            Lsr(i) => Lsr(self.possible_shift_args().nth(i as usize)?),
+            Ror(i) => Ror(self.possible_shift_args().nth(i as usize)?),
+            Rrx => Rrx,
+        })
+    }
+
     fn try_current(&self, ei: &EnumerationInfo<W>) -> Option<Inst<W>> {
         Some(Inst {
             op_code: self.op_code,
             cond_code: self.cond_code,
+            shift: self.shift,
             args: [
                 self.try_current_arg(0, ei)?,
                 self.try_current_arg(1, ei)?,
@@ -119,6 +148,24 @@ impl<'a, W: Word> Enumerator<'a, W> {
         }
     }
 
+    fn advance_shift(&mut self) -> Option<()> {
+        let max = u8::try_from(self.possible_shift_args().count())
+            .expect("there's no way there are so many shift arguments that they do not fit in a u8 - by the pigeon hole principle!")
+            .checked_sub(1)?;
+        use ShiftCode::*;
+        #[rustfmt::skip]
+        let next = match self.shift {
+            None => Asr(1),
+            Asr(i) => if i < max { Asr(i + 1) } else { Lsl(0) },
+            Lsl(i) => if i < max { Lsl(i + 1) } else { Lsr(0) },
+            Lsr(i) => if i < max { Lsr(i + 1) } else { Ror(0) },
+            Ror(i) => if i < max { Ror(i + 1) } else { Rrx },
+            Rrx => return Option::None,
+        };
+        self.shift = next;
+        Some(())
+    }
+
     fn advance_arg(&mut self, arg: usize, ei: &EnumerationInfo<W>) -> Option<()> {
         let max = self.try_arg_max(arg, ei)?;
         let current = self.arg_indices[arg];
@@ -143,8 +190,11 @@ impl<'a, W: Word> Enumerator<'a, W> {
                     if self.advance_op_code().is_none() {
                         self.op_code = unsafe { std::mem::transmute::<u8, OpCode>(0) };
                         if self.advance_cond_code().is_none() {
-                            self.done = true;
-                            return None;
+                            self.cond_code = unsafe { std::mem::transmute::<u8, CondCode>(0) };
+                            if self.advance_shift().is_none() {
+                                self.done = true;
+                                return None;
+                            }
                         }
                     }
                 }
@@ -181,6 +231,18 @@ impl<'a> IntoIterator for EnumerationInfoOptions<'a, Register> {
     }
 }
 
+impl<'a, W: Word> IntoIterator for EnumerationInfoOptions<'a, W> {
+    type Item = W;
+    type IntoIter = Either<std::iter::Copied<std::slice::Iter<'a, W>>, <W as All>::Iter>;
+    fn into_iter(self) -> Self::IntoIter {
+        use EnumerationInfoOptions::{Limited, Unlimited};
+        match self {
+            Limited(items) => items.iter().copied().pipe(Either::Left),
+            Unlimited => W::all().pipe(Either::Right),
+        }
+    }
+}
+
 impl<'a, T> Default for EnumerationInfoOptions<'a, T> {
     fn default() -> Self {
         Self::Unlimited
@@ -207,6 +269,7 @@ mod tests {
     use crate::inst;
 
     use super::*;
+    use itertools::Itertools;
     use proptest::prelude::*;
     use proptest::property_test;
     use std::collections::HashSet;
@@ -216,12 +279,40 @@ mod tests {
     }
 
     #[test]
+    fn does_not_repeat() {
+        assert!(
+            Enumerator::new(EnumerationInfo::<Word8> {
+                registers: EnumerationInfoOptions::Limited(&[Register(2)]),
+                immediates: EnumerationInfoOptions::Limited(&[42.into()]),
+            })
+            .counts()
+            .into_iter()
+            .all(|(_, c)| c == 1)
+        );
+    }
+
+    #[test]
     pub fn test_count() {
-        let v = to_vec(&EnumerationInfo::<Word8> {
+        let c = Enumerator::new(EnumerationInfo::<Word8> {
             registers: EnumerationInfoOptions::Limited(&[Register(2)]),
-            immediates: EnumerationInfoOptions::Limited(&[42.into()]),
-        });
-        assert_eq!(v.len(), OpCode::COUNT as usize * CondCode::COUNT as usize);
+            immediates: EnumerationInfoOptions::Limited(&[5.into()]),
+        })
+        .count();
+        assert_eq!(
+            c,
+            OpCode::COUNT as usize * CondCode::COUNT as usize * 6 /*possible shift codes */
+        );
+    }
+
+    #[test]
+    pub fn test_count_no_shift_if_no_shift_args() {
+        assert!(
+            Enumerator::new(EnumerationInfo::<Word8> {
+                registers: EnumerationInfoOptions::Limited(&[Register(2)]),
+                immediates: EnumerationInfoOptions::Limited(&[105.into(), 202.into()]),
+            })
+            .all(|inst| inst.shift == ShiftCode::None)
+        );
     }
 
     #[property_test(config = ProptestConfig { cases: 20, ..ProptestConfig::default() })]
@@ -333,5 +424,20 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn ror_shift_code_appears() {
+        assert_eq!(
+            Enumerator::new(EnumerationInfo::<Word4> {
+                registers: EnumerationInfoOptions::Limited(&[]),
+                immediates: EnumerationInfoOptions::Limited(&[1.into(), 2.into(), 3.into()]),
+            })
+            .map(|inst| inst.shift)
+            .filter(|shift| matches!(shift, ShiftCode::Ror(_)))
+            .unique()
+            .count(),
+            3
+        );
     }
 }

@@ -88,6 +88,7 @@ std::thread_local! {
     static FALSE: Bool<'static> = Bool::new(static_storage(), false);
 }
 
+// TODO: Get rid of this trait, as we are only using it in word.rs
 /// Extensions for [smtlib::BitVec]!
 pub trait BitVecExt<'st> {
     fn is_negative(&self) -> Bool<'st>;

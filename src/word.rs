@@ -1,6 +1,7 @@
 //! Define an interface to generalize over different bit-widths and also over SMT bit-vectors.
 
 use crate::all::All;
+use crate::bool::prelude::*;
 use crate::smtlib_utils::{BitVecExt, bit_vec_term_to_i128};
 #[cfg(test)]
 use proptest::prelude::*;
@@ -16,7 +17,7 @@ use std::ops::*;
 /// A trait for unsigned integer types that have wrapping semantics.
 #[rustfmt::skip]
 pub trait Word
-    : AbstractWord
+    : AbstractWord<Bool=bool, FromParam=()>
     + All
     + Debug
     + Default
@@ -33,21 +34,18 @@ pub trait Word
     // + DeserializeOwned
     + 'static
 {
-    fn into_smt_word<'st>(self, st: &'st Storage) -> Self::SmtWord<'st>;
-    fn into_word<W: Word>(self) -> W { Into::<usize>::into(self).into() }
-    fn is_zero(&self) -> bool;
-    fn signed_lt(self, other: Self) -> bool;
-    fn signed_positive(&self) -> bool;
-    fn signed_negative(&self) -> bool;
     const ZERO: Self;
     const ONE: Self;
     const MAX: Self;
+    fn into_smt_word<'st>(self, st: &'st Storage) -> Self::SmtWord<'st>;
+    fn into_word<W: Word>(self) -> W { Into::<usize>::into(self).into() }
+    fn into_abstract_word<W: AbstractWord>(self, arg: W::FromParam) -> W { W::from_word(self, arg) }
 }
 
 /// Abstracts over SMT bit-vectors.
 #[rustfmt::skip]
 pub trait SmtWord<'st>
-    : AbstractWord
+    : AbstractWord<Bool=SmtBool<'st>, FromParam=&'st Storage>
     + From<smtlib::terms::Const<'st, Self>>
     + Into<smtlib::terms::Dynamic<'st>>
     + IntoWithStorage<'st, Self>
@@ -80,10 +78,20 @@ pub trait AbstractWord
     // + Rem<Output = Self>
     // + Shr<Output = Self>
 {
-    // One of these shall equal `Self`.
-    type Word: Word;
+    type Bool: Bool + IfThenElse<Self>;
+    // One of these shall equal `Self`. And obviously, if B is bool, it's Word, and if it's SmtBool
+    // than it's SmtWord.
     type SmtWord<'st>: SmtWord<'st>;
+    type Word: Word;
     const BITS: usize;
+    fn is_zero(&self) -> Self::Bool;
+    fn signed_lt(&self, other: &Self) -> Self::Bool;
+    fn unsigned_lt(&self, other: &Self) -> Self::Bool;
+    fn signed_positive(&self) -> Self::Bool;
+    fn signed_negative(&self) -> Self::Bool;
+    type FromParam;
+    fn from_word<W: Word>(w: W, arg: Self::FromParam) -> Self;
+    fn get_from_param(&self) -> Self::FromParam;
 }
 
 // ========== The Implementation ==================================================================
@@ -113,6 +121,16 @@ macro_rules! impl_word {
             fn into_smt_word<'st>(self, st: &'st Storage) -> Self::SmtWord<'st> {
                 (self.0 as i64).into_with_storage(st)
             }
+            const ZERO: $name = Self(0);
+            const ONE: $name = Self(1);
+            const MAX: $name = Self(<$t>::MAX & $mask as $t);
+        }
+
+        impl AbstractWord for $name {
+            type Bool = bool;
+            type Word = Self;
+            type SmtWord<'st> = BitVec<'st, $bits>;
+            const BITS: usize = $bits;
 
             fn is_zero(&self) -> bool {
                 self.0 == 0
@@ -129,24 +147,25 @@ macro_rules! impl_word {
                 msb == 1
             }
 
-            fn signed_lt(self, other: Self) -> bool {
+            fn signed_lt(&self, other: &Self) -> bool {
                 match (self.signed_negative(), other.signed_negative()) {
                     (false, false) => self < other,
-                    (true, true) => -self > -other,
+                    (true, true) => -*self > -*other,
                     (false, true) => false,
                     (true, false) => true,
                 }
             }
 
-            const ZERO: $name = Self(0);
-            const ONE: $name = Self(1);
-            const MAX: $name = Self(<$t>::MAX & $mask as $t);
-        }
+            fn unsigned_lt(&self, other: &Self) -> bool {
+                self < other
+            }
 
-        impl AbstractWord for $name {
-            type Word = Self;
-            type SmtWord<'st> = BitVec<'st, $bits>;
-            const BITS: usize = $bits;
+            type FromParam = ();
+            fn from_word<W: Word>(w: W, (): ()) -> Self {
+                w.into_word()
+            }
+
+            fn get_from_param(&self) -> () { () }
         }
 
         // Arithmetic
@@ -191,9 +210,39 @@ macro_rules! impl_word {
         }
 
         impl<'st> AbstractWord for BitVec<'st, $bits> {
+            type Bool = SmtBool<'st>;
             type Word = $name;
             type SmtWord<'st1> = BitVec<'st1, $bits>;
             const BITS: usize = $bits;
+
+            fn is_zero(&self) -> SmtBool<'st> {
+                BitVecExt::is_zero(self)
+            }
+
+            fn signed_lt(&self, other: &Self) -> SmtBool<'st> {
+                BitVecExt::signed_lt(*self, *other)
+            }
+
+            fn unsigned_lt(&self, other: &Self) -> SmtBool<'st> {
+                BitVecExt::unsigned_lt(*self, *other)
+            }
+
+            fn signed_positive(&self) -> SmtBool<'st> {
+                self.is_positive()
+            }
+
+            fn signed_negative(&self) -> SmtBool<'st> {
+                self.is_negative()
+            }
+
+            type FromParam = &'st Storage;
+            fn from_word<W: Word>(w: W, st: &'st Storage) -> Self {
+                w.into_word::<Self::Word>().into_smt_word(st)
+            }
+
+            fn get_from_param(&self) -> Self::FromParam {
+                smtlib::Sorted::st(self)
+            }
         }
     };
 }

@@ -1,5 +1,5 @@
 #[allow(unused_imports)]
-use lens_sl::{LiveValue, Register, Word4, Word8, Word64, inst, optimize};
+use lens_sl::{LiveValue, Register, Word4, Word8, Word64, inst, optimize_sl};
 #[allow(unused_imports)]
 use lens_sl::{NoTui, Tui};
 
@@ -56,20 +56,24 @@ fn main() {
     // Keep parsed live-out info available until `optimize` accepts it directly.
     let _live_out = live_out;
 
-    let p = optimize::<Word64, Word4>(
-        &program,
+    let tui = Tui::default();
+    let p = optimize_sl::<Word64, Word4>(
         &[
-            &[(Register(0), 0.into()), (Register(1), 0.into())],
-            &[(Register(0), 1.into()), (Register(1), 0.into())],
-            &[(Register(0), 0.into()), (Register(1), 1.into())],
-            &[(Register(0), 1.into()), (Register(1), 1.into())],
-            &[(Register(0), 20.into()), (Register(1), 1.into())],
-            &[(Register(0), 8.into()), (Register(1), 1.into())],
-            &[(Register(0), 93.into()), (Register(1), 1.into())],
-            &[(Register(0), 92.into()), (Register(1), 11.into())],
+            inst!(AddI, 0, 0, 5),
+            inst!(AddI Eq, 1, 0, 1),
+            inst!(Mul Eq, 1, 0, 1),
+            inst!(Orr, 0, 0, 1),
+            inst!(AddI Eq, 1, 0, 1),
+            inst!(AddI, 1, 0, 1),
+            inst!(Mul, 1, 0, 1),
+            inst!(AddI Eq, 1, 0, 1),
+            inst!(AddI Eq, 1, 0, 1),
         ],
-        &Tui::default(), // */ &NoTui,
+        [Register(0), Register(1)],
+        [0.into(), 1.into(), 20.into(), 8.into(), 11.into(), 92.into(), 93.into()],
+        &tui, // */ &NoTui,
     );
+    tui.close();
     let Some(p) = p else {
         println!("No equivalent program found");
         return;

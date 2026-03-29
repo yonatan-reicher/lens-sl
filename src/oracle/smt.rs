@@ -6,15 +6,16 @@ use std::pin::Pin;
 use smtlib::backend::cvc5_binary::Cvc5Binary;
 use smtlib::{Bool, Model, SatResultWithModel, Solver, Storage};
 
-pub struct SmtOracle<'st, I: Inst> {
+pub struct SmtOracle<'st, I: Inst<S>, S> {
     _st: Pin<Box<Storage>>,
     solver: Solver<'st, Cvc5Binary>,
     initial_state: I::StateVars<'st>,
     expected_final_state: I::SymbolicState<'st>,
     target_program: Vec<I>,
+    _marker: std::marker::PhantomData<*const S>,
 }
 
-impl<'st, I: Inst> SmtOracle<'st, I> {
+impl<'st, I: Inst<S>, S> SmtOracle<'st, I, S> {
     pub fn new(target_program: Vec<I>) -> Self {
         let st = Box::pin(Storage::new());
         let st_ref: &'st Storage = unsafe { &*(st.as_ref().get_ref() as *const Storage) };
@@ -28,12 +29,13 @@ impl<'st, I: Inst> SmtOracle<'st, I> {
             expected_final_state,
             solver,
             target_program,
+            _marker: Default::default(),
         }
     }
 }
 
-impl<'st, I: Inst> Oracle<[I], I::State> for SmtOracle<'st, I> {
-    fn check_program(&mut self, program: &[I]) -> Result<(), super::CounterExample<I::State>> {
+impl<'st, I: Inst<S>, S: Clone> Oracle<[I], S> for SmtOracle<'st, I, S> {
+    fn check_program(&mut self, program: &[I]) -> Result<(), super::CounterExample<S>> {
         // Clone these before borrowing self.solver mutably via scope.
         let initial_state = self.initial_state.clone();
         let expected_output = self.expected_final_state.clone();
@@ -86,8 +88,7 @@ fn new_solver<'st>(st: &'st Storage) -> Solver<'st, Cvc5Binary> {
     solver
 }
 
-pub trait Inst: Sized + Debug {
-    type State: Clone + Debug;
+pub trait Inst<State>: Sized + Debug {
     /// A representation of the state as SMT constants.
     type StateVars<'st>: Clone + Debug + Into<Self::SymbolicState<'st>> + 'st;
     /// A symbolic representation of the state.
@@ -99,9 +100,9 @@ pub trait Inst: Sized + Debug {
 
     fn step_symbolic<'st>(&self, s: &mut Self::SymbolicState<'st>);
 
-    fn step(&self, s: &mut Self::State);
+    fn step(&self, s: &mut State);
 
-    fn extract_from_model<'st>(model: &Model<'st>, s: Self::StateVars<'st>) -> Self::State;
+    fn extract_from_model<'st>(model: &Model<'st>, s: Self::StateVars<'st>) -> State;
 
     // -- default implementations --
 
@@ -109,7 +110,7 @@ pub trait Inst: Sized + Debug {
         program.iter().for_each(|inst| inst.step_symbolic(s))
     }
 
-    fn run(program: &[Self], s: &mut Self::State) {
+    fn run(program: &[Self], s: &mut State) {
         program.iter().for_each(|inst| inst.step(s))
     }
 }
@@ -144,9 +145,7 @@ mod tests {
         }
     }
 
-    impl Inst for I {
-        type State = [i64; N];
-
+    impl Inst<[i64; N]> for I {
         type StateVars<'st> = StateVars<'st>;
 
         type SymbolicState<'st> = [Int<'st>; N];
@@ -173,13 +172,13 @@ mod tests {
             }
         }
 
-        fn step(&self, s: &mut Self::State) {
+        fn step(&self, s: &mut [i64; N]) {
             match self {
                 I::Add(x, y) => s[*x] += s[*y],
             }
         }
 
-        fn extract_from_model<'st>(model: &Model, s: Self::StateVars<'st>) -> Self::State {
+        fn extract_from_model<'st>(model: &Model, s: Self::StateVars<'st>) -> [i64; N] {
             std::array::from_fn(|i| {
                 let int = model.eval(s.vars[i]).expect("variable not found in model");
                 int_term_to_i128(int).unwrap() as i64
