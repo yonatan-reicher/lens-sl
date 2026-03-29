@@ -59,6 +59,7 @@ impl ArgType {
 )]
 #[cfg_attr(test, derive(proptest_derive::Arbitrary))]
 #[display("{}", self.to_string())]
+/// TODO: Rename to cond
 pub enum CondCode {
     /// Always (unconditional)
     /// In real Arm, this is actually the 15th condition code, but for we put it first because we
@@ -294,18 +295,42 @@ impl From<Register> for Word8 {
     }
 }
 
-/// A single instruction.
-#[derive(Clone, Copy, derive_more::Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, derive_more::Display, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(test, derive(proptest_derive::Arbitrary))]
-#[debug("{op_code:?}{}{args:?}",
-    match cond_code {
-        CondCode::Al => "".to_string(),
-        _ => format!("{cond_code:?}"),
-    }
-)]
+pub enum ShiftCode {
+    None,
+    /// Arithmetic shift right - shift right but keep MSB the same.
+    /// Must have 1 <= n <= 32.
+    #[display("asr #{_0}")]
+    Asr(u8),
+    /// Logical shift left.
+    /// NOTE: There exists a synonym called `asl`, very confusing. lol.
+    /// Must have 1 <= n <= 31.
+    #[display("lsl #{_0}")]
+    Lsl(u8),
+    /// Logical shift right.
+    /// Must have 1 <= n <= 32
+    #[display("lsr #{_0}")]
+    Lsr(u8),
+    /// Rotate right.
+    /// Must have 1 <= n <= 31
+    #[display("ror #{_0}")]
+    Ror(u8),
+    /// Rotate right one bit, sign extended.
+    #[display("rrx")]
+    Rrx,
+}
+
+/// A single instruction.
+/// NOTE: This is missing the 'S' bit - an optional bit toggling whether condition codes (flags)
+/// should be updated. In Lens, they pretend it doesn't exist and that only `cmp` and `tst` update
+/// the flags. When in Rome, act like a Roman.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(test, derive(proptest_derive::Arbitrary))]
 pub struct Inst<W> {
     pub op_code: OpCode,
     pub cond_code: CondCode,
+    pub shift: ShiftCode,
     pub args: [W; 3],
 }
 
@@ -538,6 +563,7 @@ impl<W: Word> Inst<W> {
         Inst {
             op_code: self.op_code,
             cond_code: self.cond_code,
+            shift: self.shift,
             args: [
                 reduce_arg(reducer, self.args[0], arg_types[0], &info),
                 reduce_arg(reducer, self.args[1], arg_types[1], &info),
@@ -568,6 +594,7 @@ impl<W: Word> Inst<W> {
                 extend_arg(reducer, args[2], arg_types[2]).map(move |arg2| Inst {
                     op_code: self.op_code,
                     cond_code: self.cond_code,
+                    shift: self.shift,
                     args: [arg0, arg1, arg2],
                 })
             })
@@ -582,30 +609,73 @@ impl<W: Word> Inst<W> {
     }
 }
 
+fn fmt_inst(
+    Inst {
+        op_code,
+        cond_code,
+        shift,
+        args,
+    }: &Inst<&str>, // Look at this cute hack! Taking the arguments as strings.
+    f: &mut Formatter,
+) -> fmt::Result {
+    let args = args
+        .iter()
+        .zip(op_code.arg_types())
+        .map(|(arg, arg_type)| match arg_type {
+            ArgType::Reg(..) => format!("r{arg}"),
+            ArgType::Imm => format!("#{arg}"),
+            ArgType::Unused => "-".to_string(),
+        })
+        .collect::<Vec<_>>();
+    #[rustfmt::skip] {
+                                        write!(f, "{op_code}")?;
+        if *cond_code != CondCode::Al { write!(f, "{cond_code}")? };
+                                        write!(f, " {}, {}, {}", args[0], args[1], args[2])?;
+        if *shift != ShiftCode::None  { write!(f, ", {}", shift)? };
+    };
+    Ok(())
+}
+
+impl<W: Debug> Debug for Inst<W> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        let arg_strings = self.args.each_ref().map(|a| format!("{a:?}"));
+        fmt_inst(
+            &Inst {
+                op_code: self.op_code,
+                cond_code: self.cond_code,
+                shift: self.shift,
+                args: arg_strings.each_ref().map(|s| s.as_str()),
+            },
+            f,
+        )
+    }
+}
+
 impl<W: Display> Display for Inst<W> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        let Inst {
-            op_code,
-            cond_code,
-            args,
-        } = self;
-        let args = args
-            .iter()
-            .zip(op_code.arg_types())
-            .map(|(arg, arg_type)| match arg_type {
-                ArgType::Reg(..) => format!("r{arg}"),
-                ArgType::Imm => format!("#{arg}"),
-                ArgType::Unused => "-".to_string(),
-            })
-            .collect::<Vec<_>>();
-        if *cond_code == CondCode::Al {
-            write!(f, "{op_code} {}, {}, {}", args[0], args[1], args[2])
-        } else {
-            write!(
-                f,
-                "{op_code}{cond_code} {}, {}, {}",
-                args[0], args[1], args[2]
-            )
+        let arg_strings = self.args.each_ref().map(|a| format!("{a}"));
+        fmt_inst(
+            &Inst {
+                op_code: self.op_code,
+                cond_code: self.cond_code,
+                shift: self.shift,
+                args: arg_strings.each_ref().map(|s| s.as_str()),
+            },
+            f,
+        )
+    }
+}
+
+impl ShiftCode {
+    fn apply<W: AbstractWord>(&self, x: W) -> W {
+        use ShiftCode::*;
+        match *self {
+            None => x,
+            Asr(i) => todo!(),
+            Lsl(i) => todo!(),
+            Lsr(i) => todo!(),
+            Ror(i) => todo!(),
+            Rrx => todo!(),
         }
     }
 }
@@ -613,12 +683,16 @@ impl<W: Display> Display for Inst<W> {
 /// A macro to create an instruction more easily.
 #[macro_export]
 macro_rules! inst {
-    ( $op_code:ident $cond_code:ident, $( $arg:expr ),* $(,)? ) => {
+    ( $op_code:ident $cond_code:ident, $( $arg:expr ),* $(; shift $shift:ident $( ($shift_arg:expr) )? )? ) => {
         {
             let args_iter = [$( $arg ),*];
+            #[allow(unused_assignments, unused_mut)]
+            let mut shift = $crate::ShiftCode::None;
+            $( shift = $crate::ShiftCode::$shift $( ($shift_arg) )?; )?
             $crate::Inst {
                 op_code: $crate::OpCode::$op_code,
                 cond_code: $crate::CondCode::$cond_code,
+                shift,
                 args: [
                     args_iter.get(0).cloned().unwrap_or(0usize).into(),
                     args_iter.get(1).cloned().unwrap_or(0usize).into(),
@@ -627,8 +701,8 @@ macro_rules! inst {
             }
         }
     };
-    ( $op_code:ident, $( $arg:expr ),* $(,)? ) => {
-        inst!($op_code Al, $( $arg ),* )
+    ($op_code:ident, $( $arg:expr ),* $(;  shift $shift:ident $( ($shift_arg:expr) )? )? ) => {
+        inst!($op_code Al, $( $arg ),* $(;  shift $shift $( ($shift_arg) )? )? )
     };
 }
 
