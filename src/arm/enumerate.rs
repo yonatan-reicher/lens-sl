@@ -149,7 +149,9 @@ impl<'a, W: Word> Enumerator<'a, W> {
     }
 
     fn advance_shift(&mut self) -> Option<()> {
-        let max = u8::try_from(self.possible_shift_args().count()).unwrap() - 1;
+        let max = u8::try_from(self.possible_shift_args().count())
+            .expect("there's no way there are so many shift arguments that they do not fit in a u8 - by the pigeon hole principle!")
+            .checked_sub(1)?;
         use ShiftCode::*;
         #[rustfmt::skip]
         let next = match self.shift {
