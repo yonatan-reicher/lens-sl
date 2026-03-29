@@ -77,7 +77,9 @@ impl Direction {
 
 pub use arm::parse;
 pub use arm::parse::{LiveValue, info_from_file, liveness_from_file};
-pub use arm::{BackwardMap, CondCode, Flags, FlagsBitField, Inst, OpCode, Register, State};
+pub use arm::{
+    BackwardMap, CondCode, Flags, FlagsBitField, Inst, OpCode, Register, ShiftCode, State,
+};
 pub use main_loop::optimize;
 pub use tui::{NoTui, Tui, TuiHook};
 pub use word::{Word, Word4, Word8, Word64};
