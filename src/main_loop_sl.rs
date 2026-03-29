@@ -36,9 +36,7 @@ type Graph<W> = graph::Graph<(MaskedState<W>, MaskedState<W>), Programs<W>>;
 
 // ========================================== Oracle ==============================================
 
-impl<W: Word> oracle::smt::Inst for Inst<W> {
-    type State = State<W>;
-
+impl<W: Word> oracle::smt::Inst<State<W>> for Inst<W> {
     type StateVars<'st> = StateVars<'st, W::SmtWord<'st>>;
 
     type SymbolicState<'st> = SymbolicState<'st, W::SmtWord<'st>>;
@@ -58,14 +56,14 @@ impl<W: Word> oracle::smt::Inst for Inst<W> {
         self.run_symbolic(s);
     }
 
-    fn step<'st>(&self, s: &mut Self::State) {
+    fn step<'st>(&self, s: &mut State<W>) {
         self.run(s);
     }
 
     fn extract_from_model<'st>(
         model: &smtlib::Model<'st>,
         s: StateVars<'st, W::SmtWord<'st>>,
-    ) -> Self::State {
+    ) -> State<W> {
         // == Registers ==
         let mut state = State::default();
         for (i, var) in s.registers.iter().enumerate() {
