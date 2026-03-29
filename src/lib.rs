@@ -5,6 +5,8 @@ mod word;
 mod graph;
 /// Definitions of how we represent programs in an efficient way.
 mod programs;
+/// Rewrite of programs module for separation logic!
+mod programs_sl;
 /// Converting programs to equivalent ones with a reduced bit-width.
 mod reduce_bit_width;
 /// The instruction set.
@@ -17,6 +19,8 @@ mod collect_registers;
 mod tui;
 /// Main loop where the big picture stuff happens.
 mod main_loop;
+/// Rewrite of main loop with separation logic.
+mod main_loop_sl;
 
 // Here is a diagram of the dependency structure between some of the main modules:
 //
@@ -79,5 +83,6 @@ pub use arm::parse;
 pub use arm::parse::{LiveValue, info_from_file, liveness_from_file};
 pub use arm::{BackwardMap, CondCode, Flags, FlagsBitField, Inst, OpCode, Register, State};
 pub use main_loop::optimize;
+pub use main_loop_sl::optimize as optimize_sl;
 pub use tui::{NoTui, Tui, TuiHook};
 pub use word::{Word, Word4, Word8, Word64};

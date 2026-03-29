@@ -87,6 +87,17 @@ impl<State: Debug + Display + Send + 'static> Default for Tui<State> {
     }
 }
 
+impl<State> Tui<State> {
+    pub fn close(self) {
+        let Self {
+            _io_thread,
+            channel,
+        } = self;
+        std::mem::drop(channel);
+        let _ = _io_thread.join();
+    }
+}
+
 impl<Graph, State: Debug> TuiHook<Graph, State> for Tui<State>
 where
     Graph: Into<GraphState>,
