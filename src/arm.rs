@@ -213,10 +213,10 @@ define_instructions! {
     | OpCode  | Arg 1    | Arg 2    | Arg 3    | String | Commutative | Affects Flags |
     -----------------------------------------------------------------------------------
     | Nop     | Unused   | Unused   | Unused   | "nop"  |    true     |     false     |
-    | Add     | Reg(Inp) | Reg(Out) | Reg(Inp) | "add"  |    true     |     true      |
-    | AddI    | Reg(Inp) | Reg(Out) | Imm      | "add"  |    false    |     true      |
-    | Sub     | Reg(Inp) | Reg(Out) | Reg(Inp) | "sub"  |    false    |     true      |
-    | SubI    | Reg(Inp) | Reg(Out) | Imm      | "sub"  |    false    |     true      |
+    | Add     | Reg(Inp) | Reg(Out) | Reg(Inp) | "add"  |    true     |     false     |
+    | AddI    | Reg(Inp) | Reg(Out) | Imm      | "add"  |    false    |     false     |
+    | Sub     | Reg(Inp) | Reg(Out) | Reg(Inp) | "sub"  |    false    |     false     |
+    | SubI    | Reg(Inp) | Reg(Out) | Imm      | "sub"  |    false    |     false     |
     | And     | Reg(Inp) | Reg(Out) | Reg(Inp) | "and"  |    true     |     false     |
     | Eor     | Reg(Inp) | Reg(Out) | Reg(Inp) | "eor"  |    true     |     false     |
     | Mov     | Reg(Inp) | Reg(Out) | Unused   | "mov"  |    false    |     false     |
