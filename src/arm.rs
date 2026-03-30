@@ -658,7 +658,6 @@ mod tests {
     use super::*;
     use crate::arm::state::Mask;
     use functionality::prelude::*;
-    use proptest::prelude::*;
     use proptest::property_test;
     use std::collections::HashSet;
 
