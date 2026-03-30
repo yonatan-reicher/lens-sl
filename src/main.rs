@@ -58,19 +58,8 @@ fn main() {
 
     let tui = Tui::default();
     let p = optimize_sl::<Word64, Word4>(
-        &[
-            inst!(AddI, 0, 0, 5),
-            inst!(AddI Eq, 1, 0, 1),
-            inst!(Mul Eq, 1, 0, 1),
-            inst!(Orr, 0, 0, 1),
-            inst!(AddI Eq, 1, 0, 1),
-            inst!(AddI, 1, 0, 1),
-            inst!(Mul, 1, 0, 1),
-            inst!(AddI Eq, 1, 0, 1),
-            inst!(AddI Eq, 1, 0, 1),
-        ],
-        [Register(0), Register(1)],
-        [0.into(), 1.into(), 20.into(), 8.into(), 11.into(), 92.into(), 93.into()],
+        &program,
+        &[],
         &tui, // */ &NoTui,
     );
     tui.close();
