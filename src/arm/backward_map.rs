@@ -125,3 +125,118 @@ impl<W: Word> std::ops::Index<(Inst<W>, State<W>)> for BackwardMap<W> {
             .unwrap_or(&self.empty_vec)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Flags, inst};
+
+    #[test]
+    fn test_backward_map_some_not_empty() {
+        type W = Word4;
+        let bm = BackwardMap::<W>::new_recalculate(&[Register(1)]);
+        assert!(bm.map.iter().any(|((inst, state), inputs)| {
+            println!("Instruction: {inst}, Output State: {state}");
+            println!("Input States:");
+            inputs.iter().for_each(|input| print!("  {input}"));
+            println!();
+            !inputs.is_empty()
+        }));
+    }
+
+    #[test]
+    fn test_backward_map_some_has_more_than_4_inputs() {
+        type W = Word4;
+        let bm = BackwardMap::<W>::new_recalculate(&[Register(1)]);
+        assert!(bm.map.iter().any(|((inst, state), inputs)| {
+            println!("Instruction: {inst}, Output State: {state}");
+            println!("Input States:");
+            inputs.iter().for_each(|input| print!("  {input}"));
+            println!();
+            inputs.len() > 4
+        }));
+    }
+
+    #[test]
+    fn test_backward_map() {
+        type W = Word4;
+        let bm = BackwardMap::<W>::new_recalculate(&[Register(1)]);
+        let inst: Inst<W> = inst!(MovI, 1, 12);
+        let mut output = State::<W>::default();
+        output.set_register(Register(1), 12.into());
+        output.set_register(Register(2), 6.into());
+        output.set_flags(
+            Flags {
+                z: false,
+                n: true,
+                c: false,
+                v: true,
+            }
+            .into(),
+        );
+        let inputs = inst
+            .run_backward(output, &bm)
+            .into_iter()
+            .collect::<Vec<_>>();
+        dbg!(&inputs);
+        assert_eq!(inputs.len(), 16);
+    }
+
+    #[test]
+    fn run_nop_backwards_one_option() {
+        type W = Word4;
+        let bm = BackwardMap::<W>::new_recalculate(&[Register(1)]);
+        let inst = inst!(Nop,);
+        let mut output = State::<W>::default();
+        output.set_register(Register(1), 12.into());
+        output.set_register(Register(2), 6.into());
+        output.set_flags(
+            Flags {
+                z: false,
+                n: true,
+                c: false,
+                v: true,
+            }
+            .into(),
+        );
+        let inputs = inst
+            .run_backward(output, &bm)
+            .into_iter()
+            .collect::<Vec<_>>();
+        dbg!(&inputs);
+        assert_eq!(inputs.len(), 1);
+    }
+
+    #[test]
+    #[ignore]
+    fn backwards_map_specific_state() {
+        type W = Word4;
+        let bm = BackwardMap::<W>::new(&[Register(0), Register(1)]).unwrap();
+        let mut state = State::<W>::default();
+        state.set_register(Register(0), 15.into());
+        state.set_register(Register(1), 15.into());
+        state.set_flags(
+            Flags {
+                z: false,
+                n: true,
+                c: false,
+                v: true,
+            }
+            .into(),
+        );
+        let ei = EnumerationInfo {
+            registers: EnumerationInfoOptions::Limited(&[Register(0), Register(1)]),
+            immediates: EnumerationInfoOptions::Limited(&[0.into(), 1.into(), 5.into()]),
+        };
+        for inst in Inst::enumerate(ei) {
+            let x = &bm[(inst, state)];
+            println!("Instruction: {inst}, Output State: {state}");
+            println!("Input States: {x:?}");
+            if !x.is_empty() {
+                println!("Found non-empty input states for this instruction and output state!");
+                return;
+            }
+        }
+        panic!("No instruction produced non-empty input states for the given output state!");
+    }
+}
