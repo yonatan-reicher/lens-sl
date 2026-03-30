@@ -1,4 +1,4 @@
-use super::{Inst, Register, State, EnumerationInfoOptions, EnumerationInfo};
+use super::{EnumerationInfo, EnumerationInfoOptions, Inst, Register, State};
 use crate::all::All;
 use crate::word::prelude::*;
 use rustc_hash::FxHashMap;
