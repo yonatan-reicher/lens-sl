@@ -97,7 +97,7 @@ bitflags::bitflags! {
 
 /// A liveness mask. For each register, is it used or not. Has just one flag for the whole flags
 /// register (because flags are used and written to together).
-#[derive(Clone, Copy, Debug, Default, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Mask<B = bool> {
     pub registers: [B; Register::COUNT as usize],
     pub flags: B,
@@ -609,8 +609,8 @@ impl<B> Mask<B> {
     }
 }
 
-impl<B: Bool> BoolEq<B> for Mask<B> {
-    fn eq(&self, other: &Self) -> B {
+impl<'st> BoolEq<SmtBool<'st>> for Mask<SmtBool<'st>> {
+    fn eq(&self, other: &Self) -> SmtBool<'st> {
         let Mask { registers, flags } = self;
         all_eq(registers.iter().zip(&other.registers)) & flags.eq(&other.flags)
     }
