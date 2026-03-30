@@ -20,6 +20,8 @@ use smtlib::terms::Const;
 // proptest
 #[cfg(test)]
 use proptest::prelude::*;
+#[cfg(test)]
+use proptest_derive::*;
 // other
 use itertools::Itertools;
 
@@ -48,6 +50,7 @@ pub trait StateTrait<W: AbstractWord>: Get<W> + Set<W> {
 // ============================= State =============================
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(test, derive(Arbitrary))]
 pub struct State<W> {
     /// This vector is always sorted by register. Registers that are zero are omitted.
     /// TODO: Change this!

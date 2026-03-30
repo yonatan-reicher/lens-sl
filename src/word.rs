@@ -180,8 +180,10 @@ macro_rules! impl_word {
         impl_op!(BitOr  for $name fn bitor(a, b) = Self::from(a.0 | b.0));
         impl_op!(BitXor for $name fn bitxor(a, b) = Self::from(a.0 ^ b.0));
         impl_op!(Not    for $name fn not(a) = Self::from(!a.0));
-        impl_op!(Shl    for $name fn shl(a, b) = Self::from(a.0 << b.0));
-        impl_op!(Shr    for $name fn shr(a, b) = Self::from(a.0 >> b.0));
+        // impl_op!(Shl    for $name fn shl(a, b) = Self::from(a.0 << b.0));
+        // impl_op!(Shr    for $name fn shr(a, b) = Self::from(a.0 >> b.0));
+        impl_op!(Shl    for $name fn shl(a, b) = Self::from(a.0.unbounded_shl(to_u32_saturating(b.0))));
+        impl_op!(Shr    for $name fn shr(a, b) = Self::from(a.0.unbounded_shr(to_u32_saturating(b.0))));
 
         impl All for $name {
             type Iter = std::iter::Map<std::ops::RangeInclusive<$t>, fn($t) -> $name>;
@@ -191,10 +193,9 @@ macro_rules! impl_word {
         #[cfg(test)]
         impl Arbitrary for $name {
             type Parameters = ();
-            type Strategy = proptest::arbitrary::Mapped<$t, $name>;
-
+            type Strategy = proptest::strategy::Map<std::ops::RangeInclusive<usize>, fn(usize) -> Self>;
             fn arbitrary_with((): ()) -> Self::Strategy {
-                any::<$t>().prop_map(Self::from)
+                (0..=$mask).prop_map(Self::from)
             }
         }
 
@@ -270,6 +271,11 @@ macro_rules! impl_op {
     };
 }
 
+/// Assumes `T` is an unsigned number type
+fn to_u32_saturating<T: TryInto<u32>>(x: T) -> u32 {
+    x.try_into().unwrap_or(u32::MAX)
+}
+
 impl_word!(Word4(u8)   bits 4  signed i8  mask 0x0F);
 impl_word!(Word5(u8)   bits 5  signed i8  mask 0x1F);
 impl_word!(Word8(u8)   bits 8  signed i8  mask 0xFF);
@@ -289,5 +295,15 @@ mod tests {
     #[property_test]
     fn word4_add_word4_eq_neg_neg_word4_sub_word4(x: Word4, y: Word4) {
         prop_assert_eq!(x + y, -(-x - y));
+    }
+
+    #[test]
+    fn shift_left_overflows_word8() {
+        assert_eq!(Word8(200) << Word8(2), Word8(32));
+    }
+
+    #[test]
+    fn shift_left_overflows_word64() {
+        assert_eq!(Word64(!0u64) << Word64(2), Word64(!0u64 ^ 0b11));
     }
 }

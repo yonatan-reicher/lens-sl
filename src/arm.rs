@@ -223,6 +223,8 @@ define_instructions! {
     | MovI    | Reg(Inp) | Imm      | Unused   | "mov"  |    false    |     false     |
     | Mul     | Reg(Inp) | Reg(Out) | Reg(Inp) | "mul"  |    true     |     false     |
     | Orr     | Reg(Inp) | Reg(Out) | Reg(Inp) | "orr"  |    true     |     false     |
+    | Cmp     | Reg(Inp) | Reg(Inp) | Unused   | "cmp"  |    false    |     true      |
+    | CmpI    | Reg(Inp) | Imm      | Unused   | "cmp"  |    false    |     true      |
 }
 
 /// A number representing a register.
@@ -326,7 +328,6 @@ pub enum ShiftCode {
 /// should be updated. In Lens, they pretend it doesn't exist and that only `cmp` and `tst` update
 /// the flags. When in Rome, act like a Roman.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(test, derive(proptest_derive::Arbitrary))]
 pub struct Inst<W> {
     pub op_code: OpCode,
     pub cond_code: CondCode,
@@ -432,7 +433,7 @@ impl<W: Word> BackwardMap<W> {
                 registers: EnumerationInfoOptions::Limited(registers),
                 immediates: EnumerationInfoOptions::Unlimited,
             };
-            for inst in Enumerator::new(ei) {
+            for inst in Inst::enumerate(ei) {
                 input.clone_to(&mut output);
                 inst.run(&mut output);
                 // Store!
@@ -666,6 +667,34 @@ impl<W: Display> Display for Inst<W> {
     }
 }
 
+#[cfg(test)]
+impl<W: Word + Arbitrary> Arbitrary for Inst<W> {
+    type Parameters = ();
+    type Strategy = BoxedStrategy<Self>;
+
+    fn arbitrary_with((): ()) -> Self::Strategy {
+        any::<(OpCode, CondCode, ShiftCode)>()
+            .prop_flat_map(|(op_code, cond_code, shift)| {
+                op_code
+                    .arg_types()
+                    .map(|arg_type| match arg_type {
+                        ArgType::Reg(..) => any::<Register>()
+                            .prop_map(|r| Word8::from(r).into_word())
+                            .boxed(),
+                        ArgType::Imm => any::<W>().boxed(),
+                        ArgType::Unused => Just(0.into()).boxed(),
+                    })
+                    .prop_map(move |args| Inst {
+                        op_code,
+                        cond_code,
+                        shift,
+                        args,
+                    })
+            })
+            .boxed()
+    }
+}
+
 /// A macro to create an instruction more easily.
 #[macro_export]
 macro_rules! inst {
@@ -719,19 +748,16 @@ pub fn what_program_reads<W: Word>(
     prog: impl IntoIterator<Item = Inst<W>>,
     input: &State<W>,
 ) -> BitMask {
+    // This will be the parts of the input that we have read.
     let mut input_mask = BitMask::EMPTY;
-    let mut current = state::Masked::<W>::default();
+    // And this will be the parts of the output that we have written to.
+    let mut output_mask = BitMask::EMPTY;
+    let mut state = *input;
     for inst in prog {
-        let read_mask = inst.read_mask(current.state()).into_bit_mask();
-        // Add things that we are reading that we haven't seen yet.
-        let newly_read_mask = read_mask & !current.mask();
-        input_mask = input_mask | newly_read_mask;
-        current = current | input.masked(input_mask.into());
-        // Now update. This also marks things that we update as seen, so they won't be in the final
-        // output mask.
-        current = inst
-            .run_masked(current)
-            .expect("The updating of the current state above should take care of this");
+        let (mut read_mask, mut write_mask) = Default::default();
+        state = semantics::run(&inst, &state, &mut read_mask, &mut write_mask, &());
+        input_mask = input_mask | (read_mask.into_bit_mask() & !output_mask);
+        output_mask = output_mask | write_mask.into();
     }
     input_mask
 }
@@ -749,11 +775,11 @@ pub use parse::parse;
 
 #[cfg(test)]
 mod tests {
-    use functionality::Mutate;
-
-    use crate::arm::state::Mask;
-
     use super::*;
+    use crate::arm::state::Mask;
+    use functionality::prelude::*;
+    use proptest::prelude::*;
+    use proptest::property_test;
     use std::collections::HashSet;
 
     #[test]
@@ -831,25 +857,33 @@ mod tests {
     fn test_backward_map_some_not_empty() {
         type W = Word4;
         let bm = BackwardMap::<W>::new_recalculate(&[Register(1)]);
-        let mut n_empty = 0;
-        bm.map.iter().for_each(|((inst, state), inputs)| {
+        assert!(bm.map.iter().any(|((inst, state), inputs)| {
             println!("Instruction: {inst}, Output State: {state}");
             println!("Input States:");
             inputs.iter().for_each(|input| print!("  {input}"));
             println!();
-            if inputs.is_empty() {
-                n_empty += 1;
-            }
-        });
-        println!("Number of entries with empty input states: {n_empty}");
-        assert!(n_empty < bm.map.len());
+            !inputs.is_empty()
+        }));
+    }
+
+    #[test]
+    fn test_backward_map_some_has_more_than_4_inputs() {
+        type W = Word4;
+        let bm = BackwardMap::<W>::new_recalculate(&[Register(1)]);
+        assert!(bm.map.iter().any(|((inst, state), inputs)| {
+            println!("Instruction: {inst}, Output State: {state}");
+            println!("Input States:");
+            inputs.iter().for_each(|input| print!("  {input}"));
+            println!();
+            inputs.len() > 4
+        }));
     }
 
     #[test]
     fn test_backward_map() {
         type W = Word4;
         let bm = BackwardMap::<W>::new_recalculate(&[Register(1)]);
-        let inst: Inst<W> = inst!(AddI, 1, 1, 5);
+        let inst: Inst<W> = inst!(MovI, 1, 12);
         let mut output = State::<W>::default();
         output.set_register(Register(1), 12.into());
         output.set_register(Register(2), 6.into());
@@ -930,29 +964,22 @@ mod tests {
 
     // TODO: Change when we add OpCode::Cmp
     #[test]
-    #[ignore]
     fn what_program_reads_example_1() {
         type W = Word8;
         let p: Vec<Inst<W>> = vec![inst!(AddI, 0, 0, 5)];
         let input = State::default();
         let input_mask = what_program_reads(p.clone(), &input);
         let output = run_program_masked(p, input.masked(input_mask.into()));
-        assert_eq!(
-            input_mask,
-            Mask::EMPTY.mutate(|m| m[Register(0)] = true).into()
-        );
+        assert_eq!(input_mask, Mask::just_register(Register(0)).into());
         assert_eq!(
             output.unwrap(),
-            input.mutate(|i| i[Register(0)] = 5.into()).masked(
-                Mask::EMPTY
-                    .mutate(|m| m[Register(0)] = true)
-                    .mutate(|m| m.flags = true)
-            )
+            input
+                .mutate(|i| i[Register(0)] = 5.into())
+                .masked(Mask::just_register(Register(0)).into())
         );
     }
 
     #[test]
-    #[ignore]
     fn what_program_reads_example_2() {
         type W = Word8;
         let p: Vec<Inst<W>> = vec![
@@ -960,16 +987,30 @@ mod tests {
             inst!(AddI Eq, 1, 0, 1),
             inst!(Mul Eq, 1, 0, 1),
         ];
+        // The zero flag is false, so the two last instructions should not run.
         let input = State::default();
         let input_mask = what_program_reads(p.clone(), &input);
         let output = run_program_masked(p, input.masked(input_mask.into()));
-        let m = Mask::EMPTY.mutate(|m| m[Register(0)] = true);
+        let m = Mask::just_register(Register(0)) | Mask::JUST_FLAGS;
         assert_eq!(input_mask, m.into());
         assert_eq!(
             output.unwrap(),
-            input
-                .mutate(|i| i[Register(0)] = 5.into())
-                .masked(m | Mask::JUST_FLAGS),
+            input.mutate(|i| i[Register(0)] = 5.into()).masked(m),
         );
+    }
+
+    #[property_test]
+    fn what_program_reads_is_enough_for_run_program_masked(
+        prog: [Inst<Word64>; 1],
+        state: State<Word64>,
+    ) {
+        println!("==== Starting! ====");
+        dbg!(&prog, &state);
+        let mask = what_program_reads(prog, &state);
+        dbg!(&mask);
+        let state = state.masked(mask.into());
+        let out = dbg!(run_program_masked(prog, state));
+        prop_assert!(out.is_some());
+        println!("Success!");
     }
 }

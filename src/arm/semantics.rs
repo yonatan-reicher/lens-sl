@@ -53,12 +53,22 @@ where
             s.set_reg($r, res);
         }};
     }
+    macro_rules! set_flags {
+        ($e:expr) => {{
+            // Need this to be in a variable to deal with borrowing rules.
+            let res = $e;
+            s.set_flags(res);
+        }};
+    }
 
     // Shift!
     let mut carry_out = None;
     let mut shift = |x: W| {
-        let (x, c) = inst.shift.apply(x, input.flags().c);
-        carry_out = Some(c);
+        let (x, c) = inst.shift.apply(
+            x,
+            input.flags().c, /* Give c without reading the flags */
+        );
+        carry_out = c;
         x
     };
 
@@ -66,28 +76,18 @@ where
     use OpCode::*;
     match inst.op_code {
         Nop => (),
-        Add => {
-            // s.set_flags(Flags::from_add(r![1], r![2]));
-            set_reg!(regs[0], r![1] + shift(r![2]));
-        }
-        AddI => {
-            // s.set_flags(Flags::from_add(r![1], imm![2]));
-            set_reg!(regs[0], r![1] + shift(imm![2]));
-        }
-        Sub => {
-            // s.set_flags(Flags::from_sub(r![1], r![2]));
-            set_reg!(regs[0], r![1] + -shift(r![2]));
-        }
-        SubI => {
-            // s.set_flags(Flags::from_sub(r![1], imm![2]));
-            set_reg!(regs[0], r![1] + -shift(imm![2]));
-        }
+        Add => set_reg!(regs[0], r![1] + shift(r![2])),
+        AddI => set_reg!(regs[0], r![1] + shift(imm![2])),
+        Sub => set_reg!(regs[0], r![1] + -shift(r![2])),
+        SubI => set_reg!(regs[0], r![1] + -shift(imm![2])),
         And => set_reg!(regs[0], r![1] & shift(r![2])),
         Eor => set_reg!(regs[0], r![1] ^ shift(r![2])),
         Mov => set_reg!(regs[0], shift(r![1])),
         MovI => set_reg!(regs[0], shift(imm![1])),
         Mul => set_reg!(regs[0], r![1] * shift(r![2])),
         Orr => set_reg!(regs[0], r![1] | shift(r![2])),
+        Cmp => set_flags!(Flags::from_sub(r![0], shift(r![1]))),
+        CmpI => set_flags!(Flags::from_sub(r![0], shift(imm![1]))),
     }
 
     // The shift could change the carry value (rrx). Let's update it.
@@ -178,26 +178,27 @@ impl<'a, W: AbstractWord, State: StateTrait<W>> ReadWriteTracker<'a, W::Bool, W,
 // =================================================================================================
 
 impl ShiftCode {
-    fn apply<W: AbstractWord>(&self, x: W, carry_in: W::Bool) -> (W, W::Bool) {
+    fn apply<W: AbstractWord>(&self, x: W, carry_in: W::Bool) -> (W, Option<W::Bool>) {
         let from_param = || x.get_from_param();
-        let make_msb = |on| on << W::Word::from(W::BITS).into_abstract_word::<W>(from_param());
-        let msb = |x| x >> convert(31);
-        let lsb = |x| x & convert(1);
-        let mut carry = carry_in;
         let convert = |i: Word5| i.into_abstract_word::<W>(from_param());
+        let make_msb = |on| on << W::Word::from(W::BITS - 1).into_abstract_word::<W>(from_param());
+        let msb = |x| x >> convert(31.into());
+        let lsb = |x| x & convert(1.into());
+        let mut carry = Option::None;
         use ShiftCode::*;
         let out = match *self {
             None => x,
             Asr(i) => (x >> convert(i)) | make_msb(msb(x)),
             Lsl(i) => x << convert(i),
             Lsr(i) => x >> convert(i),
-            Ror(i) => (x >> convert(i)) | make_msb(lsb(x)),
+            Ror(i) => (x >> convert(i)) | (x << convert(Word5::from(W::BITS) - i)),
             Rrx => {
                 // GODAMNIT!!! This was hard to implement and will majorly slow us down, and
                 // orginal Lens doesn't even f-ing implement it.
                 // TODO: How much faster are we without this?
-                carry = lsb(x).is_zero();
-                (x >> convert(1)) | make_msb(carry_in.if_then_else(convert(1), convert(0)))
+                carry = Some(lsb(x).is_zero());
+                (x >> convert(1.into()))
+                    | make_msb(carry_in.if_then_else(convert(1.into()), convert(0.into())))
             }
         };
         (out, carry)
@@ -228,7 +229,7 @@ mod tests {
 
     #[test]
     fn shift() {
-        let inst: Inst<Word64> = inst!(MovI, 0, 15; shift Lsl(2));
+        let inst: Inst<Word64> = inst!(MovI, 0, 15; shift Lsl(2.into()));
         let state = State::<Word64> {
             registers: [1.into(); 16],
             flags: Flags::default().into(),
