@@ -68,15 +68,15 @@ pub trait AbstractWord
     // + Sub<Output = Self> // Bit-vectors actually do not implement this
     + Div<Output = Self>
     + Mul<Output = Self>
+    + Neg<Output = Self>
     // Bitwise
     + BitAnd<Output = Self>
     + BitOr<Output = Self>
     + BitXor<Output = Self>
     + Not<Output = Self>
     + Shl<Output = Self>
-    + Neg<Output = Self>
+    + Shr<Output = Self>
     // + Rem<Output = Self>
-    // + Shr<Output = Self>
 {
     type Bool: Bool + IfThenElse<Self>;
     // One of these shall equal `Self`. And obviously, if B is bool, it's Word, and if it's SmtBool
