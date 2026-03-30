@@ -9,7 +9,6 @@ loop {
         | where name in [lens-sl]
         | group-by name
         | update cells { reject name ppid virtual }
-        | get lens-sl
     clear
     $x | table --expand -d 5 --theme none | print
     sleep 0.2sec
