@@ -20,7 +20,7 @@ smtlib = "0.3.0"
 proptest = { version = "1.9.0", features = ["attr-macro"] }
 proptest-derive = "0.7.0"
 
-[profile.dev]
+[profile.dev.benchmark]
 opt-level = 3
 lto = true
 debug = false
