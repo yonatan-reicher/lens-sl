@@ -180,11 +180,11 @@ impl<'a, W: AbstractWord, State: StateTrait<W>> ReadWriteTracker<'a, W::Bool, W,
 impl ShiftCode {
     fn apply<W: AbstractWord>(&self, x: W, carry_in: W::Bool) -> (W, W::Bool) {
         let from_param = || x.get_from_param();
-        let convert = |i| Word8::from(i).into_abstract_word::<W>(from_param());
         let make_msb = |on| on << W::Word::from(W::BITS).into_abstract_word::<W>(from_param());
         let msb = |x| x >> convert(31);
         let lsb = |x| x & convert(1);
         let mut carry = carry_in;
+        let convert = |i: Word5| i.into_abstract_word::<W>(from_param());
         use ShiftCode::*;
         let out = match *self {
             None => x,

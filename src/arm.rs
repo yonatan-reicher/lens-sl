@@ -302,20 +302,20 @@ pub enum ShiftCode {
     /// Arithmetic shift right - shift right but keep MSB the same.
     /// Must have 1 <= n <= 32.
     #[display("asr #{_0}")]
-    Asr(u8),
+    Asr(Word5),
     /// Logical shift left.
     /// NOTE: There exists a synonym called `asl`, very confusing. lol.
     /// Must have 1 <= n <= 31.
     #[display("lsl #{_0}")]
-    Lsl(u8),
+    Lsl(Word5),
     /// Logical shift right.
     /// Must have 1 <= n <= 32
     #[display("lsr #{_0}")]
-    Lsr(u8),
+    Lsr(Word5),
     /// Rotate right.
     /// Must have 1 <= n <= 31
     #[display("ror #{_0}")]
-    Ror(u8),
+    Ror(Word5),
     /// Rotate right one bit, sign extended.
     #[display("rrx")]
     Rrx,

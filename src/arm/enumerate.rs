@@ -91,22 +91,22 @@ impl<'a, W: Word> Enumerator<'a, W> {
         }
     }
 
-    fn possible_shift_args(&self) -> impl Iterator<Item = u8> {
+    fn possible_shift_args(&self) -> impl Iterator<Item = Word5> {
         self.ei
             .immediates
             .into_iter()
             .filter(|i| 1 <= Into::<usize>::into(*i) && Into::<usize>::into(*i) <= 32)
-            .map(|i| i.into_word::<Word8>().into())
+            .map(|i| i.into_word::<Word5>())
     }
 
     fn try_current_shift(&self) -> Option<ShiftCode> {
         use ShiftCode::*;
         Some(match self.shift {
             None => None,
-            Asr(i) => Asr(self.possible_shift_args().nth(i as usize)?),
-            Lsl(i) => Lsl(self.possible_shift_args().nth(i as usize)?),
-            Lsr(i) => Lsr(self.possible_shift_args().nth(i as usize)?),
-            Ror(i) => Ror(self.possible_shift_args().nth(i as usize)?),
+            Asr(i) => Asr(self.possible_shift_args().nth(i.into())?),
+            Lsl(i) => Lsl(self.possible_shift_args().nth(i.into())?),
+            Lsr(i) => Lsr(self.possible_shift_args().nth(i.into())?),
+            Ror(i) => Ror(self.possible_shift_args().nth(i.into())?),
             Rrx => Rrx,
         })
     }
@@ -149,17 +149,19 @@ impl<'a, W: Word> Enumerator<'a, W> {
     }
 
     fn advance_shift(&mut self) -> Option<()> {
-        let max = u8::try_from(self.possible_shift_args().count())
+        let max_u8 = u8::try_from(self.possible_shift_args().count())
             .expect("there's no way there are so many shift arguments that they do not fit in a u8 - by the pigeon hole principle!")
             .checked_sub(1)?;
+        let max = Word5::from(max_u8);
+        assert_eq!(u8::from(max), max_u8);
         use ShiftCode::*;
         #[rustfmt::skip]
         let next = match self.shift {
-            None => Asr(1),
-            Asr(i) => if i < max { Asr(i + 1) } else { Lsl(0) },
-            Lsl(i) => if i < max { Lsl(i + 1) } else { Lsr(0) },
-            Lsr(i) => if i < max { Lsr(i + 1) } else { Ror(0) },
-            Ror(i) => if i < max { Ror(i + 1) } else { Rrx },
+            None => Asr(1.into()),
+            Asr(i) => if i < max { Asr(i + 1.into()) } else { Lsl(0.into()) },
+            Lsl(i) => if i < max { Lsl(i + 1.into()) } else { Lsr(0.into()) },
+            Lsr(i) => if i < max { Lsr(i + 1.into()) } else { Ror(0.into()) },
+            Ror(i) => if i < max { Ror(i + 1.into()) } else { Rrx },
             Rrx => return Option::None,
         };
         self.shift = next;
@@ -403,11 +405,11 @@ mod tests {
 
     #[test]
     fn commutatives_are_half_trimmed() {
-        let v = to_vec(&EnumerationInfo::<Word4> {
+        let mut v = Enumerator::new(EnumerationInfo::<Word4> {
             registers: EnumerationInfoOptions::Unlimited,
             immediates: EnumerationInfoOptions::Unlimited,
         });
-        assert!(v.contains(&inst![Add, 1, 3, 5]));
+        assert!(v.clone().contains(&inst![Add, 1, 3, 5]));
         assert!(!v.contains(&inst![Add, 1, 5, 3]));
     }
 

@@ -271,12 +271,13 @@ macro_rules! impl_op {
 }
 
 impl_word!(Word4(u8)   bits 4  signed i8  mask 0x0F);
+impl_word!(Word5(u8)   bits 5  signed i8  mask 0x1F);
 impl_word!(Word8(u8)   bits 8  signed i8  mask 0xFF);
 impl_word!(Word64(u64) bits 64 signed i64 mask 0xFFFFFFFFFFFFFFFFusize);
 
 pub mod prelude {
     #[allow(unused_imports)]
-    pub use super::{AbstractWord, SmtWord, Word, Word4, Word8, Word64};
+    pub use super::{AbstractWord, SmtWord, Word, Word4, Word5, Word8, Word64};
     pub use crate::smtlib_utils::BitVecExt;
 }
 

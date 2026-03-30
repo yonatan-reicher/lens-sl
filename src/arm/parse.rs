@@ -13,7 +13,7 @@ use std::fs;
 
 use super::{ArgType, CondCode, OpCode, ShiftCode};
 use crate::arm;
-use crate::word::Word;
+use crate::word::{Word, Word5};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Data types
@@ -788,7 +788,7 @@ fn parse_cond_code(cond: &str) -> Result<CondCode, ParseError> {
     }
 }
 
-fn parse_shift_amount(amount: i64, op: &str) -> Result<u8, ParseError> {
+fn parse_shift_amount(amount: i64, op: &str) -> Result<Word5, ParseError> {
     let amount = u8::try_from(amount).map_err(|_| ParseError {
         message: format!("invalid shift amount '{amount}' for {op}"),
         line: 0,
@@ -806,7 +806,7 @@ fn parse_shift_amount(amount: i64, op: &str) -> Result<u8, ParseError> {
             col: 0,
         });
     }
-    Ok(amount)
+    Ok(amount.into())
 }
 
 fn parse_shift_code(
@@ -1190,7 +1190,7 @@ mod tests {
         let insts = parse::<Word4>("add r0, r1, r2, lsl #2").unwrap();
         assert_eq!(insts.len(), 1);
         assert_eq!(insts[0].op_code, OpCode::Add);
-        assert_eq!(insts[0].shift, ShiftCode::Lsl(2));
+        assert_eq!(insts[0].shift, ShiftCode::Lsl(2.into()));
     }
 
     #[test]
@@ -1240,11 +1240,11 @@ mod tests {
     fn test_parse_asr_lsr_boundaries() {
         assert_eq!(
             parse::<Word4>("add r0, r1, r2, asr #1").unwrap()[0].shift,
-            ShiftCode::Asr(1)
+            ShiftCode::Asr(1.into())
         );
         assert_eq!(
             parse::<Word4>("add r0, r1, r2, asr #32").unwrap()[0].shift,
-            ShiftCode::Asr(32)
+            ShiftCode::Asr(32.into())
         );
         assert!(
             parse::<Word4>("add r0, r1, r2, asr #0")
@@ -1261,11 +1261,11 @@ mod tests {
 
         assert_eq!(
             parse::<Word4>("add r0, r1, r2, lsr #1").unwrap()[0].shift,
-            ShiftCode::Lsr(1)
+            ShiftCode::Lsr(1.into())
         );
         assert_eq!(
             parse::<Word4>("add r0, r1, r2, lsr #32").unwrap()[0].shift,
-            ShiftCode::Lsr(32)
+            ShiftCode::Lsr(32.into())
         );
         assert!(
             parse::<Word4>("add r0, r1, r2, lsr #0")
@@ -1285,11 +1285,11 @@ mod tests {
     fn test_parse_lsl_ror_boundaries() {
         assert_eq!(
             parse::<Word4>("add r0, r1, r2, lsl #1").unwrap()[0].shift,
-            ShiftCode::Lsl(1)
+            ShiftCode::Lsl(1.into())
         );
         assert_eq!(
             parse::<Word4>("add r0, r1, r2, lsl #31").unwrap()[0].shift,
-            ShiftCode::Lsl(31)
+            ShiftCode::Lsl(31.into())
         );
         assert!(
             parse::<Word4>("add r0, r1, r2, lsl #0")
@@ -1306,11 +1306,11 @@ mod tests {
 
         assert_eq!(
             parse::<Word4>("add r0, r1, r2, ror #1").unwrap()[0].shift,
-            ShiftCode::Ror(1)
+            ShiftCode::Ror(1.into())
         );
         assert_eq!(
             parse::<Word4>("add r0, r1, r2, ror #31").unwrap()[0].shift,
-            ShiftCode::Ror(31)
+            ShiftCode::Ror(31.into())
         );
         assert!(
             parse::<Word4>("add r0, r1, r2, ror #0")
@@ -1343,7 +1343,7 @@ mod tests {
     #[test]
     fn test_parse_folded_asl_becomes_lsl_shift_code() {
         let insts = parse::<Word4>("add r0, r1, r2, asl #2").unwrap();
-        assert_eq!(insts[0].shift, ShiftCode::Lsl(2));
+        assert_eq!(insts[0].shift, ShiftCode::Lsl(2.into()));
     }
 
     #[test]
@@ -1351,6 +1351,6 @@ mod tests {
         let insts = parse::<Word4>("addeq r0, r1, r2, lsr #3").unwrap();
         assert_eq!(insts[0].op_code, OpCode::Add);
         assert_eq!(insts[0].cond_code, CondCode::Eq);
-        assert_eq!(insts[0].shift, ShiftCode::Lsr(3));
+        assert_eq!(insts[0].shift, ShiftCode::Lsr(3.into()));
     }
 }
