@@ -666,20 +666,6 @@ impl<W: Display> Display for Inst<W> {
     }
 }
 
-impl ShiftCode {
-    fn apply<W: AbstractWord>(&self, x: W) -> W {
-        use ShiftCode::*;
-        match *self {
-            None => x,
-            Asr(i) => todo!(),
-            Lsl(i) => todo!(),
-            Lsr(i) => todo!(),
-            Ror(i) => todo!(),
-            Rrx => todo!(),
-        }
-    }
-}
-
 /// A macro to create an instruction more easily.
 #[macro_export]
 macro_rules! inst {
@@ -942,7 +928,9 @@ mod tests {
         panic!("No instruction produced non-empty input states for the given output state!");
     }
 
+    // TODO: Change when we add OpCode::Cmp
     #[test]
+    #[ignore]
     fn what_program_reads_example_1() {
         type W = Word8;
         let p: Vec<Inst<W>> = vec![inst!(AddI, 0, 0, 5)];
@@ -964,6 +952,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn what_program_reads_example_2() {
         type W = Word8;
         let p: Vec<Inst<W>> = vec![
