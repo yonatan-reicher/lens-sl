@@ -285,7 +285,7 @@ impl_word!(Word64(u64) bits 64 signed i64 mask 0xFFFFFFFFFFFFFFFFusize);
 
 pub mod prelude {
     #[allow(unused_imports)]
-    pub use super::{AbstractWord, SmtWord, Word, Word4, Word5, Word8, Word64};
+    pub use super::{AbstractWord, SmtWord, Word, Word2, Word4, Word5, Word8, Word32, Word64};
     pub use crate::smtlib_utils::BitVecExt;
 }
 
