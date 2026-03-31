@@ -297,7 +297,7 @@ pub trait HasBitWord {
 #[rustfmt::skip] impl HasBitWord for Word32 { type BitWord = Word5; }
 #[rustfmt::skip] impl HasBitWord for Word64 { type BitWord = Word6; }
 
-pub type BitWord<T: HasBitWord> = T::BitWord;
+pub type BitWord<T> = <T as HasBitWord>::BitWord;
 
 // =================================================================================================
 //                                             Other
