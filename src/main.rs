@@ -1,5 +1,5 @@
 #[allow(unused_imports)]
-use lens_sl::{LiveValue, Register, Word4, Word8, Word64, inst, optimize_sl};
+use lens_sl::{LiveValue, Register, Word4, Word8, Word64, inst, optimize};
 #[allow(unused_imports)]
 use lens_sl::{NoTui, Tui};
 
@@ -15,7 +15,7 @@ fn main() {
             eprintln!("Failed to read program file '{}': {err}", path);
             std::process::exit(1);
         });
-        let program = lens_sl::parse::<Word64>(&src).unwrap_or_else(|err| {
+        let program = lens_sl::parse(&src).unwrap_or_else(|err| {
             eprintln!("Failed to parse program file '{}': {err}", path);
             std::process::exit(1);
         });
@@ -57,7 +57,7 @@ fn main() {
     let _live_out = live_out;
 
     let tui = Tui::default();
-    let p = optimize_sl::<Word64, Word4>(
+    let p = optimize::<Word64, Word4>(
         &program,
         &[],
         &tui, // */ &NoTui,

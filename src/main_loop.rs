@@ -22,6 +22,8 @@ use std::ops::ControlFlow::{Break, Continue};
 // smt stuff!
 use crate::smtlib_utils::bool_term_to_bool;
 
+use serde::de::DeserializeOwned;
+
 // =========================================== Graph ==============================================
 
 type Program<W> = programs::Program<Inst<W>>;
@@ -32,7 +34,7 @@ type Graph<W> = graph::Graph<State<W>, Programs<W>>;
 
 // ========================================== Oracle ==============================================
 
-impl<W: Word> oracle::smt::Inst<State<W>> for Inst<W> {
+impl<W: Word + HasBitWord> oracle::smt::Inst<State<W>> for Inst<W> {
     type StateVars<'st> = StateVars<'st, W::SmtWord<'st>>;
 
     type SymbolicState<'st> = SymbolicState<'st, W::SmtWord<'st>>;
@@ -104,12 +106,13 @@ impl<W: Word> oracle::smt::Inst<State<W>> for Inst<W> {
 // This is the main function that gets exposed.
 /// `WT` for word size of the target program.
 /// `WS` for word size of the synthesis process.
-pub fn optimize<WT: Word, WS: Word + serde::de::DeserializeOwned>(
+pub fn optimize<WT: Word + HasBitWord, WS: Word + HasBitWord + serde::de::DeserializeOwned>(
     program: &[Inst<WT>],
     inputs: &[&[(Register, WT)]], // TODO: Return a program in Program<WT> instead...
     tui: &impl for<'g> TuiHook<&'g Graph<WS>, State<WS>>,
 ) -> Option<Program<WT>>
 where
+    BitWord<WS>: DeserializeOwned,
     <WS as All>::Iter: Clone,
 {
     let mut reducer = Reducer::<WT, WS>::default();
@@ -172,7 +175,7 @@ where
     )
 }
 
-fn synthesize<WT: Word, W: Word + serde::de::DeserializeOwned>(
+fn synthesize<WT: Word + HasBitWord, W: Word + HasBitWord + serde::de::DeserializeOwned>(
     registers: &[Register],
     immediates: &[W],
     oracle: impl Oracle<[Inst<WT>], State<WT>>,
@@ -184,6 +187,7 @@ fn synthesize<WT: Word, W: Word + serde::de::DeserializeOwned>(
     tui: &impl for<'a> TuiHook<&'a Graph<W>, State<W>>,
 ) -> Option<Program<WT>>
 where
+    BitWord<W>: DeserializeOwned,
     <W as All>::Iter: Clone,
 {
     // The forward and backward graphs start while having the empty program.
@@ -275,7 +279,7 @@ where
     }
 }
 
-enum ConnectAndRefineResult<W: Word> {
+enum ConnectAndRefineResult<W: Word + HasBitWord> {
     Found(Program<W>),
     Continue,
 }
@@ -283,8 +287,8 @@ enum ConnectAndRefineResult<W: Word> {
 /// WT - word for the target program. WS - word for the synthesis process.
 struct Globals<
     'tui,
-    WT: Word,
-    WS: Word,
+    WT: Word + HasBitWord,
+    WS: Word + HasBitWord,
     OT: Oracle<[Inst<WT>], State<WT>>,
     OS: Oracle<[Inst<WS>], State<WS>>,
     TUI: for<'g> TuiHook<&'g Graph<WS>, State<WS>>,
@@ -305,12 +309,12 @@ struct Globals<
     total_instructions: usize,
 }
 
-enum ProgramOrRetry<W: Word> {
+enum ProgramOrRetry<W: Word + HasBitWord> {
     Program(Program<W>),
     Retry,
 }
 
-fn connect_and_refine<WT: Word, WS: Word>(
+fn connect_and_refine<WT: Word + HasBitWord, WS: Word + HasBitWord>(
     globals: &mut Globals<
         '_,
         WT,
@@ -444,7 +448,7 @@ fn connect_and_refine<WT: Word, WS: Word>(
 /// Go through each program prefix in the graph, and expand it by one
 /// instruction forward. This is done for each program, and for each
 /// instruction.
-fn expand_forward<W: Word>(
+fn expand_forward<W: Word + HasBitWord>(
     graph: &mut Graph<W>,
     ei: &EnumerationInfo<W>,
     tui: &impl for<'g> TuiHook<&'g Graph<W>, State<W>>,
@@ -456,7 +460,7 @@ fn expand_forward<W: Word>(
     })
 }
 
-fn expand_backward<W: Word>(
+fn expand_backward<W: Word + HasBitWord>(
     graph: &mut Graph<W>,
     ei: &EnumerationInfo<W>,
     tui: &impl for<'g> TuiHook<&'g Graph<W>, State<W>>,
@@ -468,7 +472,7 @@ fn expand_backward<W: Word>(
     });
 }
 
-fn expand_forward_or_backward<W: Word, StepRet: IntoIterator<Item = State<W>>>(
+fn expand_forward_or_backward<W: Word + HasBitWord, StepRet: IntoIterator<Item = State<W>>>(
     graph: &mut Graph<W>,
     ei: &EnumerationInfo<W>,
     tui: &impl for<'g> TuiHook<&'g Graph<W>, State<W>>,
@@ -491,7 +495,7 @@ fn expand_forward_or_backward<W: Word, StepRet: IntoIterator<Item = State<W>>>(
     tui.progress(total_inst, total_inst);
     debug_assert_ne!(graph.n_programs(), 0);
 
-    fn recurse<W: Word, StepRet: IntoIterator<Item = State<W>>>(
+    fn recurse<W: Word + HasBitWord, StepRet: IntoIterator<Item = State<W>>>(
         old_graph: &Graph<W>,
         new_graph: &mut Graph<W>,
         inst: Inst<W>,
@@ -517,7 +521,7 @@ fn expand_forward_or_backward<W: Word, StepRet: IntoIterator<Item = State<W>>>(
     }
 }
 
-fn build_forward<W: Word>(graph: &mut Graph<W>, input: &State<W>) {
+fn build_forward<W: Word + HasBitWord>(graph: &mut Graph<W>, input: &State<W>) {
     build_forwards_or_backwards(graph, input, |program, mut state| {
         for inst in program {
             inst.run(&mut state);
@@ -526,7 +530,7 @@ fn build_forward<W: Word>(graph: &mut Graph<W>, input: &State<W>) {
     });
 }
 
-fn build_backward<W: Word>(graph: &mut Graph<W>, input: &State<W>, bm: &BackwardMap<W>) {
+fn build_backward<W: Word + HasBitWord>(graph: &mut Graph<W>, input: &State<W>, bm: &BackwardMap<W>) {
     build_forwards_or_backwards(graph, input, |program, output| {
         // A vector of reaching states, that we push backwards in time, one instruction at a time.
         let mut states = vec![output];
@@ -544,7 +548,7 @@ fn build_backward<W: Word>(graph: &mut Graph<W>, input: &State<W>, bm: &Backward
     });
 }
 
-fn build_forwards_or_backwards<W: Word, StepRet: IntoIterator<Item = State<W>>>(
+fn build_forwards_or_backwards<W: Word + HasBitWord, StepRet: IntoIterator<Item = State<W>>>(
     graph: &mut Graph<W>,
     input: &State<W>,
     step: impl Fn(&Program<W>, State<W>) -> StepRet,
@@ -567,7 +571,7 @@ fn build_forwards_or_backwards<W: Word, StepRet: IntoIterator<Item = State<W>>>(
 
 /// Checks if the given counter-example has already been seen, by searching the input-output pairs
 /// in the global context.
-fn has_counter_example_been_seen<WT: Word, WS: Word>(
+fn has_counter_example_been_seen<WT: Word + HasBitWord, WS: Word + HasBitWord>(
     globals: &mut Globals<
         '_,
         WT,

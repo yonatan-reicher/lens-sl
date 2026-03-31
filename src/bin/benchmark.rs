@@ -118,7 +118,7 @@ fn benchmarks_in_programs_dir() -> Vec<Benchmark> {
             }
         };
 
-        let input = match lens_sl::parse::<W>(&src) {
+        let input = match lens_sl::parse(&src) {
             Ok(program) => program,
             Err(err) => {
                 eprintln!("warning: skipping {}: parse failed ({err})", path.display());
