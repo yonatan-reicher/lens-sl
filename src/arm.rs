@@ -366,7 +366,7 @@ impl<W: Copy + Into<Register>, WShift> Inst<W, WShift> {
     }
 }
 
-impl<W: Word, WShift: Word> Inst<W, WShift> {
+impl<W: Word + HasBitWord> Inst<W> {
     pub fn run(&self, state: &mut State<W>) {
         let input = *state;
         let (mut read_mask, mut write_mask) = Default::default();
@@ -384,7 +384,7 @@ impl<W: Word, WShift: Word> Inst<W, WShift> {
         &self,
         state: State<W>,
         bm: &'a BackwardMap<W>,
-    ) -> impl IntoIterator<Item = &'a State<W>> + use<'a, W, WShift> {
+    ) -> impl IntoIterator<Item = &'a State<W>> + use<'a, W> {
         &bm[(*self, state)]
     }
 
@@ -413,7 +413,7 @@ impl<W: Word, WShift: Word> Inst<W, WShift> {
         &self,
         _output: state::Masked<W>,
         _bm: &'a BackwardMap<W>,
-    ) -> impl IntoIterator<Item = &'a state::Masked<W>> + use<'a, W, WShift> {
+    ) -> impl IntoIterator<Item = &'a state::Masked<W>> + use<'a, W> {
         // let unmasked_outputs = output.mask().;
         // self.run_backward(*output.state(), bm)
         //     .into_iter()
@@ -543,10 +543,8 @@ impl<WShift: Word> ShiftCode<WShift> {
 }
 
 pub mod enumerate;
-impl<W: Word, WShift: Word> Inst<W, WShift> {
-    pub fn enumerate<'a>(
-        ei: EnumerationInfo<'a, W>,
-    ) -> impl Iterator<Item = Self> + use<'a, W, WShift> {
+impl<W: Word + HasBitWord> Inst<W> {
+    pub fn enumerate<'a>(ei: EnumerationInfo<'a, W>) -> impl Iterator<Item = Self> + use<'a, W> {
         enumerate::Enumerator::new(ei)
     }
 }
@@ -557,7 +555,7 @@ fn fmt_inst(
         cond_code,
         shift,
         args,
-    }: &Inst<&str>, // Look at this cute hack! Taking the arguments as strings.
+    }: &Inst<&str, &str>, // Look at this cute hack! Taking the arguments as strings.
     f: &mut Formatter,
 ) -> fmt::Result {
     let args = args
@@ -581,11 +579,12 @@ fn fmt_inst(
 impl<W: Debug, WShift: Debug> Debug for Inst<W, WShift> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         let arg_strings = self.args.each_ref().map(|a| format!("{a:?}"));
+        let shift_string = self.shift.as_ref().map(|x| format!("{x:?}"));
         fmt_inst(
             &Inst {
                 op_code: self.op_code,
                 cond_code: self.cond_code,
-                shift: self.shift,
+                shift: shift_string.as_ref().map(|s| s.as_str()),
                 args: arg_strings.each_ref().map(|s| s.as_str()),
             },
             f,
@@ -596,11 +595,12 @@ impl<W: Debug, WShift: Debug> Debug for Inst<W, WShift> {
 impl<W: Display, WShift: Display> Display for Inst<W, WShift> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         let arg_strings = self.args.each_ref().map(|a| format!("{a}"));
+        let shift_string = self.shift.as_ref().map(|x| format!("{x}"));
         fmt_inst(
             &Inst {
                 op_code: self.op_code,
                 cond_code: self.cond_code,
-                shift: self.shift,
+                shift: shift_string.as_ref().map(|s| s.as_str()),
                 args: arg_strings.each_ref().map(|s| s.as_str()),
             },
             f,
@@ -608,13 +608,38 @@ impl<W: Display, WShift: Display> Display for Inst<W, WShift> {
     }
 }
 
+// Shift code map
+impl<T> ShiftCode<T> {
+    pub fn map<U>(self, f: impl FnOnce(T) -> U) -> ShiftCode<U> {
+        match self {
+            ShiftCode::None => ShiftCode::None,
+            ShiftCode::Asr(x) => ShiftCode::Asr(f(x)),
+            ShiftCode::Lsl(x) => ShiftCode::Lsl(f(x)),
+            ShiftCode::Lsr(x) => ShiftCode::Lsr(f(x)),
+            ShiftCode::Ror(x) => ShiftCode::Ror(f(x)),
+            ShiftCode::Rrx => ShiftCode::Rrx,
+        }
+    }
+
+    pub fn as_ref(&self) -> ShiftCode<&T> {
+        match self {
+            ShiftCode::None => ShiftCode::None,
+            ShiftCode::Asr(x) => ShiftCode::Asr(x),
+            ShiftCode::Lsl(x) => ShiftCode::Lsl(x),
+            ShiftCode::Lsr(x) => ShiftCode::Lsr(x),
+            ShiftCode::Ror(x) => ShiftCode::Ror(x),
+            ShiftCode::Rrx => ShiftCode::Rrx,
+        }
+    }
+}
+
 #[cfg(test)]
-impl<W: Word + Arbitrary> Arbitrary for Inst<W> {
+impl<W: Word + Arbitrary, WShift: Word + Arbitrary> Arbitrary for Inst<W, WShift> {
     type Parameters = ();
     type Strategy = BoxedStrategy<Self>;
 
     fn arbitrary_with((): ()) -> Self::Strategy {
-        any::<(OpCode, CondCode, ShiftCode)>()
+        any::<(OpCode, CondCode, ShiftCode<WShift>)>()
             .prop_flat_map(|(op_code, cond_code, shift)| {
                 op_code
                     .arg_types()
@@ -669,8 +694,8 @@ pub fn extend_program_for_each<F, T, WBig, WSmall>(
 ) -> ControlFlow<T>
 where
     F: FnMut(&[Inst<WBig>]) -> ControlFlow<T>,
-    WBig: Word,
-    WSmall: Word,
+    WBig: Word + HasBitWord,
+    WSmall: Word + HasBitWord,
 {
     let mut ret = vec![];
     let iters: Vec<_> = program.iter().map(|inst| inst.extend(reducer)).collect();
@@ -685,7 +710,7 @@ where
 
 /// Returns a mask having only those parts of the input state that affect the output of the
 /// program.
-pub fn what_program_reads<W: Word>(
+pub fn what_program_reads<W: Word + HasBitWord>(
     prog: impl IntoIterator<Item = Inst<W>>,
     input: &State<W>,
 ) -> BitMask {
@@ -703,7 +728,7 @@ pub fn what_program_reads<W: Word>(
     input_mask
 }
 
-pub fn run_program_masked<W: Word>(
+pub fn run_program_masked<W: Word + HasBitWord>(
     prog: impl IntoIterator<Item = Inst<W>>,
     input: state::Masked<W>,
 ) -> Option<state::Masked<W>> {
