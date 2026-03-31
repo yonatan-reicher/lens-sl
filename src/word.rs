@@ -279,13 +279,14 @@ fn to_u32_saturating<T: TryInto<u32>>(x: T) -> u32 {
 impl_word!(Word2(u8)   bits 2  signed i8  mask 0x03);
 impl_word!(Word4(u8)   bits 4  signed i8  mask 0x0F);
 impl_word!(Word5(u8)   bits 5  signed i8  mask 0x1F);
+impl_word!(Word6(u8)   bits 6  signed i8  mask 0x3F);
 impl_word!(Word8(u8)   bits 8  signed i8  mask 0xFF);
 impl_word!(Word32(u32) bits 32 signed i32 mask 0xFFFFFFFFusize);
 impl_word!(Word64(u64) bits 64 signed i64 mask 0xFFFFFFFFFFFFFFFFusize);
 
 pub mod prelude {
     #[allow(unused_imports)]
-    pub use super::{AbstractWord, SmtWord, Word, Word2, Word4, Word5, Word8, Word32, Word64};
+    pub use super::{AbstractWord, SmtWord, Word, Word2, Word4, Word5, Word6, Word8, Word32, Word64};
     pub use crate::smtlib_utils::BitVecExt;
 }
 
