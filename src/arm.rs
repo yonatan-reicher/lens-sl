@@ -327,7 +327,7 @@ pub enum ShiftCode<W> {
 /// should be updated. In Lens, they pretend it doesn't exist and that only `cmp` and `tst` update
 /// the flags. When in Rome, act like a Roman.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct Inst<W, WShift> {
+pub struct Inst<W, WShift = BitWord<W>> {
     pub op_code: OpCode,
     pub cond_code: CondCode,
     pub shift: ShiftCode<WShift>,
