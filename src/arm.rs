@@ -296,39 +296,41 @@ impl From<Register> for Word8 {
 
 #[derive(Clone, Copy, Debug, derive_more::Display, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(test, derive(proptest_derive::Arbitrary))]
-pub enum ShiftCode {
+pub enum ShiftCode<W> {
     None,
     /// Arithmetic shift right - shift right but keep MSB the same.
-    /// Must have 1 <= n <= 32.
+    /// Must have 1 <= n <= BITS.
     #[display("asr #{_0}")]
-    Asr(Word5),
+    Asr(W),
     /// Logical shift left.
     /// NOTE: There exists a synonym called `asl`, very confusing. lol.
-    /// Must have 1 <= n <= 31.
+    /// Must have 1 <= n <= BITS - 1.
     #[display("lsl #{_0}")]
-    Lsl(Word5),
+    Lsl(W),
     /// Logical shift right.
-    /// Must have 1 <= n <= 32
+    /// Must have 1 <= n <= BITS.
     #[display("lsr #{_0}")]
-    Lsr(Word5),
+    Lsr(W),
     /// Rotate right.
-    /// Must have 1 <= n <= 31
+    /// Must have 1 <= n <= BITS - 1.
     #[display("ror #{_0}")]
-    Ror(Word5),
+    Ror(W),
     /// Rotate right one bit, sign extended.
     #[display("rrx")]
     Rrx,
 }
 
 /// A single instruction.
+/// `W` - number type for arguments.
+/// `WShift` - number type for shift arguments.
 /// NOTE: This is missing the 'S' bit - an optional bit toggling whether condition codes (flags)
 /// should be updated. In Lens, they pretend it doesn't exist and that only `cmp` and `tst` update
 /// the flags. When in Rome, act like a Roman.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct Inst<W> {
+pub struct Inst<W, WShift> {
     pub op_code: OpCode,
     pub cond_code: CondCode,
-    pub shift: ShiftCode,
+    pub shift: ShiftCode<WShift>,
     pub args: [W; 3],
 }
 
