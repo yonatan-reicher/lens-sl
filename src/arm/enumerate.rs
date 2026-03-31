@@ -9,7 +9,7 @@ use crate::word::prelude::*;
 use std::fmt::Debug;
 
 #[derive(Clone, Copy, Debug)]
-pub struct Enumerator<'a, W> {
+pub struct Enumerator<'a, W, WShift = BitWord<W>> {
     ei: EnumerationInfo<'a, W>,
     /// Are we done?
     done: bool,
@@ -19,7 +19,7 @@ pub struct Enumerator<'a, W> {
     cond_code: CondCode,
     /// The current value for the shift field, but if it has an immediate, that immediate is
     /// actually an index into the immediates slice.
-    shift: ShiftCode,
+    shift: ShiftCode<WShift>,
     /// The indices into the slices of available registers and instructions.
     arg_indices: [usize; 3],
 }
@@ -42,7 +42,7 @@ pub enum EnumerationInfoOptions<'a, T> {
     Unlimited,
 }
 
-impl<'a, W> Enumerator<'a, W> {
+impl<'a, W, WShift> Enumerator<'a, W, WShift> {
     pub fn new(ei: EnumerationInfo<'a, W>) -> Self {
         Self {
             ei,
@@ -59,7 +59,7 @@ impl<'a, W> Enumerator<'a, W> {
     }
 }
 
-impl<'a, W: Word> Enumerator<'a, W> {
+impl<'a, W: Word + HasBitWord> Enumerator<'a, W> {
     fn try_current_arg(&self, arg: usize, ei: &EnumerationInfo<W>) -> Option<W> {
         // Take the index, and index into the correct array.
         let i = self.arg_indices[arg];
@@ -91,15 +91,15 @@ impl<'a, W: Word> Enumerator<'a, W> {
         }
     }
 
-    fn possible_shift_args(&self) -> impl Iterator<Item = Word5> {
+    fn possible_shift_args(&self) -> impl Iterator<Item = BitWord<W>> {
         self.ei
             .immediates
             .into_iter()
-            .filter(|i| 1 <= Into::<usize>::into(*i) && Into::<usize>::into(*i) <= 32)
-            .map(|i| i.into_word::<Word5>())
+            .filter(|i| 1 <= Into::<usize>::into(*i) && Into::<usize>::into(*i) <= BitWord::<W>::MAX.into())
+            .map(|i| i.into_word::<BitWord<W>>())
     }
 
-    fn try_current_shift(&self) -> Option<ShiftCode> {
+    fn try_current_shift(&self) -> Option<ShiftCode<BitWord<W>>> {
         use ShiftCode::*;
         Some(match self.shift {
             None => None,
@@ -149,11 +149,9 @@ impl<'a, W: Word> Enumerator<'a, W> {
     }
 
     fn advance_shift(&mut self) -> Option<()> {
-        let max_u8 = u8::try_from(self.possible_shift_args().count())
-            .expect("there's no way there are so many shift arguments that they do not fit in a u8 - by the pigeon hole principle!")
-            .checked_sub(1)?;
-        let max = Word5::from(max_u8);
-        assert_eq!(u8::from(max), max_u8);
+        let max_usize = self.possible_shift_args().count().checked_sub(1)?;
+        let max = BitWord::<W>::from(max_usize);
+        assert_eq!(Into::<usize>::into(max), max_usize);
         use ShiftCode::*;
         #[rustfmt::skip]
         let next = match self.shift {
@@ -206,7 +204,7 @@ impl<'a, W: Word> Enumerator<'a, W> {
     }
 }
 
-impl<'a, W> Default for Enumerator<'a, W> {
+impl<'a, W, WShift> Default for Enumerator<'a, W, WShift> {
     fn default() -> Self {
         Self::new(EnumerationInfo::default())
     }
@@ -251,7 +249,7 @@ impl<'a, T> Default for EnumerationInfoOptions<'a, T> {
     }
 }
 
-impl<'a, W: Word> Iterator for Enumerator<'a, W> {
+impl<'a, W: Word + HasBitWord> Iterator for Enumerator<'a, W> {
     type Item = Inst<W>;
     fn next(&mut self) -> Option<Self::Item> {
         if self.done {
@@ -276,7 +274,7 @@ mod tests {
     use proptest::property_test;
     use std::collections::HashSet;
 
-    fn to_vec<W: Word>(ei: &EnumerationInfo<W>) -> Vec<Inst<W>> {
+    fn to_vec<W: Word + HasBitWord>(ei: &EnumerationInfo<W>) -> Vec<Inst<W>> {
         Enumerator::new(*ei).collect()
     }
 
