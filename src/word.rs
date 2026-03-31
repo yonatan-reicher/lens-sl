@@ -276,14 +276,41 @@ fn to_u32_saturating<T: TryInto<u32>>(x: T) -> u32 {
     x.try_into().unwrap_or(u32::MAX)
 }
 
+impl_word!(Word2(u8)   bits 2  signed i8  mask 0x03);
+impl_word!(Word3(u8)   bits 3  signed i8  mask 0x07);
 impl_word!(Word4(u8)   bits 4  signed i8  mask 0x0F);
 impl_word!(Word5(u8)   bits 5  signed i8  mask 0x1F);
+impl_word!(Word6(u8)   bits 6  signed i8  mask 0x3F);
 impl_word!(Word8(u8)   bits 8  signed i8  mask 0xFF);
+impl_word!(Word32(u32) bits 32 signed i32 mask 0xFFFFFFFFusize);
 impl_word!(Word64(u64) bits 64 signed i64 mask 0xFFFFFFFFFFFFFFFFusize);
+
+// =================================================================================================
+//                                            Bit Word
+// =================================================================================================
+
+/// Associates the exact word size needed to hold the number of bits in the word.
+pub trait HasBitWord {
+    type BitWord: Word;
+}
+
+#[rustfmt::skip] impl HasBitWord for Word4 { type BitWord = Word2; }
+#[rustfmt::skip] impl HasBitWord for Word8 { type BitWord = Word3; }
+#[rustfmt::skip] impl HasBitWord for Word32 { type BitWord = Word5; }
+#[rustfmt::skip] impl HasBitWord for Word64 { type BitWord = Word6; }
+
+pub type BitWord<T> = <T as HasBitWord>::BitWord;
+
+// =================================================================================================
+//                                             Other
+// =================================================================================================
 
 pub mod prelude {
     #[allow(unused_imports)]
-    pub use super::{AbstractWord, SmtWord, Word, Word4, Word5, Word8, Word64};
+    pub use super::{
+        AbstractWord, BitWord, HasBitWord, SmtWord, Word, Word2, Word3, Word4, Word5, Word6, Word8,
+        Word32, Word64,
+    };
     pub use crate::smtlib_utils::BitVecExt;
 }
 

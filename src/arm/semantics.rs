@@ -10,12 +10,13 @@ use crate::word::prelude::*;
 /// B - the boolean
 /// W - the word type
 /// WI - the word type for instruction arguments (this is different because we don't run symbolic
+/// WIShift - the word type for instruction's shift arguments.
 /// instructions, only concrete instructions).
 /// read_mask - turns on whatever was read from the input. Does not clear.
 /// write_mask - turns on whatever was written to, and is not cleared.
 /// from_param - needed for creating default new words.
-pub fn run<W, WI, State>(
-    inst: &Inst<WI>,
+pub fn run<W, WI, WIShift, State>(
+    inst: &Inst<WI, WIShift>,
     input: &State,
     read_mask: &mut Mask<W::Bool>,
     write_mask: &mut Mask<W::Bool>,
@@ -24,6 +25,7 @@ pub fn run<W, WI, State>(
 where
     W: AbstractWord,
     WI: Word,
+    WIShift: Word,
     State: Clone + StateTrait<W>,
     W::FromParam: Clone,
 {
@@ -177,10 +179,10 @@ impl<'a, W: AbstractWord, State: StateTrait<W>> ReadWriteTracker<'a, W::Bool, W,
 //                                          Shift Code
 // =================================================================================================
 
-impl ShiftCode {
+impl<WShift: Word> ShiftCode<WShift> {
     fn apply<W: AbstractWord>(&self, x: W, carry_in: W::Bool) -> (W, Option<W::Bool>) {
         let from_param = || x.get_from_param();
-        let convert = |i: Word5| i.into_abstract_word::<W>(from_param());
+        let convert = |i: WShift| i.into_abstract_word::<W>(from_param());
         let make_msb = |on| on << W::Word::from(W::BITS - 1).into_abstract_word::<W>(from_param());
         let msb = |x| x >> convert(31.into());
         let lsb = |x| x & convert(1.into());
@@ -191,7 +193,7 @@ impl ShiftCode {
             Asr(i) => (x >> convert(i)) | make_msb(msb(x)),
             Lsl(i) => x << convert(i),
             Lsr(i) => x >> convert(i),
-            Ror(i) => (x >> convert(i)) | (x << convert(Word5::from(W::BITS) - i)),
+            Ror(i) => (x >> convert(i)) | (x << convert(WShift::from(W::BITS) - i)),
             Rrx => {
                 // GODAMNIT!!! This was hard to implement and will majorly slow us down, and
                 // orginal Lens doesn't even f-ing implement it.
@@ -216,7 +218,7 @@ mod tests {
 
     #[test]
     fn registers_not_read_when_condition_false() {
-        let inst: Inst<Word4> = inst!(Add Eq, 0, 0, 0);
+        let inst: Inst<Word4, Word2> = inst!(Add Eq, 0, 0, 0);
         let state = State::<Word4> {
             registers: [1.into(); 16],
             flags: Flags::default().into(),
@@ -229,7 +231,7 @@ mod tests {
 
     #[test]
     fn shift() {
-        let inst: Inst<Word64> = inst!(MovI, 0, 15; shift Lsl(2.into()));
+        let inst: Inst<Word64, Word6> = inst!(MovI, 0, 15; shift Lsl(2.into()));
         let state = State::<Word64> {
             registers: [1.into(); 16],
             flags: Flags::default().into(),

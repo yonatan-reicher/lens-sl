@@ -3,16 +3,15 @@
 
 use crate::Direction;
 use crate::all::All;
+use crate::arm::enumerate::{EnumerationInfo, EnumerationInfoOptions};
 use crate::arm::state::Masked as MaskedState;
 use crate::arm::{
-    BackwardMap, Flags, Inst, Register, State, StateVars, SymbolicState, extend_program_for_each,
-    run_program_masked, what_program_reads,
+    BackwardMap, Register, State, extend_program_for_each, run_program_masked, what_program_reads,
 };
 use crate::collect_registers::Collector;
-use crate::arm::enumerate::{EnumerationInfo, EnumerationInfoOptions};
 use crate::graph;
 use crate::len::Len;
-use crate::oracle::{self, Oracle, SmtOracle};
+use crate::oracle::{Oracle, SmtOracle};
 use crate::programs_sl as programs;
 use crate::reduce_bit_width::{ImmediateInfo, Reducer};
 use crate::tui::TuiHook;
@@ -21,12 +20,13 @@ use crate::word::prelude::*;
 // std imports
 use std::ops::ControlFlow::{self, Break, Continue};
 
-// smt stuff!
-use crate::smtlib_utils::bool_term_to_bool;
+use serde::de::DeserializeOwned;
 
 use functionality::prelude::*;
 
 // =========================================== Graph ==============================================
+
+type Inst<W> = crate::arm::Inst<W, BitWord<W>>;
 
 type Program<W> = programs::Program<Inst<W>>;
 
@@ -108,13 +108,14 @@ type Graph<W> = graph::Graph<(MaskedState<W>, MaskedState<W>), Programs<W>>;
 // This is the main function that gets exposed.
 /// `WT` for word size of the target program.
 /// `WS` for word size of the synthesis process.
-pub fn optimize<WT: Word, WS: Word + serde::de::DeserializeOwned>(
+pub fn optimize<WT: Word + HasBitWord, WS: Word + HasBitWord + serde::de::DeserializeOwned>(
     program: &[Inst<WT>],
     additional_registers: impl IntoIterator<Item = Register>,
     additional_immediates: impl IntoIterator<Item = WT>,
     tui: &impl for<'g> TuiHook<&'g Graph<WS>, MaskedState<WS>>,
 ) -> Option<Program<WT>>
 where
+    BitWord<WS>: DeserializeOwned,
     <WS as All>::Iter: Clone,
 {
     let mut reducer = Reducer::<WT, WS>::default();
@@ -157,7 +158,7 @@ where
     )
 }
 
-fn synthesize<WT: Word, W: Word + serde::de::DeserializeOwned>(
+fn synthesize<WT, W>(
     registers: &[Register],
     immediates: &[W],
     oracle: impl Oracle<[Inst<WT>], State<WT>>,
@@ -170,6 +171,9 @@ fn synthesize<WT: Word, W: Word + serde::de::DeserializeOwned>(
     tui: &impl for<'a> TuiHook<&'a Graph<W>, MaskedState<W>>,
 ) -> Option<Program<WT>>
 where
+    WT: Word + HasBitWord,
+    W: Word + HasBitWord + DeserializeOwned,
+    BitWord<W>: DeserializeOwned,
     <W as All>::Iter: Clone,
 {
     // The graph starts with having just the empty program.
@@ -231,7 +235,7 @@ where
     }
 }
 
-enum ConnectAndRefineResult<W: Word> {
+enum ConnectAndRefineResult<W: Word + HasBitWord> {
     Found(Program<W>),
     Continue,
 }
@@ -239,8 +243,8 @@ enum ConnectAndRefineResult<W: Word> {
 /// WT - word for the target program. WS - word for the synthesis process.
 struct Globals<
     'tui,
-    WT: Word,
-    WS: Word,
+    WT: Word + HasBitWord,
+    WS: Word + HasBitWord,
     OT: Oracle<[Inst<WT>], State<WT>>,
     OS: Oracle<[Inst<WS>], State<WS>>,
     TUI: for<'g> TuiHook<&'g Graph<WS>, MaskedState<WS>>,
@@ -262,12 +266,12 @@ struct Globals<
     original_reduced: Program<WS>,
 }
 
-enum ProgramOrRetry<W: Word> {
+enum ProgramOrRetry<W: Word + HasBitWord> {
     Program(Program<W>),
     Retry,
 }
 
-fn connect_and_refine<WT: Word, WS: Word>(
+fn connect_and_refine<WT: Word + HasBitWord, WS: Word + HasBitWord>(
     globals: &mut Globals<
         '_,
         WT,
@@ -328,7 +332,10 @@ fn connect_and_refine<WT: Word, WS: Word>(
 /// Go through each program prefix in the graph, and expand it by one
 /// instruction forward. This is done for each program, and for each
 /// instruction.
-fn expand<W: Word>(graph: &mut Graph<W>, tui: &impl for<'g> TuiHook<&'g Graph<W>, MaskedState<W>>) {
+fn expand<W: Word + HasBitWord>(
+    graph: &mut Graph<W>,
+    tui: &impl for<'g> TuiHook<&'g Graph<W>, MaskedState<W>>,
+) {
     let old_graph = std::mem::replace(graph, Graph::Leaf(Default::default()));
     debug_assert_ne!(old_graph.n_programs(), 0);
     let mut out_states = vec![];
@@ -344,7 +351,7 @@ fn expand<W: Word>(graph: &mut Graph<W>, tui: &impl for<'g> TuiHook<&'g Graph<W>
     tui.progress(total, total);
     debug_assert_ne!(graph.n_programs(), 0);
 
-    fn recurse_outer<W: Word>(
+    fn recurse_outer<W: Word + HasBitWord>(
         old_graph: &Graph<W>,
         effects: &mut Vec<(MaskedState<W>, MaskedState<W>)>,
         f: &mut impl FnMut(&Programs<W>, &[(MaskedState<W>, MaskedState<W>)]),
@@ -361,7 +368,7 @@ fn expand<W: Word>(graph: &mut Graph<W>, tui: &impl for<'g> TuiHook<&'g Graph<W>
         }
     }
 
-    fn recurse_inner<W: Word>(
+    fn recurse_inner<W: Word + HasBitWord>(
         old_graph: &Graph<W>,
         new_graph: &mut Graph<W>,
         progs: &Programs<W>,
@@ -395,7 +402,7 @@ fn expand<W: Word>(graph: &mut Graph<W>, tui: &impl for<'g> TuiHook<&'g Graph<W>
     }
 }
 
-fn build_forward<W: Word>(graph: &mut Graph<W>, input: &MaskedState<W>) {
+fn build_forward<W: Word + HasBitWord>(graph: &mut Graph<W>, input: &MaskedState<W>) {
     build_forwards_or_backwards(graph, input, |program, input| {
         use itertools::Either;
         // Check what we need to run and that we have it
@@ -418,7 +425,11 @@ fn build_forward<W: Word>(graph: &mut Graph<W>, input: &MaskedState<W>) {
     });
 }
 
-fn build_backward<W: Word>(graph: &mut Graph<W>, input: &MaskedState<W>, bm: &BackwardMap<W>) {
+fn build_backward<W: Word + HasBitWord>(
+    graph: &mut Graph<W>,
+    input: &MaskedState<W>,
+    bm: &BackwardMap<W>,
+) {
     build_forwards_or_backwards(graph, input, |program, output| {
         todo!();
         []
@@ -441,7 +452,7 @@ fn build_backward<W: Word>(graph: &mut Graph<W>, input: &MaskedState<W>, bm: &Ba
 }
 
 fn build_forwards_or_backwards<
-    W: Word,
+    W: Word + HasBitWord,
     StepRet: IntoIterator<Item = (MaskedState<W>, MaskedState<W>)>,
 >(
     graph: &mut Graph<W>,
@@ -466,7 +477,7 @@ fn build_forwards_or_backwards<
 
 /// Checks if the given counter-example has already been seen, by searching the input-output pairs
 /// in the global context.
-fn has_counter_example_been_seen<WT: Word, WS: Word>(
+fn has_counter_example_been_seen<WT: Word + HasBitWord, WS: Word + HasBitWord>(
     globals: &mut Globals<
         '_,
         WT,
@@ -485,7 +496,7 @@ fn has_counter_example_been_seen<WT: Word, WS: Word>(
         .any(|(i, o)| i == inp && o == out)
 }
 
-fn verify<WBig: Word, W: Word>(
+fn verify<WBig: Word + HasBitWord, W: Word + HasBitWord>(
     prog: &[Inst<W>],
     globals: &mut Globals<
         WBig,

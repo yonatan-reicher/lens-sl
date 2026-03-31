@@ -13,7 +13,7 @@ use std::fs;
 
 use super::{ArgType, CondCode, OpCode, ShiftCode};
 use crate::arm;
-use crate::word::{Word, Word5};
+use crate::word::prelude::*;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Data types
@@ -788,31 +788,33 @@ fn parse_cond_code(cond: &str) -> Result<CondCode, ParseError> {
     }
 }
 
-fn parse_shift_amount(amount: i64, op: &str) -> Result<Word5, ParseError> {
-    let amount = u8::try_from(amount).map_err(|_| ParseError {
-        message: format!("invalid shift amount '{amount}' for {op}"),
-        line: 0,
-        col: 0,
-    })?;
-    let in_range = match op {
-        "asr" | "lsr" => (1..=32).contains(&amount),
-        "lsl" | "ror" => (1..=31).contains(&amount),
-        _ => false,
-    };
-    if !in_range {
+fn parse_shift_amount<WShift: Clone + From<usize> + Into<usize>>(
+    amount: i64,
+    op: &str,
+) -> Result<WShift, ParseError> {
+    let amount_orig = amount;
+    if amount < 0 {
         return Err(ParseError {
-            message: format!("shift amount out of range for {op}: {amount}"),
+            message: format!("shift amount is '{amount_orig}, but shift amount cannot be negative"),
             line: 0,
             col: 0,
         });
     }
-    Ok(amount.into())
+    let amount = WShift::from(amount as usize);
+    if amount.clone().into() != amount_orig as usize {
+        return Err(ParseError {
+            message: format!("invalid shift amount '{amount_orig}' for {op}"),
+            line: 0,
+            col: 0,
+        });
+    }
+    Ok(amount)
 }
 
-fn parse_shift_code(
+fn parse_shift_code<WShift: Clone + From<usize> + Into<usize>>(
     shift: &str,
     parsed_args: &mut Vec<ParsedArg>,
-) -> Result<ShiftCode, ParseError> {
+) -> Result<ShiftCode<WShift>, ParseError> {
     let shift = if shift == "asl" { "lsl" } else { shift };
     if shift.is_empty() {
         return Ok(ShiftCode::None);
@@ -944,7 +946,7 @@ fn map_opcode(op: &str, args: &[ParsedArg]) -> Result<OpCode, ParseError> {
     }
 }
 
-fn translate_inst<W: Word>(inst: &Inst) -> Result<arm::Inst<W>, ParseError> {
+fn translate_inst<W: Word, WShift: Word>(inst: &Inst) -> Result<arm::Inst<W, WShift>, ParseError> {
     if inst.is_hole() {
         return Err(ParseError {
             message: "cannot translate hole instruction".into(),
@@ -1026,8 +1028,11 @@ fn translate_inst<W: Word>(inst: &Inst) -> Result<arm::Inst<W>, ParseError> {
 }
 
 /// Parse to the old stringy Inst format, then translate each instruction to typed arm::Inst.
-pub fn parse<W: Word>(src: &str) -> Result<Vec<arm::Inst<W>>, ParseError> {
-    parse_raw(src)?.iter().map(translate_inst::<W>).collect()
+pub fn parse<W: Word, WShift: Word>(src: &str) -> Result<Vec<arm::Inst<W, WShift>>, ParseError> {
+    parse_raw(src)?
+        .iter()
+        .map(translate_inst::<W, WShift>)
+        .collect()
 }
 
 /// Corresponds to `liveness-from-file` in the original.
@@ -1169,7 +1174,7 @@ mod tests {
 
     #[test]
     fn test_parse_simple_mov() {
-        let insts = parse::<Word4>("mov r0, r1").unwrap();
+        let insts = parse::<Word4, Word2>("mov r0, r1").unwrap();
         assert_eq!(insts.len(), 1);
         assert_eq!(insts[0].op_code, OpCode::Mov);
         assert_eq!(insts[0].cond_code, CondCode::Al);
@@ -1181,13 +1186,13 @@ mod tests {
     #[test]
     fn test_parse_preserves_old_hole_parse_but_rejects_translation() {
         assert!(parse_raw("?").unwrap()[0].is_hole());
-        let err = parse::<Word4>("?").unwrap_err();
+        let err = parse::<Word4, Word2>("?").unwrap_err();
         assert!(err.message.contains("hole"));
     }
 
     #[test]
     fn test_parse_accepts_shift_folded_inst() {
-        let insts = parse::<Word4>("add r0, r1, r2, lsl #2").unwrap();
+        let insts = parse::<Word4, Word2>("add r0, r1, r2, lsl #2").unwrap();
         assert_eq!(insts.len(), 1);
         assert_eq!(insts[0].op_code, OpCode::Add);
         assert_eq!(insts[0].shift, ShiftCode::Lsl(2.into()));
@@ -1195,13 +1200,14 @@ mod tests {
 
     #[test]
     fn test_parse_rejects_invalid_shift_amount() {
-        let err = parse::<Word4>("add r0, r1, r2, lsl #32").unwrap_err();
-        assert!(err.message.contains("out of range"));
+        let err = parse::<Word4, Word3>("add r0, r1, r2, lsl #17").unwrap_err();
+        dbg!(&err);
+        assert!(err.message.contains("invalid shift amount"));
     }
 
     #[test]
     fn test_parse_mov_with_shift() {
-        let insts = parse::<Word4>("mov r0, r1, rrx").unwrap();
+        let insts = parse::<Word4, Word2>("mov r0, r1, rrx").unwrap();
         assert_eq!(insts.len(), 1);
         assert_eq!(insts[0].op_code, OpCode::Mov);
         assert_eq!(insts[0].shift, ShiftCode::Rrx);
@@ -1213,7 +1219,7 @@ mod tests {
         assert_eq!(op(&raw[0]), ("add", "", "rrx"));
         assert_eq!(raw[0].args, vec!["r0", "r1", "r2"]);
 
-        let insts = parse::<Word4>("add r0, r1, r2, rrx").unwrap();
+        let insts = parse::<Word4, Word2>("add r0, r1, r2, rrx").unwrap();
         assert_eq!(insts.len(), 1);
         assert_eq!(insts[0].op_code, OpCode::Add);
         assert_eq!(insts[0].shift, ShiftCode::Rrx);
@@ -1221,7 +1227,7 @@ mod tests {
 
     #[test]
     fn test_parse_rejects_rrx_with_amount() {
-        let err = parse::<Word4>("mov r0, r1, rrx, #1").unwrap_err();
+        let err = parse::<Word4, Word2>("mov r0, r1, rrx, #1").unwrap_err();
         assert!(
             err.message.contains("invalid operand") || err.message.contains("too many operands")
         );
@@ -1229,7 +1235,7 @@ mod tests {
 
     #[test]
     fn test_parse_rejects_mov_rrx_without_source_reg() {
-        let err = parse::<Word4>("mov r0, rrx").unwrap_err();
+        let err = parse::<Word4, Word2>("mov r0, rrx").unwrap_err();
         assert!(
             err.message.contains("invalid operand")
                 || err.message.contains("unsupported mov operands")
@@ -1237,118 +1243,27 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_asr_lsr_boundaries() {
-        assert_eq!(
-            parse::<Word4>("add r0, r1, r2, asr #1").unwrap()[0].shift,
-            ShiftCode::Asr(1.into())
-        );
-        assert_eq!(
-            parse::<Word4>("add r0, r1, r2, asr #32").unwrap()[0].shift,
-            ShiftCode::Asr(32.into())
-        );
-        assert!(
-            parse::<Word4>("add r0, r1, r2, asr #0")
-                .unwrap_err()
-                .message
-                .contains("out of range")
-        );
-        assert!(
-            parse::<Word4>("add r0, r1, r2, asr #33")
-                .unwrap_err()
-                .message
-                .contains("out of range")
-        );
-
-        assert_eq!(
-            parse::<Word4>("add r0, r1, r2, lsr #1").unwrap()[0].shift,
-            ShiftCode::Lsr(1.into())
-        );
-        assert_eq!(
-            parse::<Word4>("add r0, r1, r2, lsr #32").unwrap()[0].shift,
-            ShiftCode::Lsr(32.into())
-        );
-        assert!(
-            parse::<Word4>("add r0, r1, r2, lsr #0")
-                .unwrap_err()
-                .message
-                .contains("out of range")
-        );
-        assert!(
-            parse::<Word4>("add r0, r1, r2, lsr #33")
-                .unwrap_err()
-                .message
-                .contains("out of range")
-        );
-    }
-
-    #[test]
-    fn test_parse_lsl_ror_boundaries() {
-        assert_eq!(
-            parse::<Word4>("add r0, r1, r2, lsl #1").unwrap()[0].shift,
-            ShiftCode::Lsl(1.into())
-        );
-        assert_eq!(
-            parse::<Word4>("add r0, r1, r2, lsl #31").unwrap()[0].shift,
-            ShiftCode::Lsl(31.into())
-        );
-        assert!(
-            parse::<Word4>("add r0, r1, r2, lsl #0")
-                .unwrap_err()
-                .message
-                .contains("out of range")
-        );
-        assert!(
-            parse::<Word4>("add r0, r1, r2, lsl #32")
-                .unwrap_err()
-                .message
-                .contains("out of range")
-        );
-
-        assert_eq!(
-            parse::<Word4>("add r0, r1, r2, ror #1").unwrap()[0].shift,
-            ShiftCode::Ror(1.into())
-        );
-        assert_eq!(
-            parse::<Word4>("add r0, r1, r2, ror #31").unwrap()[0].shift,
-            ShiftCode::Ror(31.into())
-        );
-        assert!(
-            parse::<Word4>("add r0, r1, r2, ror #0")
-                .unwrap_err()
-                .message
-                .contains("out of range")
-        );
-        assert!(
-            parse::<Word4>("add r0, r1, r2, ror #32")
-                .unwrap_err()
-                .message
-                .contains("out of range")
-        );
-    }
-
-    #[test]
     fn test_parse_rejects_negative_shift_amount() {
-        let err = parse::<Word4>("add r0, r1, r2, lsl #-1").unwrap_err();
-        assert!(
-            err.message.contains("invalid shift amount") || err.message.contains("out of range")
-        );
+        let err = parse::<Word4, Word2>("add r0, r1, r2, lsl #-1").unwrap_err();
+        dbg!(&err);
+        assert!(err.message.contains("negative"));
     }
 
     #[test]
     fn test_parse_rejects_register_shift_amount() {
-        let err = parse::<Word4>("add r0, r1, r2, lsl r3").unwrap_err();
+        let err = parse::<Word4, Word2>("add r0, r1, r2, lsl r3").unwrap_err();
         assert!(err.message.contains("shift amount must be immediate"));
     }
 
     #[test]
     fn test_parse_folded_asl_becomes_lsl_shift_code() {
-        let insts = parse::<Word4>("add r0, r1, r2, asl #2").unwrap();
+        let insts = parse::<Word4, Word2>("add r0, r1, r2, asl #2").unwrap();
         assert_eq!(insts[0].shift, ShiftCode::Lsl(2.into()));
     }
 
     #[test]
     fn test_parse_conditional_with_shift() {
-        let insts = parse::<Word4>("addeq r0, r1, r2, lsr #3").unwrap();
+        let insts = parse::<Word4, Word2>("addeq r0, r1, r2, lsr #3").unwrap();
         assert_eq!(insts[0].op_code, OpCode::Add);
         assert_eq!(insts[0].cond_code, CondCode::Eq);
         assert_eq!(insts[0].shift, ShiftCode::Lsr(3.into()));
