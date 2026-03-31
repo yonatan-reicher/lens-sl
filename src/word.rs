@@ -276,6 +276,7 @@ fn to_u32_saturating<T: TryInto<u32>>(x: T) -> u32 {
     x.try_into().unwrap_or(u32::MAX)
 }
 
+impl_word!(Word2(u8)   bits 2  signed i8  mask 0x03);
 impl_word!(Word4(u8)   bits 4  signed i8  mask 0x0F);
 impl_word!(Word5(u8)   bits 5  signed i8  mask 0x1F);
 impl_word!(Word8(u8)   bits 8  signed i8  mask 0xFF);
