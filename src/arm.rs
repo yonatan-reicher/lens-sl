@@ -578,7 +578,7 @@ fn fmt_inst(
     Ok(())
 }
 
-impl<W: Debug> Debug for Inst<W> {
+impl<W: Debug, WShift: Debug> Debug for Inst<W, WShift> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         let arg_strings = self.args.each_ref().map(|a| format!("{a:?}"));
         fmt_inst(
@@ -593,7 +593,7 @@ impl<W: Debug> Debug for Inst<W> {
     }
 }
 
-impl<W: Display> Display for Inst<W> {
+impl<W: Display, WShift: Display> Display for Inst<W, WShift> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         let arg_strings = self.args.each_ref().map(|a| format!("{a}"));
         fmt_inst(
