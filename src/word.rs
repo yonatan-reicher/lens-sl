@@ -284,9 +284,37 @@ impl_word!(Word8(u8)   bits 8  signed i8  mask 0xFF);
 impl_word!(Word32(u32) bits 32 signed i32 mask 0xFFFFFFFFusize);
 impl_word!(Word64(u64) bits 64 signed i64 mask 0xFFFFFFFFFFFFFFFFusize);
 
+// =================================================================================================
+//                                            Bit Word
+// =================================================================================================
+
+/// Associates the exact word size needed to hold the number of bits in the word.
+pub trait HasBitWord {
+    type BitWord: Word;
+}
+
+impl HasBitWord for Word4 {
+    type BitWord = Word2;
+}
+impl HasBitWord for Word32 {
+    type BitWord = Word5;
+}
+impl HasBitWord for Word64 {
+    type BitWord = Word6;
+}
+
+pub type BitWord<T: HasBitWord> = T::BitWord;
+
+// =================================================================================================
+//                                             Other
+// =================================================================================================
+
 pub mod prelude {
     #[allow(unused_imports)]
-    pub use super::{AbstractWord, SmtWord, Word, Word2, Word4, Word5, Word6, Word8, Word32, Word64};
+    pub use super::{
+        AbstractWord, BitWord, HasBitWord, SmtWord, Word, Word2, Word4, Word5, Word6, Word8,
+        Word32, Word64,
+    };
     pub use crate::smtlib_utils::BitVecExt;
 }
 
