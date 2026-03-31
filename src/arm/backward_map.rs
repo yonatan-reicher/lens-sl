@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 ///
 /// About the condition flag again: all instructions in the map have a condition flag of always.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct BackwardMap<W: Word> {
-    pub map: FxHashMap<(Inst<W>, State<W>), Inputs<W>>,
+pub struct BackwardMap<W: Word, WShift: Word = BitWord<W>> {
+    pub map: FxHashMap<(Inst<W, WShift>, State<W>), Inputs<W>>,
     empty_vec: Vec<State<W>>,
     // The registers to consider when indexing into the map. These are the registers that are
     // "live" in the states, and other registers should be ignored.
@@ -20,7 +20,7 @@ pub struct BackwardMap<W: Word> {
 }
 pub type Inputs<W> = Vec<State<W>>;
 
-impl<W: Word> BackwardMap<W> {
+impl<W: Word + HasBitWord> BackwardMap<W, BitWord<W>> {
     pub fn new(registers: &[Register]) -> std::io::Result<Self>
     where
         Self: Serialize + for<'a> Deserialize<'a>,
@@ -109,10 +109,12 @@ impl<W: Word> BackwardMap<W> {
     }
 }
 
-impl<W: Word> std::ops::Index<(Inst<W>, State<W>)> for BackwardMap<W> {
+impl<W: Word, WShift: Word> std::ops::Index<(Inst<W, WShift>, State<W>)>
+    for BackwardMap<W, WShift>
+{
     type Output = [State<W>];
 
-    fn index(&self, (inst, mut state): (Inst<W>, State<W>)) -> &Self::Output {
+    fn index(&self, (inst, mut state): (Inst<W, WShift>, State<W>)) -> &Self::Output {
         // Clear the registers that don't matter.
         for r in Register::all() {
             if !self.registers.contains(&r) {
@@ -134,7 +136,7 @@ mod tests {
     #[test]
     fn test_backward_map_some_not_empty() {
         type W = Word4;
-        let bm = BackwardMap::<W>::new_recalculate(&[Register(1)]);
+        let bm = BackwardMap::<W, BitWord<W>>::new_recalculate(&[Register(1)]);
         assert!(bm.map.iter().any(|((inst, state), inputs)| {
             println!("Instruction: {inst}, Output State: {state}");
             println!("Input States:");
@@ -161,7 +163,7 @@ mod tests {
     fn test_backward_map() {
         type W = Word4;
         let bm = BackwardMap::<W>::new_recalculate(&[Register(1)]);
-        let inst: Inst<W> = inst!(MovI, 1, 12);
+        let inst: Inst<W, BitWord<W>> = inst!(MovI, 1, 12);
         let mut output = State::<W>::default();
         output.set_register(Register(1), 12.into());
         output.set_register(Register(2), 6.into());
@@ -186,7 +188,7 @@ mod tests {
     fn run_nop_backwards_one_option() {
         type W = Word4;
         let bm = BackwardMap::<W>::new_recalculate(&[Register(1)]);
-        let inst = inst!(Nop,);
+        let inst: Inst<W, BitWord<W>> = inst!(Nop,);
         let mut output = State::<W>::default();
         output.set_register(Register(1), 12.into());
         output.set_register(Register(2), 6.into());
