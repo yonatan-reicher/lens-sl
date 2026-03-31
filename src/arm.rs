@@ -350,7 +350,7 @@ mod semantics;
 mod backward_map;
 pub use backward_map::BackwardMap;
 
-impl<W: Copy + Into<Register>> Inst<W> {
+impl<W: Copy + Into<Register>, WShift> Inst<W, WShift> {
     fn args_with_types(&self) -> impl Iterator<Item = (W, ArgType)> {
         self.args.into_iter().zip(self.op_code.arg_types())
     }
@@ -366,7 +366,7 @@ impl<W: Copy + Into<Register>> Inst<W> {
     }
 }
 
-impl<W: Word> Inst<W> {
+impl<W: Word, WShift: Word> Inst<W, WShift> {
     pub fn run(&self, state: &mut State<W>) {
         let input = *state;
         let (mut read_mask, mut write_mask) = Default::default();
@@ -384,7 +384,7 @@ impl<W: Word> Inst<W> {
         &self,
         state: State<W>,
         bm: &'a BackwardMap<W>,
-    ) -> impl IntoIterator<Item = &'a State<W>> + use<'a, W> {
+    ) -> impl IntoIterator<Item = &'a State<W>> + use<'a, W, WShift> {
         &bm[(*self, state)]
     }
 
@@ -413,7 +413,7 @@ impl<W: Word> Inst<W> {
         &self,
         _output: state::Masked<W>,
         _bm: &'a BackwardMap<W>,
-    ) -> impl IntoIterator<Item = &'a state::Masked<W>> + use<'a, W> {
+    ) -> impl IntoIterator<Item = &'a state::Masked<W>> + use<'a, W, WShift> {
         // let unmasked_outputs = output.mask().;
         // self.run_backward(*output.state(), bm)
         //     .into_iter()
@@ -425,7 +425,10 @@ impl<W: Word> Inst<W> {
         []
     }
 
-    pub fn reduce<WSmall: Word>(&self, reducer: &mut Reducer<W, WSmall>) -> Inst<WSmall> {
+    pub fn reduce<WSmall: Word, WShiftSmall: Word>(
+        &self,
+        reducer: &mut Reducer<W, WSmall>,
+    ) -> Inst<WSmall, WShiftSmall> {
         fn reduce_arg<W: Word, WSmall: Word>(
             reducer: &mut Reducer<W, WSmall>,
             arg: W,
@@ -439,26 +442,27 @@ impl<W: Word> Inst<W> {
         }
 
         let arg_types = self.op_code.arg_types();
-        let info = ImmediateInfo {
+        let not_shift = ImmediateInfo {
             // TODO: is_shift: op_code.is_shift_instruction(),
             is_shift: false,
         };
+        let shift = self.shift.reduce(reducer);
         Inst {
             op_code: self.op_code,
             cond_code: self.cond_code,
-            shift: self.shift,
+            shift,
             args: [
-                reduce_arg(reducer, self.args[0], arg_types[0], &info),
-                reduce_arg(reducer, self.args[1], arg_types[1], &info),
-                reduce_arg(reducer, self.args[2], arg_types[2], &info),
+                reduce_arg(reducer, self.args[0], arg_types[0], &not_shift),
+                reduce_arg(reducer, self.args[1], arg_types[1], &not_shift),
+                reduce_arg(reducer, self.args[2], arg_types[2], &not_shift),
             ],
         }
     }
 
-    pub fn extend<WBig: Word>(
+    pub fn extend<WBig: Word, WShiftBig: Word>(
         &self,
         reducer: &Reducer<WBig, W>,
-    ) -> impl Iterator<Item = Inst<WBig>> + Clone {
+    ) -> impl Iterator<Item = Inst<WBig, WShiftBig>> + Clone {
         fn extend_arg<WSmall: Word, WBig: Word>(
             reducer: &Reducer<WBig, WSmall>,
             arg: WSmall,
@@ -474,20 +478,75 @@ impl<W: Word> Inst<W> {
         let arg_types = self.op_code.arg_types();
         extend_arg(reducer, args[0], arg_types[0]).flat_map(move |arg0| {
             extend_arg(reducer, args[1], arg_types[1]).flat_map(move |arg1| {
-                extend_arg(reducer, args[2], arg_types[2]).map(move |arg2| Inst {
-                    op_code: self.op_code,
-                    cond_code: self.cond_code,
-                    shift: self.shift,
-                    args: [arg0, arg1, arg2],
+                extend_arg(reducer, args[2], arg_types[2]).flat_map(move |arg2| {
+                    self.shift.extend(reducer).map(move |shift| Inst {
+                        op_code: self.op_code,
+                        cond_code: self.cond_code,
+                        shift,
+                        args: [arg0, arg1, arg2],
+                    })
                 })
             })
         })
     }
 }
 
+impl<WShift: Word> ShiftCode<WShift> {
+    fn reduce<W: Word, WSmall: Word, WShiftSmall: Word>(
+        &self,
+        reducer: &mut Reducer<W, WSmall>,
+    ) -> ShiftCode<WShiftSmall> {
+        use ShiftCode::*;
+        let yes_shift = &ImmediateInfo { is_shift: true };
+        match self {
+            None => None,
+            Asr(x) => Asr(reducer.reduce(x.into_word(), &yes_shift).into_word()),
+            Lsl(x) => Lsl(reducer.reduce(x.into_word(), &yes_shift).into_word()),
+            Lsr(x) => Lsr(reducer.reduce(x.into_word(), &yes_shift).into_word()),
+            Ror(x) => Ror(reducer.reduce(x.into_word(), &yes_shift).into_word()),
+            Rrx => Rrx,
+        }
+    }
+
+    fn extend<W: Word, WBig: Word, WShiftBig: Word>(
+        &self,
+        reducer: &Reducer<WBig, W>,
+    ) -> impl Iterator<Item = ShiftCode<WShiftBig>> + Clone {
+        use ShiftCode::*;
+        use itertools::Either;
+        match self {
+            None => Either::Left([None].into_iter()),
+            // TODO: Filter to only results that make sense (fit)
+            Asr(x) => Either::Right(
+                reducer
+                    .extend(x.into_word())
+                    .map((|x: WBig| Asr(x.into_word())) as fn(_) -> _),
+            ),
+            Lsl(x) => Either::Right(
+                reducer
+                    .extend(x.into_word())
+                    .map((|x: WBig| Lsl(x.into_word())) as fn(_) -> _),
+            ),
+            Lsr(x) => Either::Right(
+                reducer
+                    .extend(x.into_word())
+                    .map((|x: WBig| Lsr(x.into_word())) as fn(_) -> _),
+            ),
+            Ror(x) => Either::Right(
+                reducer
+                    .extend(x.into_word())
+                    .map((|x: WBig| Ror(x.into_word())) as fn(_) -> _),
+            ),
+            Rrx => Either::Left([Rrx].into_iter()),
+        }
+    }
+}
+
 pub mod enumerate;
-impl<W: Word> Inst<W> {
-    pub fn enumerate<'a>(ei: EnumerationInfo<'a, W>) -> impl Iterator<Item = Self> + use<'a, W> {
+impl<W: Word, WShift: Word> Inst<W, WShift> {
+    pub fn enumerate<'a>(
+        ei: EnumerationInfo<'a, W>,
+    ) -> impl Iterator<Item = Self> + use<'a, W, WShift> {
         enumerate::Enumerator::new(ei)
     }
 }
