@@ -208,7 +208,6 @@ impl<I: Clone + Debug + Eq + Hash> Extend<Programs<I>> for Programs<I> {
 use functionality::Mutate;
 #[cfg(test)]
 use proptest::prelude::*;
-use rustc_hash::FxHashMap;
 
 #[cfg(test)]
 impl<I> Arbitrary for Programs<I>
