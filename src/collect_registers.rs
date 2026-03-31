@@ -18,13 +18,13 @@ impl Collector {
 
     // --- Program ---
 
-    pub fn program<W: Word>(&mut self, program: &[Inst<W>]) {
+    pub fn program<W: Word, WShift: Word>(&mut self, program: &[Inst<W, WShift>]) {
         for inst in program {
             self.inst(*inst);
         }
     }
 
-    fn inst<W: Word>(&mut self, inst: Inst<W>) {
+    fn inst<W: Word, WShift: Word>(&mut self, inst: Inst<W, WShift>) {
         for (arg, arg_type) in inst.args.iter().zip(inst.op_code.arg_types()) {
             self.arg::<W>(*arg, arg_type);
         }
@@ -69,7 +69,7 @@ mod tests {
     #[test]
     fn test_1() {
         let mut collector = Collector::new();
-        collector.program::<Word64>(&[
+        collector.program::<Word64, Word6>(&[
             inst!(Add, 0, 1, 2),
             inst!(Add, 0, 1, 2),
             inst!(Sub, 0, 3, 2),
