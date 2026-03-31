@@ -293,15 +293,9 @@ pub trait HasBitWord {
     type BitWord: Word;
 }
 
-impl HasBitWord for Word4 {
-    type BitWord = Word2;
-}
-impl HasBitWord for Word32 {
-    type BitWord = Word5;
-}
-impl HasBitWord for Word64 {
-    type BitWord = Word6;
-}
+#[rustfmt::skip] impl HasBitWord for Word4 { type BitWord = Word2; }
+#[rustfmt::skip] impl HasBitWord for Word32 { type BitWord = Word5; }
+#[rustfmt::skip] impl HasBitWord for Word64 { type BitWord = Word6; }
 
 pub type BitWord<T: HasBitWord> = T::BitWord;
 
