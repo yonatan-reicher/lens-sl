@@ -277,6 +277,7 @@ fn to_u32_saturating<T: TryInto<u32>>(x: T) -> u32 {
 }
 
 impl_word!(Word2(u8)   bits 2  signed i8  mask 0x03);
+impl_word!(Word3(u8)   bits 3  signed i8  mask 0x07);
 impl_word!(Word4(u8)   bits 4  signed i8  mask 0x0F);
 impl_word!(Word5(u8)   bits 5  signed i8  mask 0x1F);
 impl_word!(Word6(u8)   bits 6  signed i8  mask 0x3F);
@@ -294,6 +295,7 @@ pub trait HasBitWord {
 }
 
 #[rustfmt::skip] impl HasBitWord for Word4 { type BitWord = Word2; }
+#[rustfmt::skip] impl HasBitWord for Word8 { type BitWord = Word3; }
 #[rustfmt::skip] impl HasBitWord for Word32 { type BitWord = Word5; }
 #[rustfmt::skip] impl HasBitWord for Word64 { type BitWord = Word6; }
 
@@ -306,7 +308,7 @@ pub type BitWord<T> = <T as HasBitWord>::BitWord;
 pub mod prelude {
     #[allow(unused_imports)]
     pub use super::{
-        AbstractWord, BitWord, HasBitWord, SmtWord, Word, Word2, Word4, Word5, Word6, Word8,
+        AbstractWord, BitWord, HasBitWord, SmtWord, Word, Word2, Word3, Word4, Word5, Word6, Word8,
         Word32, Word64,
     };
     pub use crate::smtlib_utils::BitVecExt;
