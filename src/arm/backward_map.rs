@@ -4,6 +4,7 @@ use super::{
 };
 use crate::all::All;
 use crate::word::prelude::*;
+use functionality::prelude::*;
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 
@@ -158,36 +159,29 @@ impl<W: Word + HasBitWord> BackwardMap<W, BitWord<W>> {
         }
         vec.push(inp);
     }
-}
 
-impl<W: Word, WShift: Word> std::ops::Index<(Inst<W, WShift>, State<W>)>
-    for BackwardMap<W, WShift>
-{
-    type Output = [State<W>];
-
-    fn index(&self, (inst, out_orig): (Inst<W, WShift>, State<W>)) -> &Self::Output {
+    pub fn get(&self, inst: Inst<W>, out_orig: State<W>) -> Vec<State<W>> {
         // Edge cases:
         // 1. Nop!
         if inst.op_code == OpCode::Nop {
-            return &[out_orig];
+            return vec![out_orig];
         }
-        // 2. Condition is false, and flags aren't affected.
+        // 2. Condition is false, and flags aren't affected. This can't be, so there is no input.
         if !inst.affects_flags() && !inst.cond_code.check(out_orig.flags.into()) {
-            return &[];
+            return vec![];
         }
         // 3. Condition is false (now), and the flags are affected. It could be both that the
         // condition was false and the instruction didn't run, and it could be that the condition
         // was true and the instruction did run, and the flags were just changed.
         if inst.affects_flags() && !inst.cond_code.check(out_orig.flags.into()) {
-            todo!();
-            return self.index((normalize_inst(inst), out_orig));
+            return self.get(normalize_inst(inst), out_orig).mutate(|v| {
+                v.push(out_orig);
+            });
         }
         let inst = normalize_inst(inst);
         let out = normalize_output_state(&inst, out_orig);
-        self.map
-            .get(&(inst, out))
-            .map(|v| v.as_slice())
-            .unwrap_or(&[])
+        self.map.get(&(inst, out)).cloned().unwrap_or_default()
+            .map(|inp| inp.masked(input_state_mask()) | out_orig)
     }
 }
 
@@ -236,6 +230,18 @@ fn input_state_mask<W: Copy + Into<Register>, WShift>(
         flags: inst.reads_flags(),
         registers,
     }
+}
+
+fn unnormalize_input_state<W: Copy + Into<Register>, WShift>(inst: &Inst<W, WShift>, out: &State<W>, inp: State<W>) -> impl Iterator<Item=State<W>> {
+    let out_mask = output_state_mask(inst);
+    let inp_mask = input_state_mask(inst, out);
+    // We have three kinds of interesting things. We have the inputs that appear in the input mask.
+    // We have the outputs that appear in the output mask, but not in the input mask. And we have
+    // those things that don't appear in both masks.
+    // Things in the input mask are as they are. Things in the output mask are the most interesting:
+    // they are overwritten and can have any possible value. Things which aren't in both masks
+    // actually are not written and not 
+    [].into_iter()
 }
 
 #[cfg(test)]
@@ -427,7 +433,7 @@ mod tests {
             ..EnumerationInfo::default()
         };
         for inst in Inst::enumerate(ei) {
-            let x = &bm[(inst, state)];
+            let x = bm.get(inst, state);
             println!("Instruction: {inst}, Output State: {state}");
             println!("Input States: {x:?}");
             if !x.is_empty() {

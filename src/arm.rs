@@ -384,8 +384,8 @@ impl<W: Word + HasBitWord> Inst<W> {
         &self,
         state: State<W>,
         bm: &'a BackwardMap<W>,
-    ) -> impl IntoIterator<Item = &'a State<W>> + use<'a, W> {
-        &bm[(*self, state)]
+    ) -> impl IntoIterator<Item = State<W>> + use<'a, W> {
+        bm.get(*self, state)
     }
 
     /// What the instruction reads from, given a state.

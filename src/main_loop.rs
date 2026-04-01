@@ -470,7 +470,7 @@ fn expand_backward<W: Word + HasBitWord>(
     bm: &BackwardMap<W>,
 ) {
     expand_forward_or_backward(graph, ei, tui, total_inst, |state, inst| {
-        inst.run_backward(state, bm).into_iter().cloned()
+        inst.run_backward(state, bm).into_iter()
     });
 }
 
@@ -540,7 +540,7 @@ fn build_backward<W: Word + HasBitWord>(graph: &mut Graph<W>, input: &State<W>, 
         for inst in program.iter().rev() {
             for state in states.drain(..) {
                 for new_state in inst.run_backward(state, bm) {
-                    new_states.push(*new_state);
+                    new_states.push(new_state);
                 }
             }
             std::mem::swap(&mut states, &mut new_states);
