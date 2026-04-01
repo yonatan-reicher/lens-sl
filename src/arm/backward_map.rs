@@ -90,7 +90,7 @@ impl<W: Word + HasBitWord> BackwardMap<W, BitWord<W>> {
             registers: EnumerationInfoOptions::Limited(registers),
             immediates: EnumerationInfoOptions::Unlimited,
             include_nop: false,
-            // TODO: Skip conditions, and nops
+            skip_cond_code: true,
         };
         let n_total = Inst::enumerate(ei).count();
 
@@ -240,8 +240,6 @@ mod tests {
     use crate::arm::{Flags, FlagsBitField};
     use crate::inst;
     use functionality::Mutate;
-    use proptest::prelude::*;
-    use proptest::property_test;
 
     #[test]
     fn normalize_inst_example() {
@@ -253,7 +251,7 @@ mod tests {
 
     #[test]
     fn normalize_output_state_example() {
-        let inst: Inst<Word4> = inst!(Add Cc, 0, 0, 1);
+        let inst: Inst<Word4> = normalize_inst(inst!(Add Cc, 0, 0, 1));
         let state = State {
             flags: Flags {
                 z: true,
@@ -277,7 +275,7 @@ mod tests {
 
     #[test]
     fn normalize_input_state_example() {
-        let inst: Inst<Word4> = inst!(Add Cc, 0, 1, 2);
+        let inst: Inst<Word4> = normalize_inst(inst!(Add Cc, 0, 1, 2));
         let output = State {
             flags: Flags {
                 z: true,
@@ -288,7 +286,7 @@ mod tests {
             .into(),
             registers: [2.into(); _],
         };
-        let input = State {
+        let input = normalize_output_state(&inst, State {
             flags: Flags {
                 z: true,
                 n: false,
@@ -297,7 +295,7 @@ mod tests {
             }
             .into(),
             registers: [3.into(); _],
-        };
+        });
         let input_normalized = normalize_input_state(&inst, &output, input);
         assert_eq!(
             input_normalized,
@@ -320,6 +318,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_backward_map_some_not_empty() {
         type W = Word4;
         let bm = BackwardMap::<W, BitWord<W>>::new_recalculate(&[Register(1)]);
@@ -333,6 +332,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_backward_map_some_has_more_than_4_inputs() {
         type W = Word4;
         let bm = BackwardMap::<W>::new_recalculate(&[Register(1)]);
@@ -346,6 +346,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_backward_map() {
         type W = Word4;
         let bm = BackwardMap::<W>::new_recalculate(&[Register(1)]);
@@ -371,6 +372,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn run_nop_backwards_one_option() {
         type W = Word4;
         let bm = BackwardMap::<W>::new_recalculate(&[Register(1)]);

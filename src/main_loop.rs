@@ -198,6 +198,7 @@ where
         registers: EnumerationInfoOptions::Limited(registers),
         immediates: EnumerationInfoOptions::Limited(immediates),
         include_nop: false,
+        skip_cond_code: false,
     };
     let mut globals = Globals {
         oracle,
