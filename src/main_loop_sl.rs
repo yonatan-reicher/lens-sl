@@ -420,32 +420,6 @@ fn build_forward<W: Word + HasBitWord>(graph: &mut Graph<W>, input: &MaskedState
     });
 }
 
-fn build_backward<W: Word + HasBitWord>(
-    graph: &mut Graph<W>,
-    input: &MaskedState<W>,
-    bm: &BackwardMap<W>,
-) {
-    build_forwards_or_backwards(graph, input, |program, output| {
-        todo!();
-        []
-        /*
-        // A vector of reaching states, that we push backwards in time, one instruction at a time.
-        let mut states = vec![output];
-        let mut new_states = vec![];
-        for inst in program.iter().rev() {
-            for state in states.drain(..) {
-                for new_state in inst.run_backward_masked(state, bm) {
-                    new_states.push(*new_state);
-                }
-            }
-            std::mem::swap(&mut states, &mut new_states);
-            debug_assert!(new_states.is_empty());
-        }
-        states
-        */
-    });
-}
-
 fn build_forwards_or_backwards<
     W: Word + HasBitWord,
     StepRet: IntoIterator<Item = (MaskedState<W>, MaskedState<W>)>,
