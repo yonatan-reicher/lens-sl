@@ -225,27 +225,27 @@ impl Parser {
     // instruction ::= WORD args | WORD _WORD | NOP | '?'
     fn parse_instruction(&mut self) -> Result<Option<Inst>, ParseError> {
         match self.peek().kind {
-            TokenKind::Eof => return Ok(None),
+            TokenKind::Eof => Ok(None),
             // Labels and .text directives don't produce instructions; skip them.
             TokenKind::Label | TokenKind::Block | TokenKind::Text => {
                 self.advance();
-                return Ok(Some(Inst::hole())); // filtered out by caller
+                Ok(Some(Inst::hole())) // filtered out by caller
                 // Actually we want to skip, not emit a hole — see parse_code.
             }
             TokenKind::Hole => {
                 self.advance();
-                return Ok(Some(Inst::hole()));
+                Ok(Some(Inst::hole()))
             }
             TokenKind::Nop => {
                 self.advance();
-                return Ok(Some(create_inst("nop", vec![])?));
+                Ok(Some(create_inst("nop", vec![])?))
             }
             TokenKind::Word => {
                 let op_tok = self.advance().clone();
                 match self.peek().kind {
                     TokenKind::UWord => {
                         let uw = self.advance().clone();
-                        return Ok(Some(create_special_inst(&op_tok.value, &uw.value)?));
+                        Ok(Some(create_special_inst(&op_tok.value, &uw.value)?))
                     }
                     TokenKind::Eof
                     | TokenKind::Word   // next instruction
@@ -255,24 +255,24 @@ impl Parser {
                     | TokenKind::Block
                     | TokenKind::Text => {
                         // zero-arg instruction
-                        return Ok(Some(create_inst(&op_tok.value, vec![])?));
+                        Ok(Some(create_inst(&op_tok.value, vec![])?))
                     }
                     _ => {
                         let args = self.parse_args()?;
-                        return Ok(Some(create_inst(&op_tok.value, args)?));
+                        Ok(Some(create_inst(&op_tok.value, args)?))
                     }
                 }
             }
             _ => {
                 let t = self.peek();
-                return Err(ParseError {
+                Err(ParseError {
                     message: format!(
                         "unexpected token {:?} ('{}') at start of instruction",
                         t.kind, t.value
                     ),
                     line: t.line,
                     col: t.col,
-                });
+                })
             }
         }
     }
@@ -715,19 +715,15 @@ fn create_inst(op: &str, mut args: Vec<String>) -> Result<Inst, ParseError> {
     op = bare_op;
 
     // ldr / str: treat fp (r99 in original) and scale offset by /4
-    if op == "ldr" || op == "str" {
-        if args_len >= 3 {
-            let offset = &args[2];
-            // Only scale if the offset does NOT start with 'r' (i.e. it is a literal)
-            if !offset.starts_with('r') {
-                if let Ok(n) = offset.parse::<i64>() {
-                    args[2] = (n / 4).to_string();
-                }
-            }
+    if (op == "ldr" || op == "str") && args_len >= 3 {
+        let offset = &args[2];
+        // Only scale if the offset does NOT start with 'r' (i.e. it is a literal)
+        if !offset.starts_with('r') && let Ok(n) = offset.parse::<i64>() {
+            args[2] = (n / 4).to_string();
         }
     }
 
-    let renamed: Vec<String> = args.into_iter().map(|a| rename(a)).collect();
+    let renamed: Vec<String> = args.into_iter().map(rename).collect();
 
     Ok(Inst::real(&op, &cond_type, "", renamed))
 }

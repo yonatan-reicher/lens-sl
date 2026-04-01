@@ -6,7 +6,7 @@ use crate::all::All;
 use crate::arm::enumerate::{EnumerationInfo, EnumerationInfoOptions};
 use crate::arm::state::Masked as MaskedState;
 use crate::arm::{
-    BackwardMap, Register, State, extend_program_for_each, run_program_masked, what_program_reads,
+    Register, State, extend_program_for_each, run_program_masked, what_program_reads,
 };
 use crate::collect_registers::Collector;
 use crate::graph;
@@ -158,6 +158,7 @@ where
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn synthesize<WT, W>(
     registers: &[Register],
     immediates: &[W],
@@ -188,10 +189,8 @@ where
         inputs: vec![],
         outputs: vec![],
         forward_length: 0,
-        backward_length: 0,
         extender: reducer,
         tui,
-        backward_map: BackwardMap::new(registers).unwrap(),
         total_instructions: Inst::enumerate(*enumeration_info).count(),
         original_reduced,
     };
@@ -256,11 +255,8 @@ struct Globals<
     outputs: Vec<MaskedState<WS>>,
     /// The length of the prefixes of the program being built.
     forward_length: usize,
-    backward_length: usize,
     extender: Reducer<WT, WS>,
     tui: &'tui TUI,
-    /// Stores data needed for running instructions backwards in time.
-    backward_map: BackwardMap<WS>,
     /// The total instructions we are enumerating
     total_instructions: usize,
     original_reduced: Program<WS>,
@@ -360,7 +356,7 @@ fn expand<W: Word + HasBitWord>(
             graph::Graph::Leaf(progs) => f(progs, effects),
             graph::Graph::Nest(hash_map) => {
                 for (effect, sub_graph) in hash_map {
-                    effects.push(effect.clone());
+                    effects.push(*effect);
                     recurse_outer(sub_graph, effects, f);
                     effects.pop();
                 }
@@ -422,32 +418,6 @@ fn build_forward<W: Word + HasBitWord>(graph: &mut Graph<W>, input: &MaskedState
                 (input, output | input)
             })
             .pipe(Either::Right)
-    });
-}
-
-fn build_backward<W: Word + HasBitWord>(
-    graph: &mut Graph<W>,
-    input: &MaskedState<W>,
-    bm: &BackwardMap<W>,
-) {
-    build_forwards_or_backwards(graph, input, |program, output| {
-        todo!();
-        []
-        /*
-        // A vector of reaching states, that we push backwards in time, one instruction at a time.
-        let mut states = vec![output];
-        let mut new_states = vec![];
-        for inst in program.iter().rev() {
-            for state in states.drain(..) {
-                for new_state in inst.run_backward_masked(state, bm) {
-                    new_states.push(*new_state);
-                }
-            }
-            std::mem::swap(&mut states, &mut new_states);
-            debug_assert!(new_states.is_empty());
-        }
-        states
-        */
     });
 }
 

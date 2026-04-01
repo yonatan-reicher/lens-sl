@@ -165,7 +165,7 @@ macro_rules! impl_word {
                 w.into_word()
             }
 
-            fn get_from_param(&self) -> () { () }
+            fn get_from_param(&self) -> () { }
         }
 
         // Arithmetic

@@ -500,10 +500,10 @@ impl<WShift: Word> ShiftCode<WShift> {
         let yes_shift = &ImmediateInfo { is_shift: true };
         match self {
             None => None,
-            Asr(x) => Asr(reducer.reduce(x.into_word(), &yes_shift).into_word()),
-            Lsl(x) => Lsl(reducer.reduce(x.into_word(), &yes_shift).into_word()),
-            Lsr(x) => Lsr(reducer.reduce(x.into_word(), &yes_shift).into_word()),
-            Ror(x) => Ror(reducer.reduce(x.into_word(), &yes_shift).into_word()),
+            Asr(x) => Asr(reducer.reduce(x.into_word(), yes_shift).into_word()),
+            Lsl(x) => Lsl(reducer.reduce(x.into_word(), yes_shift).into_word()),
+            Lsr(x) => Lsr(reducer.reduce(x.into_word(), yes_shift).into_word()),
+            Ror(x) => Ror(reducer.reduce(x.into_word(), yes_shift).into_word()),
             Rrx => Rrx,
         }
     }
@@ -831,7 +831,7 @@ mod tests {
             output.unwrap(),
             input
                 .mutate(|i| i[Register(0)] = 5.into())
-                .masked(Mask::just_register(Register(0)).into())
+                .masked(Mask::just_register(Register(0)))
         );
     }
 

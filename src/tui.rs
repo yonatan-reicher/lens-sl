@@ -1,7 +1,6 @@
 use crate::Direction;
 use crate::len::Len;
 use derive_more::Display;
-use humantime;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::ops::{Index, IndexMut};
 use std::sync::mpsc::{Receiver, RecvError, Sender, channel};
