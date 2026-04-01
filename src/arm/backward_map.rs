@@ -228,7 +228,7 @@ fn output_state_mask<W: Copy + Into<Register>, WShift>(inst: &Inst<W, WShift>) -
         inst.args_with_types()
             .any(|(a, t)| t.is_reg() && r == a.into())
     });
-    let flags = inst.op_code.affects_flags();
+    let flags = inst.affects_flags() || inst.reads_flags();
     state::Mask { registers, flags }
 }
 
