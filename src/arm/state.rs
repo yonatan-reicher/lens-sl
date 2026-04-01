@@ -35,17 +35,17 @@ pub trait Get<W: AbstractWord> {
 pub trait Set<W: AbstractWord> {
     fn maybe_set_reg(&mut self, r: Register, cond: W::Bool, w: W);
     fn maybe_set_flags(&mut self, cond: W::Bool, f: Flags<W::Bool>);
+    #[allow(unused)]
     fn set_reg(&mut self, r: Register, x: W) {
         self.maybe_set_reg(r, W::Bool::r#true(), x);
     }
+    #[allow(unused)]
     fn set_flags(&mut self, f: Flags<W::Bool>) {
         self.maybe_set_flags(W::Bool::r#true(), f)
     }
 }
 
-pub trait StateTrait<W: AbstractWord>: Get<W> + Set<W> {
-    fn default_from(arg: W::FromParam) -> Self;
-}
+pub trait StateTrait<W: AbstractWord>: Get<W> + Set<W> {}
 
 // ============================= State =============================
 
@@ -138,10 +138,7 @@ impl<W: Word> Set<W> for State<W> {
     fn maybe_set_flags(&mut self, cond: bool, f: Flags)        { if cond { self.flags = f.into(); } }
 }
 
-#[rustfmt::skip]
-impl<W: Word> StateTrait<W> for State<W> {
-    fn default_from((): ()) -> Self { Self::default() }
-}
+impl<W: Word> StateTrait<W> for State<W> {}
 
 // --- Symbolic State ---
 
@@ -165,19 +162,7 @@ impl<'st, W: SmtWord<'st>> Set<W> for SymbolicState<'st, W> {
     }
 }
 
-impl<'st, W: SmtWord<'st>> StateTrait<W> for SymbolicState<'st, W> {
-    fn default_from(st: &'st Storage) -> Self {
-        Self {
-            flags: Flags {
-                z: Bool::r#false(),
-                n: Bool::r#false(),
-                c: Bool::r#false(),
-                v: Bool::r#false(),
-            },
-            registers: [W::Word::from(0).into_abstract_word(st); _],
-        }
-    }
-}
+impl<'st, W: SmtWord<'st>> StateTrait<W> for SymbolicState<'st, W> {}
 
 // ============================ State impl ============================
 

@@ -417,7 +417,7 @@ mod tests {
             registers: EnumerationInfoOptions::Limited(&[]),
             immediates: EnumerationInfoOptions::Limited(&[1.into()]),
         }) {
-            if false && inst.op_code.arg_types().into_iter().any(|x| x.is_reg()) {
+            if inst.op_code.arg_types().into_iter().any(|x| x.is_reg()) {
                 panic!(
                     "Sadly, the enumerator generated the following instruction: '{inst}'. It has \
                      a register argument, but that should not be possible."
