@@ -1,6 +1,11 @@
-/// --- Main Files ---
-/// Definitions of different word sizes, for example 4-bit, 8-bit, 64-bit.
-mod word;
+// --- The Actual Algorithm ---
+/// Main loop where the big picture stuff happens.
+mod main_loop;
+/// Rewrite of main loop with separation logic.
+mod main_loop_sl;
+
+// --- Main Files ---
+// I tried to make them as independent as possible.
 /// The search graph that we use for forward and backward search.
 mod graph;
 /// Definitions of how we represent programs in an efficient way.
@@ -17,33 +22,6 @@ mod oracle;
 /// This module collects registers that we consider for synthesis.
 mod collect_registers;
 mod tui;
-/// Main loop where the big picture stuff happens.
-mod main_loop;
-/// Rewrite of main loop with separation logic.
-mod main_loop_sl;
-
-// Here is a diagram of the dependency structure between some of the main modules:
-//
-//                              +-----------+
-//                     +------> | main_loop | <---------------------------+
-//                    /         +-----------+                              \
-//                   /           ^  ^  ^  ^                                 \
-//                  /           /   |   \  \                                 \
-//                 /           /    \    \  +--------------+                  \
-//                /           /      \    \                 \                  \
-//          +-------+  +----------+   \    \  +-----------+  |             +--------+
-//          | graph |  | programs |    \    +-| enumerate |  |             | Oracle |
-//          +-------+  +----------+     \     +-----------+  |             +--------+
-//                                      |                    |
-//                                   +-----+                 |
-//                                   | arm |                 |
-//                                   +-----+                 |
-//                                      ^                    |
-//                                       \                   |
-//                                        \   +------------------+
-//                                         +--| reduce_bit_width |
-//                                            +------------------+
-//
 
 // --- Utilities ---
 /// Return all permutations of a slice of iterators.
@@ -58,6 +36,8 @@ mod bool;
 /// Defines a trait for things which have length
 mod len;
 mod all;
+/// Definitions of different word sizes, for example 4-bit, 8-bit, 64-bit.
+mod word;
 
 #[derive(Clone, Copy, Debug, derive_more::Display, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Direction {
