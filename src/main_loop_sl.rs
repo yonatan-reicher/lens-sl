@@ -355,7 +355,7 @@ fn expand<W: Word + HasBitWord>(
             graph::Graph::Leaf(progs) => f(progs, effects),
             graph::Graph::Nest(hash_map) => {
                 for (effect, sub_graph) in hash_map {
-                    effects.push(effect.clone());
+                    effects.push(*effect);
                     recurse_outer(sub_graph, effects, f);
                     effects.pop();
                 }
