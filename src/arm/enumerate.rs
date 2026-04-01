@@ -34,11 +34,12 @@ pub struct EnumerationInfo<'a, W> {
     pub immediates: EnumerationInfoOptions<'a, W>,
 }
 
-#[derive(Clone, Copy, derive_more::Debug)]
+#[derive(Clone, Copy, derive_more::Debug, Default)]
 pub enum EnumerationInfoOptions<'a, T> {
     /// The options will be given from this slice.
     Limited(&'a [T]),
     /// The enumerated options will be every register and immediate!
+    #[default]
     Unlimited,
 }
 
@@ -243,11 +244,6 @@ impl<'a, W: Word> IntoIterator for EnumerationInfoOptions<'a, W> {
     }
 }
 
-impl<'a, T> Default for EnumerationInfoOptions<'a, T> {
-    fn default() -> Self {
-        Self::Unlimited
-    }
-}
 
 impl<'a, W: Word + HasBitWord> Iterator for Enumerator<'a, W> {
     type Item = Inst<W>;
