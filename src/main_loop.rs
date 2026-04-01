@@ -532,7 +532,11 @@ fn build_forward<W: Word + HasBitWord>(graph: &mut Graph<W>, input: &State<W>) {
     });
 }
 
-fn build_backward<W: Word + HasBitWord>(graph: &mut Graph<W>, input: &State<W>, bm: &BackwardMap<W>) {
+fn build_backward<W: Word + HasBitWord>(
+    graph: &mut Graph<W>,
+    input: &State<W>,
+    bm: &BackwardMap<W>,
+) {
     build_forwards_or_backwards(graph, input, |program, output| {
         // A vector of reaching states, that we push backwards in time, one instruction at a time.
         let mut states = vec![output];
