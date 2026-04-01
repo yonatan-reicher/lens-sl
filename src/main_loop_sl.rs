@@ -188,10 +188,8 @@ where
         inputs: vec![],
         outputs: vec![],
         forward_length: 0,
-        backward_length: 0,
         extender: reducer,
         tui,
-        backward_map: BackwardMap::new(registers).unwrap(),
         total_instructions: Inst::enumerate(*enumeration_info).count(),
         original_reduced,
     };
@@ -256,11 +254,8 @@ struct Globals<
     outputs: Vec<MaskedState<WS>>,
     /// The length of the prefixes of the program being built.
     forward_length: usize,
-    backward_length: usize,
     extender: Reducer<WT, WS>,
     tui: &'tui TUI,
-    /// Stores data needed for running instructions backwards in time.
-    backward_map: BackwardMap<WS>,
     /// The total instructions we are enumerating
     total_instructions: usize,
     original_reduced: Program<WS>,
