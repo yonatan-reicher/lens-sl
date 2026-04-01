@@ -18,7 +18,7 @@ use std::ops::*;
 #[rustfmt::skip]
 pub trait Word
     : AbstractWord<Bool=bool, FromParam=()>
-    + All
+    + All<Iter: Clone>
     + Debug
     + Default
     + Display
