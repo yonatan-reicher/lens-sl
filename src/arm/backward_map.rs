@@ -8,7 +8,6 @@ use functionality::prelude::*;
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 
-
 // A backwards map is a mapping between instructions and output states, to input states that go to
 // that output state by that instruction. But in reality, it's more complicated than that. The
 // actual information stored follows the following rules:
@@ -18,7 +17,7 @@ use serde::{Deserialize, Serialize};
 //
 // ## No Nop Rule
 // Does not contain Nop instructions.
-// 
+//
 // ## Output Rule
 // The output states only contain the instruction's input/output registers. It only contains the
 // flags if the instruction reads or writes the flags.
