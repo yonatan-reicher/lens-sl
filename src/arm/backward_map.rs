@@ -8,17 +8,28 @@ use functionality::prelude::*;
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 
+
+// A backwards map is a mapping between instructions and output states, to input states that go to
+// that output state by that instruction. But in reality, it's more complicated than that. The
+// actual information stored follows the following rules:
+//
+// ## Always Rule
+// Instructions all have the 'always' condition.
+//
+// ## No Nop Rule
+// Does not contain Nop instructions.
+// 
+// ## Output Rule
+// The output states only contain the instruction's input/output registers. It only contains the
+// flags if the instruction reads or writes the flags.
+//
+// ## Input Rule
+// The input states only contain the instruction's input registers. They only contain the flags if
+// the state reads the flags.
+
 /// A mapping between instructions and output states, to input states that go to that output states.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BackwardMap<W: Word, WShift: Word = BitWord<W>> {
-    // That mapping mentioned above.
-    // This real mapping actually trims some things:
-    // 1. Instructions all have the 'always' condition.
-    // 2. Output states only have the registers that appear in the instruction, and if the
-    //    instruction does not affect the flags, the flags are zero as well.
-    // 3. Input states only have the registers marked as input registers, and only has the flags if
-    //    the instruction reads the flags
-    // 4. Skips NOP instructions
     #[allow(clippy::type_complexity)]
     pub map: FxHashMap<(Inst<W, WShift>, State<W>), Inputs<W>>,
     // The registers to consider when indexing into the map. These are the registers that are
