@@ -115,7 +115,7 @@ impl<'a, W: Word + HasBitWord> Enumerator<'a, W> {
         Some(Inst {
             op_code: self.op_code,
             cond_code: self.cond_code,
-            shift: self.shift,
+            shift: self.try_current_shift()?,
             args: [
                 self.try_current_arg(0, ei)?,
                 self.try_current_arg(1, ei)?,
@@ -155,7 +155,7 @@ impl<'a, W: Word + HasBitWord> Enumerator<'a, W> {
         use ShiftCode::*;
         #[rustfmt::skip]
         let next = match self.shift {
-            None => Asr(1.into()),
+            None => Asr(0.into()),
             Asr(i) => if i < max { Asr(i + 1.into()) } else { Lsl(0.into()) },
             Lsl(i) => if i < max { Lsl(i + 1.into()) } else { Lsr(0.into()) },
             Lsr(i) => if i < max { Lsr(i + 1.into()) } else { Ror(0.into()) },
@@ -252,15 +252,17 @@ impl<'a, T> Default for EnumerationInfoOptions<'a, T> {
 impl<'a, W: Word + HasBitWord> Iterator for Enumerator<'a, W> {
     type Item = Inst<W>;
     fn next(&mut self) -> Option<Self::Item> {
-        if self.done {
-            return None;
-        }
-        let Some(ret) = self.try_current(&self.ei) else {
+        loop {
+            if self.done {
+                return None;
+            }
+            let Some(ret) = self.try_current(&self.ei) else {
+                self.advance();
+                continue;
+            };
             self.advance();
-            return self.next();
-        };
-        self.advance();
-        Some(ret)
+            return Some(ret);
+        }
     }
 }
 
@@ -300,7 +302,9 @@ mod tests {
         .count();
         assert_eq!(
             c,
-            OpCode::COUNT as usize * CondCode::COUNT as usize * 6 /*possible shift codes */
+            OpCode::COUNT as usize
+            * CondCode::COUNT as usize
+            * 6 /*possible shift codes */
         );
     }
 
