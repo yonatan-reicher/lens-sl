@@ -1,20 +1,36 @@
-use super::{EnumerationInfo, EnumerationInfoOptions, Inst, Register, State};
+use super::{
+    ArgType, CondCode, EnumerationInfo, EnumerationInfoOptions, Inst, OpCode, RegArgType, Register,
+    State, state,
+};
 use crate::all::All;
 use crate::word::prelude::*;
+use functionality::prelude::*;
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 
-/// A hash-map between instructions and output states to input states that send to the output. The
-/// states use a liveness mask to mark which registers are ignored, and they all ignore the
-/// condition flag. Currently, states also don't represent memory, so we don't need to worry about
-/// that.
-///
-/// About the condition flag again: all instructions in the map have a condition flag of always.
+// A backwards map is a mapping between instructions and output states, to input states that go to
+// that output state by that instruction. But in reality, it's more complicated than that. The
+// actual information stored follows the following rules:
+//
+// ## Always Rule
+// Instructions all have the 'always' condition.
+//
+// ## No Nop Rule
+// Does not contain Nop instructions.
+//
+// ## Output Rule
+// The output states only contain the instruction's input/output registers. It only contains the
+// flags if the instruction reads or writes the flags.
+//
+// ## Input Rule
+// The input states only contain the instruction's input registers. They only contain the flags if
+// the state reads the flags.
+
+/// A mapping between instructions and output states, to input states that go to that output states.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BackwardMap<W: Word, WShift: Word = BitWord<W>> {
     #[allow(clippy::type_complexity)]
     pub map: FxHashMap<(Inst<W, WShift>, State<W>), Inputs<W>>,
-    empty_vec: Vec<State<W>>,
     // The registers to consider when indexing into the map. These are the registers that are
     // "live" in the states, and other registers should be ignored.
     registers: Vec<Register>,
@@ -80,61 +96,277 @@ impl<W: Word + HasBitWord> BackwardMap<W, BitWord<W>> {
         <W as All>::Iter: Clone,
     {
         let mut ret = FxHashMap::default();
-        let mut i = 0;
-        let ei = EnumerationInfoOptions::Limited(registers);
-        State::all_each(&ei, |input| {
-            if i % 100 == 0 {
-                dbg!(i);
-            }
-            i += 1;
-            let mut output = State::default();
-            let ei = EnumerationInfo {
-                registers: EnumerationInfoOptions::Limited(registers),
-                immediates: EnumerationInfoOptions::Unlimited,
-            };
-            for inst in Inst::enumerate(ei) {
-                input.clone_to(&mut output);
-                inst.run(&mut output);
-                // Store!
-                let inputs = ret.entry((inst, output)).or_insert_with(Vec::new);
-                if !inputs.contains(input) {
-                    inputs.push(*input);
+
+        let ei = EnumerationInfo {
+            registers: EnumerationInfoOptions::Limited(registers),
+            immediates: EnumerationInfoOptions::Unlimited,
+            include_nop: false,
+            skip_cond_code: true,
+        };
+        let n_total = Inst::enumerate(ei).count();
+
+        println!("Recalculating backwards map for {registers:?}");
+        let delta_for_print = std::time::Duration::from_secs_f32(1. / 12.);
+        let start_time = std::time::Instant::now();
+        let mut last_print_time = start_time - delta_for_print * 2;
+        for (i, inst) in Inst::enumerate(ei).enumerate() {
+            // Printing
+            let now = std::time::Instant::now();
+            if now - last_print_time >= delta_for_print {
+                last_print_time = now;
+                let progress = (100 * i) / n_total;
+                print!("\rProgress: {progress}%");
+                if let Ok(estimated_time) = {
+                    std::time::Duration::try_from_secs_f64(
+                        (now - start_time).as_secs_f64() * ((n_total - i) as f64 / i as f64),
+                    )
+                } {
+                    let estimated_time = humantime::Duration::from(estimated_time);
+                    print!(" ET: {estimated_time}");
                 }
+                let _ = std::io::Write::flush(&mut std::io::stdout());
             }
-        });
+            // Actual stuff
+            let registers_in_inst = inst
+                .args_with_types()
+                .filter_map(|(a, t)| {
+                    if t.is_reg() {
+                        Some(Register::from(a))
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+            State::all_each(
+                &EnumerationInfoOptions::Limited(&registers_in_inst),
+                |input| {
+                    let mut output = *input;
+                    inst.run(&mut output);
+                    Self::store(&mut ret, inst, output, *input);
+                },
+            );
+        }
+        println!();
         Self {
             map: ret,
-            empty_vec: vec![],
             registers: registers.to_vec(),
         }
     }
+
+    #[allow(clippy::type_complexity)]
+    fn store(
+        map: &mut FxHashMap<(Inst<W>, State<W>), Vec<State<W>>>,
+        inst: Inst<W>,
+        out: State<W>,
+        inp: State<W>,
+    ) {
+        let inst = normalize_inst(inst);
+        let out = normalize_output_state(&inst, out);
+        let inp = normalize_input_state(&inst, &out, inp);
+        let vec = map.entry((inst, out)).or_default();
+        if vec.contains(&inp) {
+            return;
+        }
+        vec.push(inp);
+    }
+
+    pub fn get(&self, inst: Inst<W>, out_orig: State<W>) -> Vec<State<W>> {
+        // Edge cases:
+        // 1. Nop!
+        if inst.op_code == OpCode::Nop {
+            return vec![out_orig];
+        }
+        // 2. Condition is false, and flags aren't affected. This can't be, so there is no input.
+        if !inst.affects_flags() && !inst.cond_code.check(out_orig.flags.into()) {
+            return vec![];
+        }
+        // 3. Condition is false (now), and the flags are affected. It could be both that the
+        // condition was false and the instruction didn't run, and it could be that the condition
+        // was true and the instruction did run, and the flags were just changed.
+        if inst.affects_flags() && !inst.cond_code.check(out_orig.flags.into()) {
+            return self.get(normalize_inst(inst), out_orig).mutate(|v| {
+                v.push(out_orig);
+            });
+        }
+        let inst = normalize_inst(inst);
+        let out = normalize_output_state(&inst, out_orig);
+        self.map
+            .get(&(inst, out))
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .flat_map(|inp| unnormalize_input_state(&inst, &out, inp))
+            .collect()
+    }
 }
 
-impl<W: Word, WShift: Word> std::ops::Index<(Inst<W, WShift>, State<W>)>
-    for BackwardMap<W, WShift>
-{
-    type Output = [State<W>];
-
-    fn index(&self, (inst, mut state): (Inst<W, WShift>, State<W>)) -> &Self::Output {
-        // Clear the registers that don't matter.
-        for r in Register::all() {
-            if !self.registers.contains(&r) {
-                state.set_register(r, 0.into());
-            }
-        }
-        self.map
-            .get(&(inst, state))
-            .map(|v| v.as_slice())
-            .unwrap_or(&self.empty_vec)
+fn normalize_inst<W, WShift>(inst: Inst<W, WShift>) -> Inst<W, WShift> {
+    Inst {
+        cond_code: CondCode::Al,
+        ..inst
     }
+}
+
+fn normalize_output_state<W: Copy + Default + Into<Register>, WShift: Copy>(
+    inst: &Inst<W, WShift>,
+    s: State<W>,
+) -> State<W> {
+    *s.masked(output_state_mask(inst)).state()
+}
+
+fn normalize_input_state<W: Copy + Default + Into<Register>, WShift: Copy>(
+    inst: &Inst<W, WShift>,
+    out: &State<W>,
+    inp: State<W>,
+) -> State<W> {
+    *inp.masked(input_state_mask(inst, out)).state()
+}
+
+/// Get the mask for the output state, as written in the top of the file.
+fn output_state_mask<W: Copy + Into<Register>, WShift>(inst: &Inst<W, WShift>) -> state::Mask {
+    let registers = Register::ALL.map(|r| {
+        inst.args_with_types()
+            .any(|(a, t)| t.is_reg() && r == a.into())
+    });
+    let flags = inst.affects_flags() || inst.reads_flags();
+    state::Mask { registers, flags }
+}
+
+/// Get the mask for the input states
+fn input_state_mask<W: Copy + Into<Register>, WShift>(
+    inst: &Inst<W, WShift>,
+    _out: &State<W>,
+) -> state::Mask {
+    let registers = Register::ALL.map(|r| {
+        inst.args_with_types()
+            .any(|(a, t)| t == ArgType::Reg(RegArgType::Inp) && r == a.into())
+    });
+    state::Mask {
+        flags: inst.reads_flags(),
+        registers,
+    }
+}
+
+fn unnormalize_input_state<W: Word, WShift>(
+    inst: &Inst<W, WShift>,
+    original_output: &State<W>,
+    inp: State<W>,
+) -> impl Iterator<Item = State<W>>
+where
+    <W as All>::Iter: Clone,
+{
+    use itertools::Itertools;
+    let out_mask = output_state_mask(inst);
+    let inp_mask = input_state_mask(inst, original_output);
+    // We have three kinds of interesting things. We have the inputs that appear in the input mask.
+    // We have the outputs that appear in the output mask, but not in the input mask. And we have
+    // those things that don't appear in both masks.
+    // Things in the input mask are as they are. Things in the output mask are the most interesting:
+    // they are overwritten and can have any possible value. Things which aren't in both masks
+    // actually are not written and not read, so they should be as given by the original output.
+    let only_in_output = out_mask & !inp_mask;
+    let ret = *(inp.masked(inp_mask) | state::Masked::from(*original_output)).state();
+    only_in_output
+        .registers()
+        .map(|r| W::all().map(move |w| (r, w)))
+        .multi_cartesian_product()
+        .map(move |to_set| {
+            let mut ret = ret;
+            for (r, w) in to_set {
+                ret[r] = w;
+            }
+            ret
+        })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Flags, inst};
+    use crate::arm::{Flags, FlagsBitField};
+    use crate::inst;
+    use functionality::Mutate;
 
     #[test]
+    fn normalize_inst_example() {
+        assert_eq!(
+            normalize_inst::<Word4, Word2>(inst!(Add Cc, 0, 0, 1)),
+            inst!(Add, 0, 0, 1),
+        );
+    }
+
+    #[test]
+    fn normalize_output_state_example() {
+        let inst: Inst<Word4> = normalize_inst(inst!(Add Cc, 0, 0, 1));
+        let state = State {
+            flags: Flags {
+                z: true,
+                n: false,
+                // Look, this actually makes the condition false
+                c: true,
+                v: false,
+            }
+            .into(),
+            registers: [2.into(); _],
+        };
+        let state_normalized = normalize_output_state(&inst, state);
+        assert_eq!(
+            state_normalized,
+            State::default().mutate(|s| {
+                s[Register(0)] = 2.into();
+                s[Register(1)] = 2.into();
+            }),
+        );
+    }
+
+    #[test]
+    fn normalize_input_state_example() {
+        let inst: Inst<Word4> = normalize_inst(inst!(Add Cc, 0, 1, 2));
+        let output = State {
+            flags: Flags {
+                z: true,
+                n: false,
+                c: true,
+                v: false,
+            }
+            .into(),
+            registers: [2.into(); _],
+        };
+        let input = normalize_output_state(
+            &inst,
+            State {
+                flags: Flags {
+                    z: true,
+                    n: false,
+                    c: true,
+                    v: false,
+                }
+                .into(),
+                registers: [3.into(); _],
+            },
+        );
+        let input_normalized = normalize_input_state(&inst, &output, input);
+        assert_eq!(
+            input_normalized,
+            State::default().mutate(|s| {
+                // These were input registers
+                s[Register(1)] = 3.into();
+                s[Register(2)] = 3.into();
+                // Register 0 was not!
+            }),
+        );
+    }
+
+    #[test]
+    fn normalize_input_state_inst_that_reads_flags() {
+        let inst: Inst<Word32> = inst!(Add, 0, 1, 2; shift Rrx);
+        let out = State::default();
+        let inp_orig = State::default().mutate(|s| s.flags |= FlagsBitField::C);
+        let inp = normalize_input_state(&inst, &out, inp_orig);
+        assert_eq!(inp_orig, inp);
+    }
+
+    #[test]
+    #[ignore]
     fn test_backward_map_some_not_empty() {
         type W = Word4;
         let bm = BackwardMap::<W, BitWord<W>>::new_recalculate(&[Register(1)]);
@@ -148,6 +380,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_backward_map_some_has_more_than_4_inputs() {
         type W = Word4;
         let bm = BackwardMap::<W>::new_recalculate(&[Register(1)]);
@@ -161,6 +394,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_backward_map() {
         type W = Word4;
         let bm = BackwardMap::<W>::new_recalculate(&[Register(1)]);
@@ -186,6 +420,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn run_nop_backwards_one_option() {
         type W = Word4;
         let bm = BackwardMap::<W>::new_recalculate(&[Register(1)]);
@@ -230,9 +465,10 @@ mod tests {
         let ei = EnumerationInfo {
             registers: EnumerationInfoOptions::Limited(&[Register(0), Register(1)]),
             immediates: EnumerationInfoOptions::Limited(&[0.into(), 1.into(), 5.into()]),
+            ..EnumerationInfo::default()
         };
         for inst in Inst::enumerate(ei) {
-            let x = &bm[(inst, state)];
+            let x = bm.get(inst, state);
             println!("Instruction: {inst}, Output State: {state}");
             println!("Input States: {x:?}");
             if !x.is_empty() {

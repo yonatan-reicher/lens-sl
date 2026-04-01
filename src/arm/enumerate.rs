@@ -32,6 +32,8 @@ pub struct EnumerationInfo<'a, W> {
     pub registers: EnumerationInfoOptions<'a, Register>,
     /// The immediates to use. Must not be empty.
     pub immediates: EnumerationInfoOptions<'a, W>,
+    pub include_nop: bool,
+    pub skip_cond_code: bool,
 }
 
 #[derive(Clone, Copy, derive_more::Debug, Default)]
@@ -96,7 +98,9 @@ impl<'a, W: Word + HasBitWord> Enumerator<'a, W> {
         self.ei
             .immediates
             .into_iter()
-            .filter(|i| 1 <= Into::<usize>::into(*i) && Into::<usize>::into(*i) <= BitWord::<W>::MAX.into())
+            .filter(|i| {
+                1 <= Into::<usize>::into(*i) && Into::<usize>::into(*i) <= BitWord::<W>::MAX.into()
+            })
             .map(|i| i.into_word::<BitWord<W>>())
     }
 
@@ -113,6 +117,9 @@ impl<'a, W: Word + HasBitWord> Enumerator<'a, W> {
     }
 
     fn try_current(&self, ei: &EnumerationInfo<W>) -> Option<Inst<W>> {
+        if !self.ei.include_nop && self.op_code == OpCode::Nop {
+            return None;
+        }
         Some(Inst {
             op_code: self.op_code,
             cond_code: self.cond_code,
@@ -133,11 +140,17 @@ impl<'a, W: Word + HasBitWord> Enumerator<'a, W> {
                 return None;
             }
             self.op_code = std::mem::transmute::<u8, OpCode>(next);
-            Some(())
         }
+        if !self.ei.include_nop && self.op_code == OpCode::Nop {
+            return self.advance_op_code();
+        }
+        Some(())
     }
 
     fn advance_cond_code(&mut self) -> Option<()> {
+        if self.ei.skip_cond_code {
+            return None;
+        }
         unsafe {
             let i: u8 = std::mem::transmute(self.cond_code);
             let next = i + 1;
@@ -216,6 +229,8 @@ impl<'a, W> Default for EnumerationInfo<'a, W> {
         Self {
             registers: Default::default(),
             immediates: Default::default(),
+            include_nop: false,
+            skip_cond_code: false,
         }
     }
 }
@@ -243,7 +258,6 @@ impl<'a, W: Word> IntoIterator for EnumerationInfoOptions<'a, W> {
         }
     }
 }
-
 
 impl<'a, W: Word + HasBitWord> Iterator for Enumerator<'a, W> {
     type Item = Inst<W>;
@@ -282,6 +296,7 @@ mod tests {
             Enumerator::new(EnumerationInfo::<Word8> {
                 registers: EnumerationInfoOptions::Limited(&[Register(2)]),
                 immediates: EnumerationInfoOptions::Limited(&[42.into()]),
+                ..Default::default()
             })
             .counts()
             .into_iter()
@@ -290,17 +305,43 @@ mod tests {
     }
 
     #[test]
+    fn include_nop_false() {
+        assert!(
+            Enumerator::new(EnumerationInfo {
+                registers: EnumerationInfoOptions::Limited(&[Register(5)]),
+                immediates: EnumerationInfoOptions::<Word8>::Limited(&[69.into()]),
+                include_nop: false,
+                ..Default::default()
+            })
+            .all(|inst| inst.op_code != OpCode::Nop)
+        );
+    }
+
+    #[test]
+    fn include_nop_true() {
+        assert!(
+            Enumerator::new(EnumerationInfo {
+                registers: EnumerationInfoOptions::Limited(&[Register(5)]),
+                immediates: EnumerationInfoOptions::<Word4>::Limited(&[69.into()]),
+                include_nop: true,
+                ..Default::default()
+            })
+            .any(|inst| inst.op_code == OpCode::Nop)
+        );
+    }
+
+    #[test]
     pub fn test_count() {
         let c = Enumerator::new(EnumerationInfo::<Word8> {
             registers: EnumerationInfoOptions::Limited(&[Register(2)]),
             immediates: EnumerationInfoOptions::Limited(&[5.into()]),
+            include_nop: true,
+            skip_cond_code: false,
         })
         .count();
         assert_eq!(
             c,
-            OpCode::COUNT as usize
-            * CondCode::COUNT as usize
-            * 6 /*possible shift codes */
+            OpCode::COUNT as usize * CondCode::COUNT as usize * 6 /*possible shift codes */
         );
     }
 
@@ -310,6 +351,8 @@ mod tests {
             Enumerator::new(EnumerationInfo::<Word8> {
                 registers: EnumerationInfoOptions::Limited(&[Register(2)]),
                 immediates: EnumerationInfoOptions::Limited(&[105.into(), 202.into()]),
+                include_nop: false,
+                skip_cond_code: true,
             })
             .all(|inst| inst.shift == ShiftCode::None)
         );
@@ -331,6 +374,8 @@ mod tests {
             immediates: EnumerationInfoOptions::Limited(
                 &immediates.iter().copied().collect::<Box<[_]>>(),
             ),
+            include_nop: false,
+            skip_cond_code: true,
         };
         let registers_used: std::collections::HashSet<_> = Enumerator::new(ei)
             .flat_map(|inst| {
@@ -373,6 +418,8 @@ mod tests {
         let v = to_vec(&EnumerationInfo::<Word4> {
             registers: EnumerationInfoOptions::Unlimited,
             immediates: EnumerationInfoOptions::Unlimited,
+            include_nop: false,
+            skip_cond_code: true,
         });
         let registers = v
             .iter()
@@ -406,6 +453,8 @@ mod tests {
         let mut v = Enumerator::new(EnumerationInfo::<Word4> {
             registers: EnumerationInfoOptions::Unlimited,
             immediates: EnumerationInfoOptions::Unlimited,
+            include_nop: false,
+            skip_cond_code: true,
         });
         assert!(v.clone().contains(&inst![Add, 1, 3, 5]));
         assert!(!v.contains(&inst![Add, 1, 5, 3]));
@@ -416,6 +465,8 @@ mod tests {
         for inst in Enumerator::new(EnumerationInfo::<Word4> {
             registers: EnumerationInfoOptions::Limited(&[]),
             immediates: EnumerationInfoOptions::Limited(&[1.into()]),
+            include_nop: false,
+            skip_cond_code: false,
         }) {
             if inst.op_code.arg_types().into_iter().any(|x| x.is_reg()) {
                 panic!(
@@ -430,14 +481,50 @@ mod tests {
     fn ror_shift_code_appears() {
         assert_eq!(
             Enumerator::new(EnumerationInfo::<Word4> {
-                registers: EnumerationInfoOptions::Limited(&[]),
+                registers: EnumerationInfoOptions::Limited(&[Register(4)]),
                 immediates: EnumerationInfoOptions::Limited(&[1.into(), 2.into(), 3.into()]),
+                include_nop: false,
+                skip_cond_code: true,
             })
             .map(|inst| inst.shift)
             .filter(|shift| matches!(shift, ShiftCode::Ror(_)))
             .unique()
             .count(),
             3
+        );
+    }
+
+    #[test]
+    fn skip_cond_code_no_cc() {
+        assert!(
+            Enumerator::new(EnumerationInfo {
+                registers: EnumerationInfoOptions::Limited(&[Register(4)]),
+                immediates: EnumerationInfoOptions::<Word64>::Limited(&[
+                    1.into(),
+                    2.into(),
+                    3.into()
+                ]),
+                include_nop: false,
+                skip_cond_code: true,
+            })
+            .all(|inst| inst.cond_code != CondCode::Cc)
+        );
+    }
+
+    #[test]
+    fn no_skip_cond_code_has_cc() {
+        assert!(
+            Enumerator::new(EnumerationInfo {
+                registers: EnumerationInfoOptions::Limited(&[Register(4)]),
+                immediates: EnumerationInfoOptions::<Word64>::Limited(&[
+                    1.into(),
+                    2.into(),
+                    3.into()
+                ]),
+                include_nop: false,
+                skip_cond_code: false,
+            })
+            .any(|inst| inst.cond_code == CondCode::Cc)
         );
     }
 }

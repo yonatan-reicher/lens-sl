@@ -179,8 +179,11 @@ impl<'a, W: AbstractWord, State: StateTrait<W>> ReadWriteTracker<'a, W::Bool, W,
 //                                          Shift Code
 // =================================================================================================
 
-impl<WShift: Word> ShiftCode<WShift> {
-    fn apply<W: AbstractWord>(&self, x: W, carry_in: W::Bool) -> (W, Option<W::Bool>) {
+impl<WShift> ShiftCode<WShift> {
+    fn apply<W: AbstractWord>(&self, x: W, carry_in: W::Bool) -> (W, Option<W::Bool>)
+    where
+        WShift: Word,
+    {
         let from_param = || x.get_from_param();
         let convert = |i: WShift| i.into_abstract_word::<W>(from_param());
         let make_msb = |on| on << W::Word::from(W::BITS - 1).into_abstract_word::<W>(from_param());
@@ -204,6 +207,40 @@ impl<WShift: Word> ShiftCode<WShift> {
             }
         };
         (out, carry)
+    }
+
+    pub fn affects_flags(&self) -> bool {
+        match self {
+            ShiftCode::None
+            | ShiftCode::Asr(_)
+            | ShiftCode::Lsl(_)
+            | ShiftCode::Lsr(_)
+            | ShiftCode::Ror(_) => false,
+            ShiftCode::Rrx => true,
+        }
+    }
+
+    pub fn reads_flags(&self) -> bool {
+        match self {
+            ShiftCode::None
+            | ShiftCode::Asr(_)
+            | ShiftCode::Lsl(_)
+            | ShiftCode::Lsr(_)
+            | ShiftCode::Ror(_) => false,
+            ShiftCode::Rrx => true,
+        }
+    }
+}
+
+// =================================================================================================
+//                                          Instruction =================================================================================================
+impl<W, WShift> Inst<W, WShift> {
+    pub fn affects_flags(&self) -> bool {
+        self.op_code.affects_flags() || self.shift.affects_flags()
+    }
+
+    pub fn reads_flags(&self) -> bool {
+        self.cond_code != CondCode::Al || self.shift.reads_flags()
     }
 }
 

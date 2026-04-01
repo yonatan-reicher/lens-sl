@@ -197,6 +197,8 @@ where
     let enumeration_info = &EnumerationInfo::<W> {
         registers: EnumerationInfoOptions::Limited(registers),
         immediates: EnumerationInfoOptions::Limited(immediates),
+        include_nop: false,
+        skip_cond_code: false,
     };
     let mut globals = Globals {
         oracle,
@@ -468,7 +470,7 @@ fn expand_backward<W: Word + HasBitWord>(
     bm: &BackwardMap<W>,
 ) {
     expand_forward_or_backward(graph, ei, tui, total_inst, |state, inst| {
-        inst.run_backward(state, bm).into_iter().cloned()
+        inst.run_backward(state, bm).into_iter()
     });
 }
 
@@ -530,7 +532,11 @@ fn build_forward<W: Word + HasBitWord>(graph: &mut Graph<W>, input: &State<W>) {
     });
 }
 
-fn build_backward<W: Word + HasBitWord>(graph: &mut Graph<W>, input: &State<W>, bm: &BackwardMap<W>) {
+fn build_backward<W: Word + HasBitWord>(
+    graph: &mut Graph<W>,
+    input: &State<W>,
+    bm: &BackwardMap<W>,
+) {
     build_forwards_or_backwards(graph, input, |program, output| {
         // A vector of reaching states, that we push backwards in time, one instruction at a time.
         let mut states = vec![output];
@@ -538,7 +544,7 @@ fn build_backward<W: Word + HasBitWord>(graph: &mut Graph<W>, input: &State<W>, 
         for inst in program.iter().rev() {
             for state in states.drain(..) {
                 for new_state in inst.run_backward(state, bm) {
-                    new_states.push(*new_state);
+                    new_states.push(new_state);
                 }
             }
             std::mem::swap(&mut states, &mut new_states);

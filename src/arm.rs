@@ -210,16 +210,16 @@ define_instructions! {
     | OpCode  | Arg 1    | Arg 2    | Arg 3    | String | Commutative | Affects Flags |
     -----------------------------------------------------------------------------------
     | Nop     | Unused   | Unused   | Unused   | "nop"  |    true     |     false     |
-    | Add     | Reg(Inp) | Reg(Out) | Reg(Inp) | "add"  |    true     |     false     |
-    | AddI    | Reg(Inp) | Reg(Out) | Imm      | "add"  |    false    |     false     |
-    | Sub     | Reg(Inp) | Reg(Out) | Reg(Inp) | "sub"  |    false    |     false     |
-    | SubI    | Reg(Inp) | Reg(Out) | Imm      | "sub"  |    false    |     false     |
-    | And     | Reg(Inp) | Reg(Out) | Reg(Inp) | "and"  |    true     |     false     |
-    | Eor     | Reg(Inp) | Reg(Out) | Reg(Inp) | "eor"  |    true     |     false     |
-    | Mov     | Reg(Inp) | Reg(Out) | Unused   | "mov"  |    false    |     false     |
+    | Add     | Reg(Out) | Reg(Inp) | Reg(Inp) | "add"  |    true     |     false     |
+    | AddI    | Reg(Out) | Reg(Inp) | Imm      | "add"  |    false    |     false     |
+    | Sub     | Reg(Out) | Reg(Inp) | Reg(Inp) | "sub"  |    false    |     false     |
+    | SubI    | Reg(Out) | Reg(Inp) | Imm      | "sub"  |    false    |     false     |
+    | And     | Reg(Out) | Reg(Inp) | Reg(Inp) | "and"  |    true     |     false     |
+    | Eor     | Reg(Out) | Reg(Inp) | Reg(Inp) | "eor"  |    true     |     false     |
+    | Mov     | Reg(Out) | Reg(Inp) | Unused   | "mov"  |    false    |     false     |
     | MovI    | Reg(Inp) | Imm      | Unused   | "mov"  |    false    |     false     |
-    | Mul     | Reg(Inp) | Reg(Out) | Reg(Inp) | "mul"  |    true     |     false     |
-    | Orr     | Reg(Inp) | Reg(Out) | Reg(Inp) | "orr"  |    true     |     false     |
+    | Mul     | Reg(Out) | Reg(Inp) | Reg(Inp) | "mul"  |    true     |     false     |
+    | Orr     | Reg(Out) | Reg(Inp) | Reg(Inp) | "orr"  |    true     |     false     |
     | Cmp     | Reg(Inp) | Reg(Inp) | Unused   | "cmp"  |    false    |     true      |
     | CmpI    | Reg(Inp) | Imm      | Unused   | "cmp"  |    false    |     true      |
 }
@@ -384,8 +384,8 @@ impl<W: Word + HasBitWord> Inst<W> {
         &self,
         state: State<W>,
         bm: &'a BackwardMap<W>,
-    ) -> impl IntoIterator<Item = &'a State<W>> + use<'a, W> {
-        &bm[(*self, state)]
+    ) -> impl IntoIterator<Item = State<W>> + use<'a, W> {
+        bm.get(*self, state)
     }
 
     /// What the instruction reads from, given a state.

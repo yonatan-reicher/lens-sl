@@ -718,7 +718,9 @@ fn create_inst(op: &str, mut args: Vec<String>) -> Result<Inst, ParseError> {
     if (op == "ldr" || op == "str") && args_len >= 3 {
         let offset = &args[2];
         // Only scale if the offset does NOT start with 'r' (i.e. it is a literal)
-        if !offset.starts_with('r') && let Ok(n) = offset.parse::<i64>() {
+        if !offset.starts_with('r')
+            && let Ok(n) = offset.parse::<i64>()
+        {
             args[2] = (n / 4).to_string();
         }
     }
