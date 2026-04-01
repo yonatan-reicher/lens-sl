@@ -6,7 +6,7 @@ use crate::all::All;
 use crate::arm::enumerate::{EnumerationInfo, EnumerationInfoOptions};
 use crate::arm::state::Masked as MaskedState;
 use crate::arm::{
-    BackwardMap, Register, State, extend_program_for_each, run_program_masked, what_program_reads,
+    Register, State, extend_program_for_each, run_program_masked, what_program_reads,
 };
 use crate::collect_registers::Collector;
 use crate::graph;
