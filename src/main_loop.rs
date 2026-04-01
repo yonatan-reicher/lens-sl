@@ -1,13 +1,13 @@
 //! The main loop for synthesis and optimization.
 //! Here we have basically the code that you would see in the actual paper that describes Lens.
 
-use crate::Direction;
 use crate::all::All;
 use crate::arm::enumerate::{EnumerationInfo, EnumerationInfoOptions};
 use crate::arm::{
     BackwardMap, Flags, Inst, Register, State, StateVars, SymbolicState, extend_program_for_each,
 };
 use crate::collect_registers::Collector;
+use crate::direction::Direction;
 use crate::graph;
 use crate::len::Len;
 use crate::oracle::{self, Oracle, SmtOracle};

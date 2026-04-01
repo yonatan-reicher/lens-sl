@@ -1,4 +1,4 @@
-use crate::Direction;
+use crate::direction::Direction;
 use crate::len::Len;
 use derive_more::Display;
 use std::fmt::{self, Debug, Display, Formatter};
