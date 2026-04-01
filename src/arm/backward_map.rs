@@ -180,8 +180,13 @@ impl<W: Word + HasBitWord> BackwardMap<W, BitWord<W>> {
         }
         let inst = normalize_inst(inst);
         let out = normalize_output_state(&inst, out_orig);
-        self.map.get(&(inst, out)).cloned().unwrap_or_default()
-            .map(|inp| inp.masked(input_state_mask()) | out_orig)
+        self.map
+            .get(&(inst, out))
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .flat_map(|inp| unnormalize_input_state(&inst, &out, inp))
+            .collect()
     }
 }
 
@@ -232,16 +237,36 @@ fn input_state_mask<W: Copy + Into<Register>, WShift>(
     }
 }
 
-fn unnormalize_input_state<W: Copy + Into<Register>, WShift>(inst: &Inst<W, WShift>, out: &State<W>, inp: State<W>) -> impl Iterator<Item=State<W>> {
+fn unnormalize_input_state<W: Word, WShift>(
+    inst: &Inst<W, WShift>,
+    original_output: &State<W>,
+    inp: State<W>,
+) -> impl Iterator<Item = State<W>>
+where
+    <W as All>::Iter: Clone,
+{
+    use itertools::Itertools;
     let out_mask = output_state_mask(inst);
-    let inp_mask = input_state_mask(inst, out);
+    let inp_mask = input_state_mask(inst, original_output);
     // We have three kinds of interesting things. We have the inputs that appear in the input mask.
     // We have the outputs that appear in the output mask, but not in the input mask. And we have
     // those things that don't appear in both masks.
     // Things in the input mask are as they are. Things in the output mask are the most interesting:
     // they are overwritten and can have any possible value. Things which aren't in both masks
-    // actually are not written and not 
-    [].into_iter()
+    // actually are not written and not read, so they should be as given by the original output.
+    let only_in_output = out_mask & !inp_mask;
+    let ret = *(inp.masked(inp_mask) | state::Masked::from(*original_output)).state();
+    only_in_output
+        .registers()
+        .map(|r| W::all().map(move |w| (r, w)))
+        .multi_cartesian_product()
+        .map(move |to_set| {
+            let mut ret = ret;
+            for (r, w) in to_set {
+                ret[r] = w;
+            }
+            ret
+        })
 }
 
 #[cfg(test)]
