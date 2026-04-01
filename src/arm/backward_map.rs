@@ -1,6 +1,6 @@
 use super::{
-    ArgType, CondCode, EnumerationInfo, EnumerationInfoOptions, Inst, RegArgType, Register, State,
-    state,
+    ArgType, CondCode, EnumerationInfo, EnumerationInfoOptions, Inst, OpCode, RegArgType, Register,
+    State, state,
 };
 use crate::all::All;
 use crate::word::prelude::*;
@@ -167,11 +167,15 @@ impl<W: Word, WShift: Word> std::ops::Index<(Inst<W, WShift>, State<W>)>
 
     fn index(&self, (inst, out_orig): (Inst<W, WShift>, State<W>)) -> &Self::Output {
         // Edge cases:
-        // 1. Condition is false, and flags aren't affected.
+        // 1. Nop!
+        if inst.op_code == OpCode::Nop {
+            return &[out_orig];
+        }
+        // 2. Condition is false, and flags aren't affected.
         if !inst.affects_flags() && !inst.cond_code.check(out_orig.flags.into()) {
             return &[];
         }
-        // 2. Condition is false (now), and the flags are affected. It could be both that the
+        // 3. Condition is false (now), and the flags are affected. It could be both that the
         // condition was false and the instruction didn't run, and it could be that the condition
         // was true and the instruction did run, and the flags were just changed.
         if inst.affects_flags() && !inst.cond_code.check(out_orig.flags.into()) {
@@ -286,16 +290,19 @@ mod tests {
             .into(),
             registers: [2.into(); _],
         };
-        let input = normalize_output_state(&inst, State {
-            flags: Flags {
-                z: true,
-                n: false,
-                c: true,
-                v: false,
-            }
-            .into(),
-            registers: [3.into(); _],
-        });
+        let input = normalize_output_state(
+            &inst,
+            State {
+                flags: Flags {
+                    z: true,
+                    n: false,
+                    c: true,
+                    v: false,
+                }
+                .into(),
+                registers: [3.into(); _],
+            },
+        );
         let input_normalized = normalize_input_state(&inst, &output, input);
         assert_eq!(
             input_normalized,
