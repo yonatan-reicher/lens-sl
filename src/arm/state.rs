@@ -737,7 +737,7 @@ impl<B: Bool> BitAnd<Mask<B>> for Mask<B> {
     type Output = Mask<B>;
     fn bitand(self, other: Mask<B>) -> Self::Output {
         Self {
-            flags: self.flags | other.flags,
+            flags: self.flags & other.flags,
             registers: Register::ALL.map(|r| self[r] & other[r]),
         }
     }
