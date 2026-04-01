@@ -89,6 +89,7 @@ impl<W: Word + HasBitWord> BackwardMap<W, BitWord<W>> {
         let ei = EnumerationInfo {
             registers: EnumerationInfoOptions::Limited(registers),
             immediates: EnumerationInfoOptions::Unlimited,
+            include_nop: false,
             // TODO: Skip conditions, and nops
         };
         let n_total = Inst::enumerate(ei).count();
@@ -414,6 +415,7 @@ mod tests {
         let ei = EnumerationInfo {
             registers: EnumerationInfoOptions::Limited(&[Register(0), Register(1)]),
             immediates: EnumerationInfoOptions::Limited(&[0.into(), 1.into(), 5.into()]),
+            ..EnumerationInfo::default()
         };
         for inst in Inst::enumerate(ei) {
             let x = &bm[(inst, state)];

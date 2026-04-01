@@ -182,6 +182,7 @@ where
     let enumeration_info = &EnumerationInfo::<W> {
         registers: EnumerationInfoOptions::Limited(registers),
         immediates: EnumerationInfoOptions::Limited(immediates),
+        include_nop: false,
     };
     let mut globals = Globals {
         oracle,
