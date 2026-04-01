@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 /// About the condition flag again: all instructions in the map have a condition flag of always.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BackwardMap<W: Word, WShift: Word = BitWord<W>> {
+    #[allow(clippy::type_complexity)]
     pub map: FxHashMap<(Inst<W, WShift>, State<W>), Inputs<W>>,
     empty_vec: Vec<State<W>>,
     // The registers to consider when indexing into the map. These are the registers that are

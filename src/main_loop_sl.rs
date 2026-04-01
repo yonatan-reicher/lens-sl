@@ -158,6 +158,7 @@ where
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn synthesize<WT, W>(
     registers: &[Register],
     immediates: &[W],
