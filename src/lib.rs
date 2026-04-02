@@ -3,6 +3,8 @@
 mod main_loop;
 /// Rewrite of main loop with separation logic.
 mod main_loop_sl;
+/// Rewrite the number 3
+mod optimizer;
 
 // --- Main Files ---
 // I tried to make them as independent as possible.
