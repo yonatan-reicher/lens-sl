@@ -3,7 +3,6 @@
 use crate::all_permutations::Iter as PermutationIter;
 use crate::arm::enumerate::{EnumerationInfo, EnumerationInfoOptions};
 use crate::bool::prelude::*;
-use crate::iter_slice_or_single::Iter as SliceOrSingle;
 use crate::reduce_bit_width::{ImmediateInfo, Reducer};
 use crate::word::prelude::*;
 
@@ -467,10 +466,12 @@ impl<W: Word + HasBitWord> Inst<W> {
             reducer: &Reducer<WBig, WSmall>,
             arg: WSmall,
             arg_type: ArgType,
-        ) -> SliceOrSingle<'_, WBig> {
+        ) -> impl Iterator<Item = WBig> + Clone {
+            use itertools::Either::{Left, Right};
+            use std::iter::once;
             match arg_type {
-                ArgType::Imm => reducer.extend(arg),
-                ArgType::Reg(..) | ArgType::Unused => SliceOrSingle::Single(arg.into_word()),
+                ArgType::Imm => Left(reducer.extend(arg)),
+                ArgType::Reg(..) | ArgType::Unused => Right(once(arg.into_word::<WBig>())),
             }
         }
         // If only we had do notation 🥹
