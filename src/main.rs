@@ -59,7 +59,8 @@ fn main() {
     let tui = Tui::default();
     let p = optimize::<Word64, Word4>(
         &program,
-        &[],
+        vec![],  // additional_registers
+        vec![],  // additional_immediates
         &tui, // */ &NoTui,
     );
     tui.close();

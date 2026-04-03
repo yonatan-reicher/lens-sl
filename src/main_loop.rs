@@ -12,7 +12,7 @@ use crate::graph;
 use crate::len::Len;
 use crate::oracle::{self, Oracle, SmtOracle};
 use crate::programs;
-use crate::reduce_bit_width::Reducer;
+use crate::reduce_bit_width::{ImmediateInfo, Reducer};
 use crate::tui::TuiHook;
 use crate::word::prelude::*;
 
@@ -20,6 +20,8 @@ use crate::word::prelude::*;
 use std::ops::ControlFlow::{Break, Continue};
 
 use serde::de::DeserializeOwned;
+
+use functionality::prelude::*;
 
 // =========================================== Graph ==============================================
 
@@ -36,7 +38,8 @@ type Graph<W> = graph::Graph<State<W>, Programs<W>>;
 /// `WS` for word size of the synthesis process.
 pub fn optimize<WT: Word + HasBitWord, WS: Word + HasBitWord + serde::de::DeserializeOwned>(
     program: &[Inst<WT>],
-    inputs: &[&[(Register, WT)]], // TODO: Return a program in Program<WT> instead...
+    additional_registers: impl IntoIterator<Item = Register>,
+    additional_immediates: impl IntoIterator<Item = WT>,
     tui: &impl for<'g> TuiHook<&'g Graph<WS>, State<WS>>,
 ) -> Option<Program<WT>>
 where
@@ -49,40 +52,24 @@ where
         // This puts the original unreduced constants into the reducer.
         reduced_program.push(inst.reduce(&mut reducer));
     }
-
-    // Run the program on each input to get the outputs. We call these "test cases".
-    let test_cases: Vec<(State<WT>, State<WT>)> = inputs
-        .iter()
-        .map(|input| {
-            let input = State::from((
-                Flags::default(),
-                input.iter().map(|(r, v)| (*r, v.into_word())),
-            ));
-            let mut output = input;
-            for inst in program {
-                inst.run(&mut output);
-            }
-            (input, output)
-        })
-        .collect();
-    let _test_cases_reduced: Vec<(State<WS>, State<WS>)> = test_cases
-        .iter()
-        .map(|(input, _output)| {
-            let input = input.reduce(&mut reducer.clone());
-            let mut output = input;
-            for inst in &reduced_program {
-                inst.run(&mut output);
-            }
-            (input, output)
-        })
+    let additional_immediates_reduced: Vec<WS> = additional_immediates
+        .into_iter()
+        .map(|i| reducer.reduce(i, &ImmediateInfo { is_shift: false }))
         .collect();
 
     // Collect all the registers and immediates that might be useful for synthesis.
-    let mut collector = Collector::new();
-    collector.program(program);
-    collector.test_cases(&test_cases);
-    let Collector { registers } = collector;
-    let immediates: Vec<WS> = reducer.immediates().chain([0.into()]).collect();
+    let registers = Collector::new()
+        .mutate(|c| c.program(program))
+        .pipe(|c| c.registers)
+        .mutate(|r| r.extend(additional_registers))
+        .mutate(|r| r.sort())
+        .mutate(|r| r.dedup());
+    let immediates: Vec<WS> = reducer
+        .immediates()
+        .chain(additional_immediates_reduced)
+        .collect::<Vec<WS>>()
+        .mutate(|r| r.sort())
+        .mutate(|r| r.dedup());
 
     // let oracle = TestCasesOracle { test_cases };
     // let oracle_reduced = TestCasesOracle {

@@ -156,7 +156,7 @@ type W = Word64;
 
 impl Benchmark {
     pub fn optimize<T>(&self, mut f: impl FnMut(Vec<Inst<W>>) -> ControlFlow<T>) -> ControlFlow<T> {
-        let x = lens_sl::optimize::<W, Word4>(&self.input, &[], &lens_sl::NoTui);
+        let x = lens_sl::optimize::<W, Word4>(&self.input, vec![], vec![], &lens_sl::NoTui);
         if let Some(x) = x {
             f(x)?;
         }
