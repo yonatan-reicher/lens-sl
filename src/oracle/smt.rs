@@ -191,40 +191,6 @@ impl<W: Word + HasBitWord> Inst<State<W>> for arm::Inst<W> {
     }
 }
 
-impl<W: Word + HasBitWord> Inst<Option<MaskedState<W>>> for arm::Inst<W> {
-    type StateVars<'st> = StateVars<'st, W::SmtWord<'st>>;
-    type SymbolicState<'st> = SymbolicState<'st, W::SmtWord<'st>>;
-
-    fn new_state_vars<'st>(st: &'st Storage, name: &str) -> Self::StateVars<'st> {
-        StateVars::new(st, name)
-    }
-
-    fn state_neq<'st>(s1: Self::SymbolicState<'st>, s2: Self::SymbolicState<'st>) -> Bool<'st> {
-        !s1.eq(s2)
-    }
-
-    fn step_symbolic<'st>(&self, s: &mut Self::SymbolicState<'st>) {
-        self.run_symbolic(s);
-    }
-
-    fn step(&self, s: &mut Option<MaskedState<W>>) {
-        *s = s.and_then(|s| self.run_masked(s));
-    }
-
-    fn run(program: &[Self], s: &mut Option<MaskedState<W>>) {
-        *s = s.and_then(|s| {
-            let read_mask = what_program_reads(program.iter().cloned(), s.state());
-            let inp = inp.masked(read_mask.into());
-            let out = run_program_masked(globals.original_reduced.iter().cloned(), inp).expect("the counter example found by the oracle must be runnable and the input mask for the program must be enough for it to run");
-            todo!()
-        })
-}
-
-    fn extract_from_model<'st>(model: &Model<'st>, s: Self::StateVars<'st>) -> MaskedState<W> {
-        todo!()
-    }
-}
-
 // =================================================================================================
 //                                             Tests
 // =================================================================================================
