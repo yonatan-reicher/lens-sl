@@ -1,3 +1,5 @@
+use serde::de::DeserializeOwned;
+
 use crate::arm::{Flags, Inst, Register, State, state, what_program_reads};
 use crate::oracle::Oracle;
 use crate::word::prelude::*;
@@ -13,10 +15,10 @@ pub fn optimize<C: Config, T>(
 pub trait Config {
     // Number types
     type WBig: Word + HasBitWord;
-    type WSmall: Word + HasBitWord;
     // Other types
     type Graph;
     type State;
+    type WSmall: Word + HasBitWord<BitWord: DeserializeOwned> + DeserializeOwned;
     // Getters
     fn immediates(&self) -> impl Iterator<Item = Self::WBig>;
     fn regs(&self) -> impl Iterator<Item = Register>;
