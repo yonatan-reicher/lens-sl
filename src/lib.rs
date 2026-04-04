@@ -24,6 +24,8 @@ mod oracle;
 /// This module collects registers that we consider for synthesis.
 mod collect_registers;
 mod tui;
+/// The `verify` function from Lens.
+mod verify;
 
 // --- Utilities ---
 /// Return all permutations of a slice of iterators.
