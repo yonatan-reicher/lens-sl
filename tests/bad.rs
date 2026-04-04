@@ -12,8 +12,8 @@ fn bad_case() {
             inst!(AddI, 3, 3, 1),
             inst!(And, 0, 3, 0),
         ],
-        vec![Register(0), Register(3)],  // additional_registers
-        vec![],  // additional_immediates
+        vec![Register(0), Register(3)], // additional_registers
+        vec![],                         // additional_immediates
         &NoTui,
     );
     assert_eq!(p, None);
@@ -30,8 +30,8 @@ fn bad_case_2() {
             inst!(Orr, 0, 0, 1),
             inst!(AddI Eq, 1, 0, 1),
         ],
-        vec![Register(0), Register(1)],  // additional_registers
-        vec![],  // additional_immediates
+        vec![Register(0), Register(1)], // additional_registers
+        vec![],                         // additional_immediates
         &NoTui,
     );
     assert_eq!(

@@ -119,8 +119,8 @@ pub trait Inst<State>: Sized + Debug {
 //                                   Inst Trait Implementation
 // =================================================================================================
 
-use crate::arm::{self, Register, what_program_reads, run_program_masked};
-use crate::arm::state::{State, Masked as MaskedState, StateVars, SymbolicState, Flags};
+use crate::arm::state::{Flags, Masked as MaskedState, State, StateVars, SymbolicState};
+use crate::arm::{self, Register, run_program_masked, what_program_reads};
 use crate::smtlib_utils::bool_term_to_bool;
 use crate::word::prelude::*;
 
