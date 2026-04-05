@@ -3,17 +3,16 @@
 
 use crate::all::All;
 use crate::arm::enumerate::{EnumerationInfo, EnumerationInfoOptions};
-use crate::arm::{
-    BackwardMap, Flags, Inst, Register, State, StateVars, SymbolicState, extend_program_for_each,
-};
+use crate::arm::{BackwardMap, Inst, Register, State};
 use crate::collect_registers::Collector;
 use crate::direction::Direction;
 use crate::graph;
 use crate::len::Len;
-use crate::oracle::{self, Oracle, SmtOracle};
+use crate::oracle::{Oracle, SmtOracle};
 use crate::programs;
 use crate::reduce_bit_width::{ImmediateInfo, Reducer};
 use crate::tui::TuiHook;
+use crate::verify::{self, verify};
 use crate::word::prelude::*;
 
 // std imports
@@ -266,35 +265,30 @@ fn connect_and_refine<WT: Word + HasBitWord, WS: Word + HasBitWord>(
                             program.extend(prefix.iter());
                             program.push(inst);
                             program.extend(postfix.iter());
-                            match globals.oracle_reduced.check_program(&program) {
-                                // Found!
-                                Ok(()) => extend_program_for_each(
-                                    &program,
-                                    &globals.extender,
-                                    |extended_program| match globals
-                                        .oracle
-                                        .check_program(extended_program)
-                                    {
-                                        Ok(()) => {
-                                            Break(ProgramOrRetry::Program(extended_program.to_vec()))
-                                        }
-                                        Err(_) => Continue(()),
-                                    },
-                                ),
-                                Err((inp, out)) => {
+                            let (inputs, outputs) = (&mut globals.inputs, &mut globals.outputs);
+                            match verify(
+                                &program,
+                                &globals.extender,
+                                &mut globals.oracle_reduced,
+                                &mut globals.oracle,
+                                |equivalent_prog| Break(ProgramOrRetry::Program(equivalent_prog.to_vec())),
+                            ) {
+                                verify::Result::CounterExample(inp, out) => {
                                     tui.found_counter_example( inp, out,);
                                     let mut actual = inp;
                                     program.iter().for_each(|i| i.run(&mut actual));
                                     debug_assert!(
-                                        !has_counter_example_been_seen(globals, &inp, &out),
+                                        !has_counter_example_been_seen(inputs, outputs, &inp, &out),
                                         "Counter-example from reduced oracle should not have been seen before."
                                     );
                                     debug_assert!(actual != out, "Found mismatched interpreter behaviours!");
-                                    globals.inputs.push(inp);
-                                    globals.outputs.push(out);
+                                    inputs.push(inp);
+                                    outputs.push(out);
                                     counter_example_added = true;
                                     Break(ProgramOrRetry::Retry)
                                 }
+                                verify::Result::Break(x) => Break(x),
+                                verify::Result::Continue => Continue(()),
                             }
                         })
                     })
@@ -492,21 +486,14 @@ fn build_forwards_or_backwards<W: Word + HasBitWord, StepRet: IntoIterator<Item 
 
 /// Checks if the given counter-example has already been seen, by searching the input-output pairs
 /// in the global context.
-fn has_counter_example_been_seen<WT: Word + HasBitWord, WS: Word + HasBitWord>(
-    globals: &mut Globals<
-        '_,
-        WT,
-        WS,
-        impl Oracle<[Inst<WT>], State<WT>>,
-        impl Oracle<[Inst<WS>], State<WS>>,
-        impl for<'g> TuiHook<&'g Graph<WS>, State<WS>>,
-    >,
+fn has_counter_example_been_seen<WS: Word + HasBitWord>(
+    inputs: &[State<WS>],
+    outputs: &[State<WS>],
     inp: &State<WS>,
     out: &State<WS>,
 ) -> bool {
-    globals
-        .inputs
+        inputs
         .iter()
-        .zip(&globals.outputs)
+        .zip(outputs)
         .any(|(i, o)| i == inp && o == out)
 }

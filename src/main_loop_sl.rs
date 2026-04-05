@@ -4,9 +4,7 @@
 use crate::all::All;
 use crate::arm::enumerate::{EnumerationInfo, EnumerationInfoOptions};
 use crate::arm::state::Masked as MaskedState;
-use crate::arm::{
-    Register, State, extend_program_for_each, run_program_masked, what_program_reads,
-};
+use crate::arm::{Register, State, run_program_masked, what_program_reads};
 use crate::collect_registers::Collector;
 use crate::direction::Direction;
 use crate::graph;
@@ -15,10 +13,11 @@ use crate::oracle::{Oracle, SmtOracle};
 use crate::programs_sl as programs;
 use crate::reduce_bit_width::{ImmediateInfo, Reducer};
 use crate::tui::TuiHook;
+use crate::verify::{self, verify};
 use crate::word::prelude::*;
 
 // std imports
-use std::ops::ControlFlow::{self, Break, Continue};
+use std::ops::ControlFlow::{Break, Continue};
 
 use serde::de::DeserializeOwned;
 
@@ -196,15 +195,6 @@ where
         total_instructions: Inst::enumerate(*enumeration_info).count(),
         original_reduced,
     };
-    // Generate a first input
-    println!("Checking empty program");
-    match verify(&[], &mut globals) {
-        // Excuse the confusing case names please.
-        // TODO: Make an enum for this.
-        Continue(()) => panic!("Could not generate the first counter example"), // TODO: Keep trying programs until something works?
-        Break(ProgramOrRetry::Program(p)) => return Some(p),
-        Break(ProgramOrRetry::Retry) => (), // Found a counter example, keep going
-    }
     tui.report_graph(Direction::Forward, &graph);
     // ------------------------------- Initialization ---------------------------------------------
     for inst in Inst::enumerate(*enumeration_info) {
@@ -287,7 +277,31 @@ fn connect_and_refine<WT: Word + HasBitWord, WS: Word + HasBitWord>(
             Graph::Leaf(programs) => {
                 // We found a class of candidate programs.
                 // Try each one. If one works, return it. If none work, adds all counter-examples.
-                let ret = programs.try_each(&mut |program| verify(&program, globals));
+                let ret = programs.try_each(&mut |program| {
+                    match verify(
+                        &program,
+                        &globals.extender,
+                        &mut globals.oracle_reduced,
+                        &mut globals.oracle,
+                        |equivalent_prog| Break(ProgramOrRetry::Program(equivalent_prog.to_vec()))
+                    ) {
+                        verify::Result::CounterExample(inp, _out) => {
+                            let read_mask = what_program_reads(globals.original_reduced.iter().cloned(), &inp);
+                            let inp = inp.masked(read_mask.into());
+                            let out = run_program_masked(globals.original_reduced.iter().cloned(), inp).expect("the counter example found by the oracle must be runnable and the input mask for the program must be enough for it to run");
+                            globals.tui.found_counter_example(inp, out);
+                            debug_assert!(
+                                !has_counter_example_been_seen(globals, &inp, &out),
+                                "Counter-example from reduced oracle should not have been seen before."
+                            );
+                            globals.inputs.push(inp);
+                            globals.outputs.push(out); 
+                            Break(ProgramOrRetry::Retry)
+                        },
+                        verify::Result::Break(prog) => Break(prog),
+                        verify::Result::Continue => Continue(()),
+                    }
+                });
                 match ret {
                     Break(ProgramOrRetry::Program(p)) => return ConnectAndRefineResult::Found(p),
                     Break(ProgramOrRetry::Retry) => return connect_and_refine(globals, graph, k),
@@ -466,40 +480,4 @@ fn has_counter_example_been_seen<WT: Word + HasBitWord, WS: Word + HasBitWord>(
         .iter()
         .zip(&globals.outputs)
         .any(|(i, o)| i == inp && o == out)
-}
-
-fn verify<WBig: Word + HasBitWord, W: Word + HasBitWord>(
-    prog: &[Inst<W>],
-    globals: &mut Globals<
-        WBig,
-        W,
-        impl Oracle<[Inst<WBig>], State<WBig>>,
-        impl Oracle<[Inst<W>], State<W>>,
-        impl for<'g> TuiHook<&'g Graph<W>, MaskedState<W>>,
-    >,
-) -> ControlFlow<ProgramOrRetry<WBig>> {
-    match globals.oracle_reduced.check_program(prog) {
-        // Found!
-        Ok(()) => {
-            extend_program_for_each(prog, &globals.extender, |extended_program| {
-                match globals.oracle.check_program(extended_program) {
-                    Ok(()) => Break(ProgramOrRetry::Program(extended_program.to_vec())),
-                    Err(_) => Continue(()),
-                }
-            })
-        }
-        Err((inp, _out)) => {
-            let read_mask = what_program_reads(globals.original_reduced.iter().cloned(), &inp);
-            let inp = inp.masked(read_mask.into());
-            let out = run_program_masked(globals.original_reduced.iter().cloned(), inp).expect("the counter example found by the oracle must be runnable and the input mask for the program must be enough for it to run");
-            globals.tui.found_counter_example(inp, out);
-            debug_assert!(
-                !has_counter_example_been_seen(globals, &inp, &out),
-                "Counter-example from reduced oracle should not have been seen before."
-            );
-            globals.inputs.push(inp);
-            globals.outputs.push(out);
-            Break(ProgramOrRetry::Retry)
-        }
-    }
 }
