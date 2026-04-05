@@ -492,7 +492,7 @@ fn has_counter_example_been_seen<WS: Word + HasBitWord>(
     inp: &State<WS>,
     out: &State<WS>,
 ) -> bool {
-        inputs
+    inputs
         .iter()
         .zip(outputs)
         .any(|(i, o)| i == inp && o == out)
