@@ -212,12 +212,12 @@ where
             }
             ConnectAndRefineResult::Continue => {}
         }
-        // ------------------------------ Expand Phase --------------------------------------------
         tui.progress(globals.total_instructions, globals.total_instructions);
         tui.report_graph(Direction::Forward, &graph);
         if globals.forward_length == original_length - 1 {
             return None;
         }
+        // ------------------------------ Expand Phase --------------------------------------------
         let direction = Direction::Forward;
         tui.expanding(direction);
         expand(&mut graph, globals.tui);
