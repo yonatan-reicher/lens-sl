@@ -21,7 +21,7 @@ enum Inner<I> {
     EmptyProgram,
     Inst(I),
     Concat(Rc<(Programs<I>, Programs<I>)>),
-    Extend(Rc<(Programs<I>, Programs<I>)>),
+    Extend(Rc<Vec<Programs<I>>>),
 }
 
 impl<I> Programs<I> {
@@ -41,9 +41,21 @@ impl<I> Programs<I> {
         Self(Inner::Concat(Rc::new((self, rhs))))
     }
 
-    pub fn extend(&mut self, x: Programs<I>) {
-        let this = std::mem::take(self);
-        *self = Self(Inner::Extend(Rc::new((this, x))));
+    pub fn extend(mut self, x: Self) -> Self {
+        match &mut self.0 {
+            Inner::Empty => x,
+            Inner::Extend(vec) => {
+                if let Some(vec) = Rc::get_mut(vec) {
+                    vec.push(x);
+                    self
+                } else {
+                    Self(Inner::Extend(Rc::new(vec![self, x])))
+                }
+            }
+            Inner::EmptyProgram | Inner::Inst(_) | Inner::Concat(_) => {
+                Self(Inner::Extend(Rc::new(vec![self, x])))
+            }
+        }
     }
 
     // Get a single program from the collection, if there is any.
@@ -56,8 +68,8 @@ impl<I> Programs<I> {
             Inner::Inst(i) => Some(vec![i.clone()]),
             Inner::EmptyProgram => Some(vec![]),
             Inner::Extend(rc) => {
-                let (a, b) = &**rc;
-                a.sample().or_else(|| b.sample())
+                let vec = &**rc;
+                vec.iter().filter_map(Self::sample).next()
             }
             Inner::Concat(rc) => {
                 let (lhs, rhs) = &**rc;
@@ -81,9 +93,10 @@ impl<I> Programs<I> {
             Inner::EmptyProgram => f(vec![]),
             Inner::Inst(inst) => f(vec![inst.clone()]),
             Inner::Extend(rc) => {
-                let (a, b) = &**rc;
-                a.try_each(f)?;
-                b.try_each(f)?;
+                let vec = &**rc;
+                for x in vec {
+                    x.try_each(f)?;
+                }
                 Continue(())
             }
             Inner::Concat(rc) => {
@@ -149,7 +162,7 @@ impl<I> Len for Programs<I> {
             Inner::Empty => 0,
             Inner::EmptyProgram => 1,
             Inner::Inst(..) => 1,
-            Inner::Extend(rc) => rc.0.len() + rc.1.len(),
+            Inner::Extend(rc) => rc.iter().map(Self::len).sum(),
             Inner::Concat(rc) => rc.0.len() * rc.1.len(),
         }
     }
@@ -158,7 +171,7 @@ impl<I> Len for Programs<I> {
             Inner::Empty => true,
             Inner::EmptyProgram => false,
             Inner::Inst(..) => false,
-            Inner::Extend(rc) => rc.0.is_empty() && rc.1.is_empty(),
+            Inner::Extend(rc) => rc.iter().all(Self::is_empty),
             Inner::Concat(rc) => rc.0.is_empty() || rc.1.is_empty(),
         }
     }
@@ -198,7 +211,7 @@ impl<I: Clone> FromIterator<I> for Programs<I> {
 impl<I: Clone + Debug + Eq + Hash> Extend<Programs<I>> for Programs<I> {
     fn extend<It: IntoIterator<Item = Self>>(&mut self, iter: It) {
         for p in iter {
-            self.extend(p);
+            *self = Programs::extend(std::mem::take(self), p);
         }
     }
 }
@@ -232,7 +245,7 @@ where
                     // Concat
                     (inner.clone(), inner.clone()).prop_map(|(a, b)| a.concat(b)),
                     // Extend
-                    (inner.clone(), inner.clone()).prop_map(|(a, b)| a.mutate(|a| a.extend(b)))
+                    (inner.clone(), inner.clone()).prop_map(|(a, b)| a.mutate(|a| a.extend([b])))
                 ]
             },
         )
