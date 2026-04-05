@@ -936,6 +936,15 @@ fn map_opcode(op: &str, args: &[ParsedArg]) -> Result<OpCode, ParseError> {
                 col: 0,
             }),
         },
+        "cmp" => match args {
+            [ParsedArg::Reg(_), ParsedArg::Reg(_)] => Ok(OpCode::Cmp),
+            [ParsedArg::Reg(_), ParsedArg::Imm(_)] => Ok(OpCode::CmpI),
+            _ => Err(ParseError {
+                message: "unsupported cmp operands".into(),
+                line: 0,
+                col: 0,
+            }),
+        },
         _ => Err(ParseError {
             message: format!("unsupported opcode '{op}'"),
             line: 0,
