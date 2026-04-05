@@ -1,5 +1,5 @@
 #[allow(unused_imports)]
-use lens_sl::{LiveValue, Register, Word4, Word8, Word64, inst, optimize};
+use lens_sl::{LiveValue, Register, Word4, Word8, Word64, inst, optimize, optimize_sl};
 #[allow(unused_imports)]
 use lens_sl::{NoTui, Tui};
 
@@ -57,7 +57,7 @@ fn main() {
     let _live_out = live_out;
 
     let tui = Tui::default();
-    let p = optimize::<Word64, Word4>(
+    let p = optimize_sl::<Word64, Word4>(
         &program,
         vec![], // additional_registers
         vec![], // additional_immediates
