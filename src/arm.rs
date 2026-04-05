@@ -1,11 +1,8 @@
 // Imports
 
-use crate::all::All;
 use crate::all_permutations::Iter as PermutationIter;
-use crate::arm::enumerate::{EnumerationInfo, EnumerationInfoOptions, Enumerator};
-use crate::arm::state::BitMask;
+use crate::arm::enumerate::{EnumerationInfo, EnumerationInfoOptions};
 use crate::bool::prelude::*;
-use crate::iter_slice_or_single::Iter as SliceOrSingle;
 use crate::reduce_bit_width::{ImmediateInfo, Reducer};
 use crate::word::prelude::*;
 
@@ -18,8 +15,6 @@ use serde::{Deserialize, Serialize};
 
 #[cfg(test)]
 use proptest::prelude::*;
-
-use rustc_hash::FxHashMap;
 
 use smtlib::prelude::*;
 
@@ -60,6 +55,7 @@ impl ArgType {
 )]
 #[cfg_attr(test, derive(proptest_derive::Arbitrary))]
 #[display("{}", self.to_string())]
+/// TODO: Rename to cond
 pub enum CondCode {
     /// Always (unconditional)
     /// In real Arm, this is actually the 15th condition code, but for we put it first because we
@@ -213,16 +209,18 @@ define_instructions! {
     | OpCode  | Arg 1    | Arg 2    | Arg 3    | String | Commutative | Affects Flags |
     -----------------------------------------------------------------------------------
     | Nop     | Unused   | Unused   | Unused   | "nop"  |    true     |     false     |
-    | Add     | Reg(Inp) | Reg(Out) | Reg(Inp) | "add"  |    true     |     true      |
-    | AddI    | Reg(Inp) | Reg(Out) | Imm      | "add"  |    false    |     true      |
-    | Sub     | Reg(Inp) | Reg(Out) | Reg(Inp) | "sub"  |    false    |     true      |
-    | SubI    | Reg(Inp) | Reg(Out) | Imm      | "sub"  |    false    |     true      |
-    | And     | Reg(Inp) | Reg(Out) | Reg(Inp) | "and"  |    true     |     false     |
-    | Eor     | Reg(Inp) | Reg(Out) | Reg(Inp) | "eor"  |    true     |     false     |
-    | Mov     | Reg(Inp) | Reg(Out) | Unused   | "mov"  |    false    |     false     |
+    | Add     | Reg(Out) | Reg(Inp) | Reg(Inp) | "add"  |    true     |     false     |
+    | AddI    | Reg(Out) | Reg(Inp) | Imm      | "add"  |    false    |     false     |
+    | Sub     | Reg(Out) | Reg(Inp) | Reg(Inp) | "sub"  |    false    |     false     |
+    | SubI    | Reg(Out) | Reg(Inp) | Imm      | "sub"  |    false    |     false     |
+    | And     | Reg(Out) | Reg(Inp) | Reg(Inp) | "and"  |    true     |     false     |
+    | Eor     | Reg(Out) | Reg(Inp) | Reg(Inp) | "eor"  |    true     |     false     |
+    | Mov     | Reg(Out) | Reg(Inp) | Unused   | "mov"  |    false    |     false     |
     | MovI    | Reg(Inp) | Imm      | Unused   | "mov"  |    false    |     false     |
-    | Mul     | Reg(Inp) | Reg(Out) | Reg(Inp) | "mul"  |    true     |     false     |
-    | Orr     | Reg(Inp) | Reg(Out) | Reg(Inp) | "orr"  |    true     |     false     |
+    | Mul     | Reg(Out) | Reg(Inp) | Reg(Inp) | "mul"  |    true     |     false     |
+    | Orr     | Reg(Out) | Reg(Inp) | Reg(Inp) | "orr"  |    true     |     false     |
+    | Cmp     | Reg(Inp) | Reg(Inp) | Unused   | "cmp"  |    false    |     true      |
+    | CmpI    | Reg(Inp) | Imm      | Unused   | "cmp"  |    false    |     true      |
 }
 
 /// A number representing a register.
@@ -295,18 +293,43 @@ impl From<Register> for Word8 {
     }
 }
 
-/// A single instruction.
-#[derive(Clone, Copy, derive_more::Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, derive_more::Display, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(test, derive(proptest_derive::Arbitrary))]
-#[debug("{op_code:?}{}{args:?}",
-    match cond_code {
-        CondCode::Al => "".to_string(),
-        _ => format!("{cond_code:?}"),
-    }
-)]
-pub struct Inst<W> {
+pub enum ShiftCode<W> {
+    None,
+    /// Arithmetic shift right - shift right but keep MSB the same.
+    /// Must have 1 <= n <= BITS.
+    #[display("asr #{_0}")]
+    Asr(W),
+    /// Logical shift left.
+    /// NOTE: There exists a synonym called `asl`, very confusing. lol.
+    /// Must have 1 <= n <= BITS - 1.
+    #[display("lsl #{_0}")]
+    Lsl(W),
+    /// Logical shift right.
+    /// Must have 1 <= n <= BITS.
+    #[display("lsr #{_0}")]
+    Lsr(W),
+    /// Rotate right.
+    /// Must have 1 <= n <= BITS - 1.
+    #[display("ror #{_0}")]
+    Ror(W),
+    /// Rotate right one bit, sign extended.
+    #[display("rrx")]
+    Rrx,
+}
+
+/// A single instruction.
+/// `W` - number type for arguments.
+/// `WShift` - number type for shift arguments.
+/// NOTE: This is missing the 'S' bit - an optional bit toggling whether condition codes (flags)
+/// should be updated. In Lens, they pretend it doesn't exist and that only `cmp` and `tst` update
+/// the flags. When in Rome, act like a Roman.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Inst<W, WShift = BitWord<W>> {
     pub op_code: OpCode,
     pub cond_code: CondCode,
+    pub shift: ShiftCode<WShift>,
     pub args: [W; 3],
 }
 
@@ -314,253 +337,19 @@ pub struct Inst<W> {
 
 pub mod state;
 
+use state::{BitMask, Mask};
 pub use state::{Flags, FlagsBitField, State, StateVars, SymbolicState};
 
-fn run_instruction<W: Word>(inst: &Inst<W>, state: &mut State<W>) {
-    /// Get a register value.
-    macro_rules! r {
-        ($i:literal) => {{
-            debug_assert!($i < 3);
-            debug_assert!(inst.op_code.arg_types()[$i].is_reg());
-            let r = Register(inst.args[$i].into_word::<Word8>().into());
-            state.get_register(r)
-        }};
-    }
-    /// Set a register value.
-    macro_rules! set {
-        (r![$i:literal] <- $value:expr) => {{
-            debug_assert!($i < 3);
-            debug_assert!(inst.op_code.arg_types()[$i].is_reg());
-            let r = Register(inst.args[$i].into_word::<Word8>().into());
-            state.set_register(r, $value)
-        }};
-        (flags <- $f:ident( $($e:expr),* )) => {{
-            let mut flags: Flags = state.get_flags().into();
-            flags.$f::<W>( $($e),*, true );
-            state.set_flags(flags.into());
-        }};
-    }
-    /// Get an immediate value.
-    macro_rules! imm {
-        ($i:literal) => {
-            inst.args[$i]
-        };
-    }
+// ========================================= Semantics =============================================
 
-    // Skip the instruction if it is skipped by the flags.
-    if !inst.cond_code.check(state.get_flags().into()) {
-        return;
-    }
+mod semantics;
 
-    use OpCode::*;
-    match inst.op_code {
-        Nop => (),
-        Add => {
-            set! { flags <- update_from_add(r![1], r![2]) };
-            set! { r![0] <- r![1] + r![2] };
-        }
-        AddI => {
-            set! { flags <- update_from_add(r![1], imm![2]) };
-            set! { r![0] <- r![1] + imm![2] };
-        }
-        Sub => {
-            set! { flags <- update_from_sub(r![1], r![2]) };
-            set! { r![0] <- r![1] - r![2] };
-        }
-        SubI => {
-            set! { flags <- update_from_sub(r![1], imm![2]) };
-            set! { r![0] <- r![1] - imm![2] };
-        }
-        And => set!(r![0] <- r![1] & r![2]),
-        Eor => set!(r![0] <- r![1] ^ r![2]),
-        Mov => set!(r![0] <- r![1]),
-        MovI => set!(r![0] <- imm![1]),
-        // Mul => set!(r![0 i] <- r![1 i].overflowing_mul(r![2 i]).0),
-        Mul => set!(r![0] <- r![1] * r![2]),
-        Orr => set!(r![0] <- r![1] | r![2]),
-    }
-}
+// ======================================== Backward Map ===========================================
 
-fn run_instruction_symbolic<'st, W: Word>(
-    inst: &Inst<W>,
-    state: &mut SymbolicState<'st, W::SmtWord<'st>>,
-) {
-    let enabled = inst.cond_code.check(state.flags);
+mod backward_map;
+pub use backward_map::BackwardMap;
 
-    /// Get a register value.
-    macro_rules! r {
-        ($i:literal) => {
-            state.registers[{
-                debug_assert!($i < 3);
-                debug_assert!(inst.op_code.arg_types()[$i].is_reg());
-                let r = Register(inst.args[$i].into_word::<Word8>().into());
-                r.0 as usize
-            }]
-        };
-    }
-    /// Set a register value. Also checks the condition code.
-    macro_rules! set {
-        (r![$i:literal] <- $e:expr) => {{ r![$i] = enabled.if_then_else($e, r![$i]); }};
-        (flags <- $f:ident($($e:expr),*)) => {{ state.flags.$f::<W::SmtWord<'st>>($($e),* , enabled); }};
-    }
-    /// Get an immediate value.
-    macro_rules! imm {
-        ($i:literal) => {
-            inst.args[$i].into_smt_word(state.registers[0].st())
-        };
-    }
-
-    use OpCode::*;
-    match inst.op_code {
-        Nop => (),
-        Add => {
-            set! { flags <- update_from_add(r![1], r![2]) };
-            set! { r![0] <- r![1] + r![2] };
-        }
-        AddI => {
-            set! { flags <- update_from_add(r![1], imm![2]) };
-            set! { r![0] <- r![1] + imm![2] };
-        }
-        Sub => {
-            set! { flags <- update_from_sub(r![1], r![2]) };
-            set! { r![0] <- r![1] + -r![2] };
-        }
-        SubI => {
-            set! { flags <- update_from_sub(r![1], imm![2]) };
-            set! { r![0] <- r![1] + -imm![2] };
-        }
-        And => set! { r![0] <- r![1] & r![2] },
-        Eor => set! { r![0] <- r![1] ^ r![2] },
-        Mov => set! { r![0] <- r![1] },
-        MovI => set! { r![0] <- imm![1] },
-        Mul => set! { r![0] <- r![1] * r![2] },
-        Orr => set! { r![0] <- r![1] | r![2] },
-    }
-}
-
-/// A hash-map between instructions and output states to input states that send to the output. The
-/// states use a liveness mask to mark which registers are ignored, and they all ignore the
-/// condition flag. Currently, states also don't represent memory, so we don't need to worry about
-/// that.
-///
-/// About the condition flag again: all instructions in the map have a condition flag of always.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct BackwardMap<W: Word> {
-    pub map: FxHashMap<(Inst<W>, State<W>), Inputs<W>>,
-    empty_vec: Vec<State<W>>,
-    // The registers to consider when indexing into the map. These are the registers that are
-    // "live" in the states, and other registers should be ignored.
-    registers: Vec<Register>,
-}
-pub type Inputs<W> = Vec<State<W>>;
-
-impl<W: Word> BackwardMap<W> {
-    pub fn new(registers: &[Register]) -> std::io::Result<Self>
-    where
-        Self: Serialize + for<'a> Deserialize<'a>,
-        <W as All>::Iter: Clone,
-    {
-        let file_path = std::path::Path::new(".").join(Self::file_name(registers));
-        if file_path.exists() {
-            println!("loading backwards map from '{}'", file_path.display());
-            let f = std::fs::File::open(file_path)?;
-            let reader = std::io::BufReader::new(&f);
-            Self::load(reader)
-        } else {
-            println!("creating backwards map");
-            let f = std::fs::File::create(&file_path)?;
-            let this = Self::new_recalculate(registers);
-            println!("saving backwards map to '{}'", file_path.display());
-            let mut writer = std::io::BufWriter::new(&f);
-            this.save(&mut writer)?;
-            std::io::Write::flush(&mut writer)?;
-            Ok(this)
-        }
-    }
-
-    pub fn file_name(registers: &[Register]) -> String {
-        let mut ret = String::new();
-        ret.push_str("backward-map-");
-        ret.push_str(&W::BITS.to_string());
-        ret.push_str("bit");
-        for r in registers {
-            ret.push_str(&format!("-{r}"));
-        }
-        ret.push_str(".postcard"); // This is the name of the format we use
-        ret
-    }
-
-    pub fn save(&self, w: impl std::io::Write) -> std::io::Result<()>
-    where
-        Self: Serialize,
-    {
-        postcard::to_io(self, w).map_err(std::io::Error::other)?;
-        Ok(())
-    }
-
-    pub fn load(r: impl std::io::Read) -> std::io::Result<Self>
-    where
-        Self: for<'a> Deserialize<'a>,
-    {
-        let mut buf = [0; 1024 * 1024];
-        let (this, _) = postcard::from_io((r, &mut buf)).map_err(std::io::Error::other)?;
-        Ok(this)
-    }
-
-    /// Build from scratch a new backwards behavior map.
-    pub fn new_recalculate(registers: &[Register]) -> Self
-    where
-        <W as All>::Iter: Clone,
-    {
-        let mut ret = FxHashMap::default();
-        let mut i = 0;
-        let ei = EnumerationInfoOptions::Limited(registers);
-        State::all_each(&ei, |input| {
-            if i % 100 == 0 {
-                dbg!(i);
-            }
-            i += 1;
-            let mut output = State::default();
-            let ei = EnumerationInfo {
-                registers: EnumerationInfoOptions::Limited(registers),
-                immediates: EnumerationInfoOptions::Unlimited,
-            };
-            for inst in Enumerator::new(ei) {
-                input.clone_to(&mut output);
-                inst.run(&mut output);
-                // Store!
-                let inputs = ret.entry((inst, output)).or_insert_with(Vec::new);
-                if !inputs.contains(input) {
-                    inputs.push(*input);
-                }
-            }
-        });
-        Self {
-            map: ret,
-            empty_vec: vec![],
-            registers: registers.to_vec(),
-        }
-    }
-}
-
-impl<W: Word> std::ops::Index<(Inst<W>, State<W>)> for BackwardMap<W> {
-    type Output = [State<W>];
-
-    fn index(&self, (inst, mut state): (Inst<W>, State<W>)) -> &Self::Output {
-        // Clear the registers that don't matter.
-        for r in Register::all() {
-            if !self.registers.contains(&r) {
-                state.set_register(r, 0.into());
-            }
-        }
-        self.map
-            .get(&(inst, state))
-            .map(|v| v.as_slice())
-            .unwrap_or(&self.empty_vec)
-    }
-}
-
-impl<W: Copy + Into<Register>> Inst<W> {
+impl<W: Copy + Into<Register>, WShift> Inst<W, WShift> {
     fn args_with_types(&self) -> impl Iterator<Item = (W, ArgType)> {
         self.args.into_iter().zip(self.op_code.arg_types())
     }
@@ -574,62 +363,49 @@ impl<W: Copy + Into<Register>> Inst<W> {
         }
         ret.into_iter()
     }
-
-    // The parts of the state that this instruction reads.
-    pub fn read_mask(&self) -> state::Mask {
-        let mut ret = state::Mask::default();
-        for (a, t) in self.args_with_types() {
-            if let ArgType::Reg(RegArgType::Inp) = t {
-                ret[a.into()] |= true
-            }
-        }
-        ret.flags = self.cond_code != CondCode::Al;
-        ret
-    }
-
-    /// The parts of the state that this instruction writes.
-    pub fn write_mask(&self) -> state::Mask {
-        let mut ret = state::Mask::default();
-        for (a, t) in self.args_with_types() {
-            if let ArgType::Reg(RegArgType::Out) = t {
-                ret[a.into()] |= true
-            }
-        }
-        ret.flags = self.op_code.affects_flags();
-        ret
-    }
 }
 
-impl<W: Word> Inst<W> {
+impl<W: Word + HasBitWord> Inst<W> {
     pub fn run(&self, state: &mut State<W>) {
-        run_instruction(self, state)
+        let input = *state;
+        let (mut read_mask, mut write_mask) = Default::default();
+        *state = semantics::run(self, &input, &mut read_mask, &mut write_mask, &())
     }
 
     pub fn run_symbolic<'st>(&self, state: &mut SymbolicState<'st, W::SmtWord<'st>>) {
-        run_instruction_symbolic(self, state)
+        let input = *state;
+        let (mut read_mask, mut write_mask) = (Mask::empty(), Mask::empty());
+        let st = state.registers[0].st();
+        *state = semantics::run(self, &input, &mut read_mask, &mut write_mask, &st);
     }
 
     pub fn run_backward<'a>(
         &self,
         state: State<W>,
         bm: &'a BackwardMap<W>,
-    ) -> impl IntoIterator<Item = &'a State<W>> + use<'a, W> {
-        &bm[(*self, state)]
+    ) -> impl IntoIterator<Item = State<W>> + use<'a, W> {
+        bm.get(*self, state)
+    }
+
+    /// What the instruction reads from, given a state.
+    pub fn read_mask(&self, state: &State<W>) -> Mask {
+        let input = *state;
+        let (mut read_mask, mut write_mask) = Default::default();
+        semantics::run(self, &input, &mut read_mask, &mut write_mask, &());
+        read_mask
     }
 
     pub fn run_masked(&self, masked: state::Masked<W>) -> Option<state::Masked<W>> {
-        // Check if we can run
+        let (mut read_mask, mut write_mask) = Default::default();
+        let out = semantics::run(self, masked.state(), &mut read_mask, &mut write_mask, &());
+        // Check if we didn't read something that's not actually allowed
         let input_mask: BitMask = masked.mask();
-        let missing_inputs_mask = self.read_mask().into_bit_mask() & !input_mask;
+        let missing_inputs_mask = read_mask.into_bit_mask() & !input_mask;
         if !missing_inputs_mask.is_empty() {
             return None;
         }
-        // We can. Run!
-        let mut state = *masked.state();
-        self.run(&mut state);
-        let change_mask = state.diff(masked.state());
-        let output_mask = change_mask | input_mask.into_mask();
-        Some(state.masked(output_mask))
+        // Nope, everything is fine and fun
+        Some(out.masked(input_mask.into_mask() | write_mask))
     }
 
     pub fn run_backward_masked<'a>(
@@ -648,7 +424,10 @@ impl<W: Word> Inst<W> {
         []
     }
 
-    pub fn reduce<WSmall: Word>(&self, reducer: &mut Reducer<W, WSmall>) -> Inst<WSmall> {
+    pub fn reduce<WSmall: Word, WShiftSmall: Word>(
+        &self,
+        reducer: &mut Reducer<W, WSmall>,
+    ) -> Inst<WSmall, WShiftSmall> {
         fn reduce_arg<W: Word, WSmall: Word>(
             reducer: &mut Reducer<W, WSmall>,
             arg: W,
@@ -662,33 +441,37 @@ impl<W: Word> Inst<W> {
         }
 
         let arg_types = self.op_code.arg_types();
-        let info = ImmediateInfo {
+        let not_shift = ImmediateInfo {
             // TODO: is_shift: op_code.is_shift_instruction(),
             is_shift: false,
         };
+        let shift = self.shift.reduce(reducer);
         Inst {
             op_code: self.op_code,
             cond_code: self.cond_code,
+            shift,
             args: [
-                reduce_arg(reducer, self.args[0], arg_types[0], &info),
-                reduce_arg(reducer, self.args[1], arg_types[1], &info),
-                reduce_arg(reducer, self.args[2], arg_types[2], &info),
+                reduce_arg(reducer, self.args[0], arg_types[0], &not_shift),
+                reduce_arg(reducer, self.args[1], arg_types[1], &not_shift),
+                reduce_arg(reducer, self.args[2], arg_types[2], &not_shift),
             ],
         }
     }
 
-    pub fn extend<WBig: Word>(
+    pub fn extend<WBig: Word, WShiftBig: Word>(
         &self,
         reducer: &Reducer<WBig, W>,
-    ) -> impl Iterator<Item = Inst<WBig>> + Clone {
+    ) -> impl Iterator<Item = Inst<WBig, WShiftBig>> + Clone {
         fn extend_arg<WSmall: Word, WBig: Word>(
             reducer: &Reducer<WBig, WSmall>,
             arg: WSmall,
             arg_type: ArgType,
-        ) -> SliceOrSingle<'_, WBig> {
+        ) -> impl Iterator<Item = WBig> + Clone {
+            use itertools::Either::{Left, Right};
+            use std::iter::once;
             match arg_type {
-                ArgType::Imm => reducer.extend(arg),
-                ArgType::Reg(..) | ArgType::Unused => SliceOrSingle::Single(arg.into_word()),
+                ArgType::Imm => Left(reducer.extend(arg)),
+                ArgType::Reg(..) | ArgType::Unused => Right(once(arg.into_word::<WBig>())),
             }
         }
         // If only we had do notation 🥹
@@ -696,60 +479,202 @@ impl<W: Word> Inst<W> {
         let arg_types = self.op_code.arg_types();
         extend_arg(reducer, args[0], arg_types[0]).flat_map(move |arg0| {
             extend_arg(reducer, args[1], arg_types[1]).flat_map(move |arg1| {
-                extend_arg(reducer, args[2], arg_types[2]).map(move |arg2| Inst {
-                    op_code: self.op_code,
-                    cond_code: self.cond_code,
-                    args: [arg0, arg1, arg2],
+                extend_arg(reducer, args[2], arg_types[2]).flat_map(move |arg2| {
+                    self.shift.extend(reducer).map(move |shift| Inst {
+                        op_code: self.op_code,
+                        cond_code: self.cond_code,
+                        shift,
+                        args: [arg0, arg1, arg2],
+                    })
                 })
             })
         })
     }
 }
 
+impl<WShift: Word> ShiftCode<WShift> {
+    fn reduce<W: Word, WSmall: Word, WShiftSmall: Word>(
+        &self,
+        reducer: &mut Reducer<W, WSmall>,
+    ) -> ShiftCode<WShiftSmall> {
+        use ShiftCode::*;
+        let yes_shift = &ImmediateInfo { is_shift: true };
+        match self {
+            None => None,
+            Asr(x) => Asr(reducer.reduce(x.into_word(), yes_shift).into_word()),
+            Lsl(x) => Lsl(reducer.reduce(x.into_word(), yes_shift).into_word()),
+            Lsr(x) => Lsr(reducer.reduce(x.into_word(), yes_shift).into_word()),
+            Ror(x) => Ror(reducer.reduce(x.into_word(), yes_shift).into_word()),
+            Rrx => Rrx,
+        }
+    }
+
+    fn extend<W: Word, WBig: Word, WShiftBig: Word>(
+        &self,
+        reducer: &Reducer<WBig, W>,
+    ) -> impl Iterator<Item = ShiftCode<WShiftBig>> + Clone {
+        use ShiftCode::*;
+        use itertools::Either;
+        match self {
+            None => Either::Left([None].into_iter()),
+            // TODO: Filter to only results that make sense (fit)
+            Asr(x) => Either::Right(
+                reducer
+                    .extend(x.into_word())
+                    .map((|x: WBig| Asr(x.into_word())) as fn(_) -> _),
+            ),
+            Lsl(x) => Either::Right(
+                reducer
+                    .extend(x.into_word())
+                    .map((|x: WBig| Lsl(x.into_word())) as fn(_) -> _),
+            ),
+            Lsr(x) => Either::Right(
+                reducer
+                    .extend(x.into_word())
+                    .map((|x: WBig| Lsr(x.into_word())) as fn(_) -> _),
+            ),
+            Ror(x) => Either::Right(
+                reducer
+                    .extend(x.into_word())
+                    .map((|x: WBig| Ror(x.into_word())) as fn(_) -> _),
+            ),
+            Rrx => Either::Left([Rrx].into_iter()),
+        }
+    }
+}
+
 pub mod enumerate;
-impl<W: Word> Inst<W> {
+impl<W: Word + HasBitWord> Inst<W> {
     pub fn enumerate<'a>(ei: EnumerationInfo<'a, W>) -> impl Iterator<Item = Self> + use<'a, W> {
         enumerate::Enumerator::new(ei)
     }
 }
 
-impl<W: Display> Display for Inst<W> {
+fn fmt_inst(
+    Inst {
+        op_code,
+        cond_code,
+        shift,
+        args,
+    }: &Inst<&str, &str>, // Look at this cute hack! Taking the arguments as strings.
+    f: &mut Formatter,
+) -> fmt::Result {
+    let args = args
+        .iter()
+        .zip(op_code.arg_types())
+        .map(|(arg, arg_type)| match arg_type {
+            ArgType::Reg(..) => format!("r{arg}"),
+            ArgType::Imm => format!("#{arg}"),
+            ArgType::Unused => "-".to_string(),
+        })
+        .collect::<Vec<_>>();
+    #[rustfmt::skip] {
+                                        write!(f, "{op_code}")?;
+        if *cond_code != CondCode::Al { write!(f, "{cond_code}")? };
+                                        write!(f, " {}, {}, {}", args[0], args[1], args[2])?;
+        if *shift != ShiftCode::None  { write!(f, ", {}", shift)? };
+    };
+    Ok(())
+}
+
+impl<W: Debug, WShift: Debug> Debug for Inst<W, WShift> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        let Inst {
-            op_code,
-            cond_code,
-            args,
-        } = self;
-        let args = args
-            .iter()
-            .zip(op_code.arg_types())
-            .map(|(arg, arg_type)| match arg_type {
-                ArgType::Reg(..) => format!("r{arg}"),
-                ArgType::Imm => format!("#{arg}"),
-                ArgType::Unused => "-".to_string(),
-            })
-            .collect::<Vec<_>>();
-        if *cond_code == CondCode::Al {
-            write!(f, "{op_code} {}, {}, {}", args[0], args[1], args[2])
-        } else {
-            write!(
-                f,
-                "{op_code}{cond_code} {}, {}, {}",
-                args[0], args[1], args[2]
-            )
+        let arg_strings = self.args.each_ref().map(|a| format!("{a:?}"));
+        let shift_string = self.shift.as_ref().map(|x| format!("{x:?}"));
+        fmt_inst(
+            &Inst {
+                op_code: self.op_code,
+                cond_code: self.cond_code,
+                shift: shift_string.as_ref().map(|s| s.as_str()),
+                args: arg_strings.each_ref().map(|s| s.as_str()),
+            },
+            f,
+        )
+    }
+}
+
+impl<W: Display, WShift: Display> Display for Inst<W, WShift> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        let arg_strings = self.args.each_ref().map(|a| format!("{a}"));
+        let shift_string = self.shift.as_ref().map(|x| format!("{x}"));
+        fmt_inst(
+            &Inst {
+                op_code: self.op_code,
+                cond_code: self.cond_code,
+                shift: shift_string.as_ref().map(|s| s.as_str()),
+                args: arg_strings.each_ref().map(|s| s.as_str()),
+            },
+            f,
+        )
+    }
+}
+
+// Shift code map
+impl<T> ShiftCode<T> {
+    pub fn map<U>(self, f: impl FnOnce(T) -> U) -> ShiftCode<U> {
+        match self {
+            ShiftCode::None => ShiftCode::None,
+            ShiftCode::Asr(x) => ShiftCode::Asr(f(x)),
+            ShiftCode::Lsl(x) => ShiftCode::Lsl(f(x)),
+            ShiftCode::Lsr(x) => ShiftCode::Lsr(f(x)),
+            ShiftCode::Ror(x) => ShiftCode::Ror(f(x)),
+            ShiftCode::Rrx => ShiftCode::Rrx,
         }
+    }
+
+    pub fn as_ref(&self) -> ShiftCode<&T> {
+        match self {
+            ShiftCode::None => ShiftCode::None,
+            ShiftCode::Asr(x) => ShiftCode::Asr(x),
+            ShiftCode::Lsl(x) => ShiftCode::Lsl(x),
+            ShiftCode::Lsr(x) => ShiftCode::Lsr(x),
+            ShiftCode::Ror(x) => ShiftCode::Ror(x),
+            ShiftCode::Rrx => ShiftCode::Rrx,
+        }
+    }
+}
+
+#[cfg(test)]
+impl<W: Word + Arbitrary, WShift: Word + Arbitrary> Arbitrary for Inst<W, WShift> {
+    type Parameters = ();
+    type Strategy = BoxedStrategy<Self>;
+
+    fn arbitrary_with((): ()) -> Self::Strategy {
+        any::<(OpCode, CondCode, ShiftCode<WShift>)>()
+            .prop_flat_map(|(op_code, cond_code, shift)| {
+                op_code
+                    .arg_types()
+                    .map(|arg_type| match arg_type {
+                        ArgType::Reg(..) => any::<Register>()
+                            .prop_map(|r| Word8::from(r).into_word())
+                            .boxed(),
+                        ArgType::Imm => any::<W>().boxed(),
+                        ArgType::Unused => Just(0.into()).boxed(),
+                    })
+                    .prop_map(move |args| Inst {
+                        op_code,
+                        cond_code,
+                        shift,
+                        args,
+                    })
+            })
+            .boxed()
     }
 }
 
 /// A macro to create an instruction more easily.
 #[macro_export]
 macro_rules! inst {
-    ( $op_code:ident $cond_code:ident, $( $arg:expr ),* $(,)? ) => {
+    ( $op_code:ident $cond_code:ident, $( $arg:expr ),* $(; shift $shift:ident $( ($shift_arg:expr) )? )? ) => {
         {
             let args_iter = [$( $arg ),*];
+            #[allow(unused_assignments, unused_mut)]
+            let mut shift = $crate::ShiftCode::None;
+            $( shift = $crate::ShiftCode::$shift $( ($shift_arg) )?; )?
             $crate::Inst {
                 op_code: $crate::OpCode::$op_code,
                 cond_code: $crate::CondCode::$cond_code,
+                shift,
                 args: [
                     args_iter.get(0).cloned().unwrap_or(0usize).into(),
                     args_iter.get(1).cloned().unwrap_or(0usize).into(),
@@ -758,8 +683,8 @@ macro_rules! inst {
             }
         }
     };
-    ( $op_code:ident, $( $arg:expr ),* $(,)? ) => {
-        inst!($op_code Al, $( $arg ),* )
+    ($op_code:ident, $( $arg:expr ),* $(;  shift $shift:ident $( ($shift_arg:expr) )? )? ) => {
+        inst!($op_code Al, $( $arg ),* $(;  shift $shift $( ($shift_arg) )? )? )
     };
 }
 
@@ -770,8 +695,8 @@ pub fn extend_program_for_each<F, T, WBig, WSmall>(
 ) -> ControlFlow<T>
 where
     F: FnMut(&[Inst<WBig>]) -> ControlFlow<T>,
-    WBig: Word,
-    WSmall: Word,
+    WBig: Word + HasBitWord,
+    WSmall: Word + HasBitWord,
 {
     let mut ret = vec![];
     let iters: Vec<_> = program.iter().map(|inst| inst.extend(reducer)).collect();
@@ -784,25 +709,32 @@ where
     ControlFlow::Continue(())
 }
 
-/// Returns a mask for the input and the masked output.
-pub fn run_program_masked<W: Word>(
+/// Returns a mask having only those parts of the input state that affect the output of the
+/// program.
+pub fn what_program_reads<W: Word + HasBitWord>(
     prog: impl IntoIterator<Item = Inst<W>>,
-    input: State<W>,
-) -> (BitMask, state::Masked<W>) {
-    let (mut input_mask, mut output_mask) = (BitMask::EMPTY, BitMask::EMPTY);
-    let mut current_state = input;
+    input: &State<W>,
+) -> BitMask {
+    // This will be the parts of the input that we have read.
+    let mut input_mask = BitMask::EMPTY;
+    // And this will be the parts of the output that we have written to.
+    let mut output_mask = BitMask::EMPTY;
+    let mut state = *input;
     for inst in prog {
-        let prev = current_state;
-        inst.run(&mut current_state);
-        let read_mask = inst.read_mask().into_bit_mask();
-        let change_mask = current_state.diff(&prev).into_bit_mask();
-        let old_output_mask = output_mask;
-        // Add to input whatever you read and didn't write to earlier
-        input_mask = input_mask | (read_mask & !old_output_mask);
-        // Add to output whatever you are writing to
-        output_mask = output_mask | change_mask;
+        let (mut read_mask, mut write_mask) = Default::default();
+        state = semantics::run(&inst, &state, &mut read_mask, &mut write_mask, &());
+        input_mask = input_mask | (read_mask.into_bit_mask() & !output_mask);
+        output_mask = output_mask | write_mask.into();
     }
-    (input_mask, current_state.masked(output_mask.into_mask()))
+    input_mask
+}
+
+pub fn run_program_masked<W: Word + HasBitWord>(
+    prog: impl IntoIterator<Item = Inst<W>>,
+    input: state::Masked<W>,
+) -> Option<state::Masked<W>> {
+    prog.into_iter()
+        .try_fold(input, |current, inst| inst.run_masked(current))
 }
 
 pub mod parse;
@@ -811,6 +743,9 @@ pub use parse::parse;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::arm::state::Mask;
+    use functionality::prelude::*;
+    use proptest::property_test;
     use std::collections::HashSet;
 
     #[test]
@@ -840,9 +775,8 @@ mod tests {
     }
 
     #[test]
-    fn test_update_from_sub_zero() {
-        let mut flags = Flags::<bool>::default();
-        flags.update_from_sub::<Word64>(5usize.into(), 5usize.into(), true);
+    fn test_flags_from_sub_zero() {
+        let flags = Flags::from_sub::<Word64>(5usize.into(), 5usize.into());
         assert!(flags.z);
         assert!(!flags.n);
         assert!(flags.c); // no borrow
@@ -850,9 +784,8 @@ mod tests {
     }
 
     #[test]
-    fn test_update_from_sub_positive() {
-        let mut flags = Flags::<bool>::default();
-        flags.update_from_sub::<Word64>(10usize.into(), 3usize.into(), true);
+    fn test_flags_from_sub_positive() {
+        let flags = Flags::from_sub::<Word64>(10usize.into(), 3usize.into());
         assert!(!flags.z);
         assert!(!flags.n); // 7 is positive
         assert!(flags.c); // no borrow (10 >= 3)
@@ -860,9 +793,8 @@ mod tests {
     }
 
     #[test]
-    fn test_update_from_sub_negative() {
-        let mut flags = Flags::<bool>::default();
-        flags.update_from_sub::<Word64>(3usize.into(), 10usize.into(), true);
+    fn test_flags_from_sub_negative() {
+        let flags = Flags::from_sub::<Word64>(3usize.into(), 10usize.into());
         assert!(!flags.z);
         assert!(flags.n); // result is negative (wraps)
         assert!(!flags.c); // borrow occurred (3 < 10)
@@ -870,139 +802,72 @@ mod tests {
     }
 
     #[test]
-    fn test_update_from_sub_overflow_positive() {
+    fn test_flags_from_sub_overflow_positive() {
         // Positive - Negative = Negative (overflow)
         // For u8: 127 - (-128) = 127 - 128 (as unsigned) = 127 - 128 (wraps)
-        let mut flags = Flags::<bool>::default();
-        flags.update_from_sub::<Word8>(127usize.into(), 128usize.into(), true); // 127 - (-128 as u8)
+        let flags = Flags::from_sub::<Word8>(127usize.into(), 128usize.into()); // 127 - (-128 as u8)
         assert!(flags.n); // wrapped to negative
         assert!(flags.v); // overflow occurred
     }
 
     #[test]
-    fn test_update_from_sub_overflow_negative() {
+    fn test_flags_from_sub_overflow_negative() {
         // Negative - Positive = Positive (overflow)
         // For u8: 128 (as -128 signed) - 1 = wraps to 127
-        let mut flags = Flags::<bool>::default();
-        flags.update_from_sub::<Word8>(128usize.into(), 1usize.into(), true);
+        let flags = Flags::from_sub::<Word8>(128usize.into(), 1usize.into());
         assert!(!flags.n); // wrapped to positive
         assert!(flags.v); // overflow occurred
     }
 
+    // TODO: Change when we add OpCode::Cmp
     #[test]
-    fn test_update_from_sub_disabled() {
-        let mut flags = Flags {
-            z: true,
-            n: true,
-            c: true,
-            v: true,
-        };
-        flags.update_from_sub::<Word64>(10usize.into(), 3usize.into(), false);
-        // All flags should remain unchanged
-        assert!(flags.z);
-        assert!(flags.n);
-        assert!(flags.c);
-        assert!(flags.v);
-    }
-
-    #[test]
-    fn test_backward_map_some_not_empty() {
-        type W = Word4;
-        let bm = BackwardMap::<W>::new_recalculate(&[Register(1)]);
-        let mut n_empty = 0;
-        bm.map.iter().for_each(|((inst, state), inputs)| {
-            println!("Instruction: {inst}, Output State: {state}");
-            println!("Input States:");
-            inputs.iter().for_each(|input| print!("  {input}"));
-            println!();
-            if inputs.is_empty() {
-                n_empty += 1;
-            }
-        });
-        println!("Number of entries with empty input states: {n_empty}");
-        assert!(n_empty < bm.map.len());
-    }
-
-    #[test]
-    fn test_backward_map() {
-        type W = Word4;
-        let bm = BackwardMap::<W>::new_recalculate(&[Register(1)]);
-        let inst: Inst<W> = inst!(AddI, 1, 1, 5);
-        let mut output = State::<W>::default();
-        output.set_register(Register(1), 12.into());
-        output.set_register(Register(2), 6.into());
-        output.set_flags(
-            Flags {
-                z: false,
-                n: true,
-                c: false,
-                v: true,
-            }
-            .into(),
+    fn what_program_reads_example_1() {
+        type W = Word8;
+        let p: Vec<Inst<W>> = vec![inst!(AddI, 0, 0, 5)];
+        let input = State::default();
+        let input_mask = what_program_reads(p.clone(), &input);
+        let output = run_program_masked(p, input.masked(input_mask.into()));
+        assert_eq!(input_mask, Mask::just_register(Register(0)).into());
+        assert_eq!(
+            output.unwrap(),
+            input
+                .mutate(|i| i[Register(0)] = 5.into())
+                .masked(Mask::just_register(Register(0)))
         );
-        let inputs = inst
-            .run_backward(output, &bm)
-            .into_iter()
-            .collect::<Vec<_>>();
-        dbg!(&inputs);
-        assert_eq!(inputs.len(), 16);
     }
 
     #[test]
-    fn run_nop_backwards_one_option() {
-        type W = Word4;
-        let bm = BackwardMap::<W>::new_recalculate(&[Register(1)]);
-        let inst = inst!(Nop,);
-        let mut output = State::<W>::default();
-        output.set_register(Register(1), 12.into());
-        output.set_register(Register(2), 6.into());
-        output.set_flags(
-            Flags {
-                z: false,
-                n: true,
-                c: false,
-                v: true,
-            }
-            .into(),
+    fn what_program_reads_example_2() {
+        type W = Word8;
+        let p: Vec<Inst<W>> = vec![
+            inst!(AddI, 0, 0, 5),
+            inst!(AddI Eq, 1, 0, 1),
+            inst!(Mul Eq, 1, 0, 1),
+        ];
+        // The zero flag is false, so the two last instructions should not run.
+        let input = State::default();
+        let input_mask = what_program_reads(p.clone(), &input);
+        let output = run_program_masked(p, input.masked(input_mask.into()));
+        let m = Mask::just_register(Register(0)) | Mask::JUST_FLAGS;
+        assert_eq!(input_mask, m.into());
+        assert_eq!(
+            output.unwrap(),
+            input.mutate(|i| i[Register(0)] = 5.into()).masked(m),
         );
-        let inputs = inst
-            .run_backward(output, &bm)
-            .into_iter()
-            .collect::<Vec<_>>();
-        dbg!(&inputs);
-        assert_eq!(inputs.len(), 1);
     }
 
-    #[test]
-    #[ignore]
-    fn backwards_map_specific_state() {
-        type W = Word4;
-        let bm = BackwardMap::<W>::new(&[Register(0), Register(1)]).unwrap();
-        let mut state = State::<W>::default();
-        state.set_register(Register(0), 15.into());
-        state.set_register(Register(1), 15.into());
-        state.set_flags(
-            Flags {
-                z: false,
-                n: true,
-                c: false,
-                v: true,
-            }
-            .into(),
-        );
-        let ei = EnumerationInfo {
-            registers: EnumerationInfoOptions::Limited(&[Register(0), Register(1)]),
-            immediates: EnumerationInfoOptions::Limited(&[0.into(), 1.into(), 5.into()]),
-        };
-        for inst in Inst::enumerate(ei) {
-            let x = &bm[(inst, state)];
-            println!("Instruction: {inst}, Output State: {state}");
-            println!("Input States: {x:?}");
-            if !x.is_empty() {
-                println!("Found non-empty input states for this instruction and output state!");
-                return;
-            }
-        }
-        panic!("No instruction produced non-empty input states for the given output state!");
+    #[property_test]
+    fn what_program_reads_is_enough_for_run_program_masked(
+        prog: [Inst<Word64>; 1],
+        state: State<Word64>,
+    ) {
+        println!("==== Starting! ====");
+        dbg!(&prog, &state);
+        let mask = what_program_reads(prog, &state);
+        dbg!(&mask);
+        let state = state.masked(mask.into());
+        let out = dbg!(run_program_masked(prog, state));
+        prop_assert!(out.is_some());
+        println!("Success!");
     }
 }

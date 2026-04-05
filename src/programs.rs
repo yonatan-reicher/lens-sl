@@ -295,7 +295,7 @@ where
                         (inner.clone(), any::<I>()).prop_map(|(p, i)| p.concat(i)),
                         // Concats
                         prop::collection::vec((inner.clone(), any::<I>()), 1..10).prop_map(|vec| {
-                            let concats = vec.into_iter().map(|(p, i)| (p, i)).collect();
+                            let concats = vec.into_iter().collect();
                             Self(Inner::ConcatsVec(Rc::new(concats)))
                         }),
                         prop::collection::vec((inner.clone(), any::<I>()), 1..10).prop_map(|vec| {

@@ -1,7 +1,6 @@
-use crate::Direction;
+use crate::direction::Direction;
 use crate::len::Len;
 use derive_more::Display;
-use humantime;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::ops::{Index, IndexMut};
 use std::sync::mpsc::{Receiver, RecvError, Sender, channel};
@@ -84,6 +83,17 @@ impl<State: Debug + Display + Send + 'static> Default for Tui<State> {
             _io_thread: io_thread,
             channel: sender,
         }
+    }
+}
+
+impl<State> Tui<State> {
+    pub fn close(self) {
+        let Self {
+            _io_thread,
+            channel,
+        } = self;
+        std::mem::drop(channel);
+        let _ = _io_thread.join();
     }
 }
 

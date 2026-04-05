@@ -26,8 +26,8 @@ impl<P: Program<S> + ?Sized, S: Clone + Default + Eq> Oracle<P, S> for TestCases
 
 use crate::arm::Inst;
 use crate::arm::state::State as ArmState;
-use crate::word::Word;
-impl<W: Word> Program<ArmState<W>> for [Inst<W>] {
+use crate::word::{HasBitWord, Word};
+impl<W: Word + HasBitWord> Program<ArmState<W>> for [Inst<W>] {
     fn run(&self, state: &mut ArmState<W>) {
         for inst in self {
             inst.run(state);

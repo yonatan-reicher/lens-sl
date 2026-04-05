@@ -1,6 +1,7 @@
 //! Define an interface to generalize over different bit-widths and also over SMT bit-vectors.
 
 use crate::all::All;
+use crate::bool::prelude::*;
 use crate::smtlib_utils::{BitVecExt, bit_vec_term_to_i128};
 #[cfg(test)]
 use proptest::prelude::*;
@@ -16,8 +17,8 @@ use std::ops::*;
 /// A trait for unsigned integer types that have wrapping semantics.
 #[rustfmt::skip]
 pub trait Word
-    : AbstractWord
-    + All
+    : AbstractWord<Bool=bool, FromParam=()>
+    + All<Iter: Clone>
     + Debug
     + Default
     + Display
@@ -33,21 +34,18 @@ pub trait Word
     // + DeserializeOwned
     + 'static
 {
-    fn into_smt_word<'st>(self, st: &'st Storage) -> Self::SmtWord<'st>;
-    fn into_word<W: Word>(self) -> W { Into::<usize>::into(self).into() }
-    fn is_zero(&self) -> bool;
-    fn signed_lt(self, other: Self) -> bool;
-    fn signed_positive(&self) -> bool;
-    fn signed_negative(&self) -> bool;
     const ZERO: Self;
     const ONE: Self;
     const MAX: Self;
+    fn into_smt_word<'st>(self, st: &'st Storage) -> Self::SmtWord<'st>;
+    fn into_word<W: Word>(self) -> W { Into::<usize>::into(self).into() }
+    fn into_abstract_word<W: AbstractWord>(self, arg: W::FromParam) -> W { W::from_word(self, arg) }
 }
 
 /// Abstracts over SMT bit-vectors.
 #[rustfmt::skip]
 pub trait SmtWord<'st>
-    : AbstractWord
+    : AbstractWord<Bool=SmtBool<'st>, FromParam=&'st Storage>
     + From<smtlib::terms::Const<'st, Self>>
     + Into<smtlib::terms::Dynamic<'st>>
     + IntoWithStorage<'st, Self>
@@ -70,20 +68,30 @@ pub trait AbstractWord
     // + Sub<Output = Self> // Bit-vectors actually do not implement this
     + Div<Output = Self>
     + Mul<Output = Self>
+    + Neg<Output = Self>
     // Bitwise
     + BitAnd<Output = Self>
     + BitOr<Output = Self>
     + BitXor<Output = Self>
     + Not<Output = Self>
     + Shl<Output = Self>
-    + Neg<Output = Self>
+    + Shr<Output = Self>
     // + Rem<Output = Self>
-    // + Shr<Output = Self>
 {
-    // One of these shall equal `Self`.
-    type Word: Word;
+    type Bool: Bool + IfThenElse<Self>;
+    // One of these shall equal `Self`. And obviously, if B is bool, it's Word, and if it's SmtBool
+    // than it's SmtWord.
     type SmtWord<'st>: SmtWord<'st>;
+    type Word: Word;
     const BITS: usize;
+    fn is_zero(&self) -> Self::Bool;
+    fn signed_lt(&self, other: &Self) -> Self::Bool;
+    fn unsigned_lt(&self, other: &Self) -> Self::Bool;
+    fn signed_positive(&self) -> Self::Bool;
+    fn signed_negative(&self) -> Self::Bool;
+    type FromParam;
+    fn from_word<W: Word>(w: W, arg: Self::FromParam) -> Self;
+    fn get_from_param(&self) -> Self::FromParam;
 }
 
 // ========== The Implementation ==================================================================
@@ -113,6 +121,16 @@ macro_rules! impl_word {
             fn into_smt_word<'st>(self, st: &'st Storage) -> Self::SmtWord<'st> {
                 (self.0 as i64).into_with_storage(st)
             }
+            const ZERO: $name = Self(0);
+            const ONE: $name = Self(1);
+            const MAX: $name = Self(<$t>::MAX & $mask as $t);
+        }
+
+        impl AbstractWord for $name {
+            type Bool = bool;
+            type Word = Self;
+            type SmtWord<'st> = BitVec<'st, $bits>;
+            const BITS: usize = $bits;
 
             fn is_zero(&self) -> bool {
                 self.0 == 0
@@ -129,24 +147,25 @@ macro_rules! impl_word {
                 msb == 1
             }
 
-            fn signed_lt(self, other: Self) -> bool {
+            fn signed_lt(&self, other: &Self) -> bool {
                 match (self.signed_negative(), other.signed_negative()) {
                     (false, false) => self < other,
-                    (true, true) => -self > -other,
+                    (true, true) => -*self > -*other,
                     (false, true) => false,
                     (true, false) => true,
                 }
             }
 
-            const ZERO: $name = Self(0);
-            const ONE: $name = Self(1);
-            const MAX: $name = Self(<$t>::MAX & $mask as $t);
-        }
+            fn unsigned_lt(&self, other: &Self) -> bool {
+                self < other
+            }
 
-        impl AbstractWord for $name {
-            type Word = Self;
-            type SmtWord<'st> = BitVec<'st, $bits>;
-            const BITS: usize = $bits;
+            type FromParam = ();
+            fn from_word<W: Word>(w: W, (): ()) -> Self {
+                w.into_word()
+            }
+
+            fn get_from_param(&self) -> () { }
         }
 
         // Arithmetic
@@ -161,8 +180,10 @@ macro_rules! impl_word {
         impl_op!(BitOr  for $name fn bitor(a, b) = Self::from(a.0 | b.0));
         impl_op!(BitXor for $name fn bitxor(a, b) = Self::from(a.0 ^ b.0));
         impl_op!(Not    for $name fn not(a) = Self::from(!a.0));
-        impl_op!(Shl    for $name fn shl(a, b) = Self::from(a.0 << b.0));
-        impl_op!(Shr    for $name fn shr(a, b) = Self::from(a.0 >> b.0));
+        // impl_op!(Shl    for $name fn shl(a, b) = Self::from(a.0 << b.0));
+        // impl_op!(Shr    for $name fn shr(a, b) = Self::from(a.0 >> b.0));
+        impl_op!(Shl    for $name fn shl(a, b) = Self::from(a.0.unbounded_shl(to_u32_saturating(b.0))));
+        impl_op!(Shr    for $name fn shr(a, b) = Self::from(a.0.unbounded_shr(to_u32_saturating(b.0))));
 
         impl All for $name {
             type Iter = std::iter::Map<std::ops::RangeInclusive<$t>, fn($t) -> $name>;
@@ -172,10 +193,9 @@ macro_rules! impl_word {
         #[cfg(test)]
         impl Arbitrary for $name {
             type Parameters = ();
-            type Strategy = proptest::arbitrary::Mapped<$t, $name>;
-
+            type Strategy = proptest::strategy::Map<std::ops::RangeInclusive<usize>, fn(usize) -> Self>;
             fn arbitrary_with((): ()) -> Self::Strategy {
-                any::<$t>().prop_map(Self::from)
+                (0..=$mask).prop_map(Self::from)
             }
         }
 
@@ -191,9 +211,39 @@ macro_rules! impl_word {
         }
 
         impl<'st> AbstractWord for BitVec<'st, $bits> {
+            type Bool = SmtBool<'st>;
             type Word = $name;
             type SmtWord<'st1> = BitVec<'st1, $bits>;
             const BITS: usize = $bits;
+
+            fn is_zero(&self) -> SmtBool<'st> {
+                BitVecExt::is_zero(self)
+            }
+
+            fn signed_lt(&self, other: &Self) -> SmtBool<'st> {
+                BitVecExt::signed_lt(*self, *other)
+            }
+
+            fn unsigned_lt(&self, other: &Self) -> SmtBool<'st> {
+                BitVecExt::unsigned_lt(*self, *other)
+            }
+
+            fn signed_positive(&self) -> SmtBool<'st> {
+                self.is_positive()
+            }
+
+            fn signed_negative(&self) -> SmtBool<'st> {
+                self.is_negative()
+            }
+
+            type FromParam = &'st Storage;
+            fn from_word<W: Word>(w: W, st: &'st Storage) -> Self {
+                w.into_word::<Self::Word>().into_smt_word(st)
+            }
+
+            fn get_from_param(&self) -> Self::FromParam {
+                smtlib::Sorted::st(self)
+            }
         }
     };
 }
@@ -221,13 +271,46 @@ macro_rules! impl_op {
     };
 }
 
+/// Assumes `T` is an unsigned number type
+fn to_u32_saturating<T: TryInto<u32>>(x: T) -> u32 {
+    x.try_into().unwrap_or(u32::MAX)
+}
+
+impl_word!(Word2(u8)   bits 2  signed i8  mask 0x03);
+impl_word!(Word3(u8)   bits 3  signed i8  mask 0x07);
 impl_word!(Word4(u8)   bits 4  signed i8  mask 0x0F);
+impl_word!(Word5(u8)   bits 5  signed i8  mask 0x1F);
+impl_word!(Word6(u8)   bits 6  signed i8  mask 0x3F);
 impl_word!(Word8(u8)   bits 8  signed i8  mask 0xFF);
+impl_word!(Word32(u32) bits 32 signed i32 mask 0xFFFFFFFFusize);
 impl_word!(Word64(u64) bits 64 signed i64 mask 0xFFFFFFFFFFFFFFFFusize);
+
+// =================================================================================================
+//                                            Bit Word
+// =================================================================================================
+
+/// Associates the exact word size needed to hold the number of bits in the word.
+pub trait HasBitWord {
+    type BitWord: Word;
+}
+
+#[rustfmt::skip] impl HasBitWord for Word4 { type BitWord = Word2; }
+#[rustfmt::skip] impl HasBitWord for Word8 { type BitWord = Word3; }
+#[rustfmt::skip] impl HasBitWord for Word32 { type BitWord = Word5; }
+#[rustfmt::skip] impl HasBitWord for Word64 { type BitWord = Word6; }
+
+pub type BitWord<T> = <T as HasBitWord>::BitWord;
+
+// =================================================================================================
+//                                             Other
+// =================================================================================================
 
 pub mod prelude {
     #[allow(unused_imports)]
-    pub use super::{AbstractWord, SmtWord, Word, Word4, Word8, Word64};
+    pub use super::{
+        AbstractWord, BitWord, HasBitWord, SmtWord, Word, Word2, Word3, Word4, Word5, Word6, Word8,
+        Word32, Word64,
+    };
     pub use crate::smtlib_utils::BitVecExt;
 }
 
@@ -239,5 +322,15 @@ mod tests {
     #[property_test]
     fn word4_add_word4_eq_neg_neg_word4_sub_word4(x: Word4, y: Word4) {
         prop_assert_eq!(x + y, -(-x - y));
+    }
+
+    #[test]
+    fn shift_left_overflows_word8() {
+        assert_eq!(Word8(200) << Word8(2), Word8(32));
+    }
+
+    #[test]
+    fn shift_left_overflows_word64() {
+        assert_eq!(Word64(!0u64) << Word64(2), Word64(!0u64 ^ 0b11));
     }
 }

@@ -1,5 +1,5 @@
 #[allow(unused_imports)]
-use lens_sl::{LiveValue, Register, Word4, Word8, Word64, inst, optimize};
+use lens_sl::{LiveValue, Register, Word4, Word8, Word64, inst, optimize, optimize_sl};
 #[allow(unused_imports)]
 use lens_sl::{NoTui, Tui};
 
@@ -15,7 +15,7 @@ fn main() {
             eprintln!("Failed to read program file '{}': {err}", path);
             std::process::exit(1);
         });
-        let program = lens_sl::parse::<Word64>(&src).unwrap_or_else(|err| {
+        let program = lens_sl::parse(&src).unwrap_or_else(|err| {
             eprintln!("Failed to parse program file '{}': {err}", path);
             std::process::exit(1);
         });
@@ -56,20 +56,14 @@ fn main() {
     // Keep parsed live-out info available until `optimize` accepts it directly.
     let _live_out = live_out;
 
-    let p = optimize::<Word64, Word4>(
+    let tui = Tui::default();
+    let p = optimize_sl::<Word64, Word4>(
         &program,
-        &[
-            &[(Register(0), 0.into()), (Register(1), 0.into())],
-            &[(Register(0), 1.into()), (Register(1), 0.into())],
-            &[(Register(0), 0.into()), (Register(1), 1.into())],
-            &[(Register(0), 1.into()), (Register(1), 1.into())],
-            &[(Register(0), 20.into()), (Register(1), 1.into())],
-            &[(Register(0), 8.into()), (Register(1), 1.into())],
-            &[(Register(0), 93.into()), (Register(1), 1.into())],
-            &[(Register(0), 92.into()), (Register(1), 11.into())],
-        ],
-        &Tui::default(), // */ &NoTui,
+        vec![], // additional_registers
+        vec![], // additional_immediates
+        &tui,   // */ &NoTui,
     );
+    tui.close();
     let Some(p) = p else {
         println!("No equivalent program found");
         return;

@@ -11,9 +11,9 @@ use std::collections::HashMap;
 use std::fmt;
 use std::fs;
 
-use super::{ArgType, CondCode, OpCode};
+use super::{ArgType, CondCode, OpCode, ShiftCode};
 use crate::arm;
-use crate::word::Word;
+use crate::word::prelude::*;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Data types
@@ -182,6 +182,9 @@ impl Parser {
                 // already consumed the opcode word, so a WORD here is always the
                 // arg-pair modifier (e.g. shift modifier like "lsl").
                 let w = self.advance().clone();
+                if w.value == "rrx" {
+                    return Ok(Some(vec![w.value]));
+                }
                 let a = self.parse_arg()?;
                 Ok(Some(vec![w.value, a]))
             }
@@ -222,27 +225,27 @@ impl Parser {
     // instruction ::= WORD args | WORD _WORD | NOP | '?'
     fn parse_instruction(&mut self) -> Result<Option<Inst>, ParseError> {
         match self.peek().kind {
-            TokenKind::Eof => return Ok(None),
+            TokenKind::Eof => Ok(None),
             // Labels and .text directives don't produce instructions; skip them.
             TokenKind::Label | TokenKind::Block | TokenKind::Text => {
                 self.advance();
-                return Ok(Some(Inst::hole())); // filtered out by caller
+                Ok(Some(Inst::hole())) // filtered out by caller
                 // Actually we want to skip, not emit a hole — see parse_code.
             }
             TokenKind::Hole => {
                 self.advance();
-                return Ok(Some(Inst::hole()));
+                Ok(Some(Inst::hole()))
             }
             TokenKind::Nop => {
                 self.advance();
-                return Ok(Some(create_inst("nop", vec![])?));
+                Ok(Some(create_inst("nop", vec![])?))
             }
             TokenKind::Word => {
                 let op_tok = self.advance().clone();
                 match self.peek().kind {
                     TokenKind::UWord => {
                         let uw = self.advance().clone();
-                        return Ok(Some(create_special_inst(&op_tok.value, &uw.value)?));
+                        Ok(Some(create_special_inst(&op_tok.value, &uw.value)?))
                     }
                     TokenKind::Eof
                     | TokenKind::Word   // next instruction
@@ -252,24 +255,24 @@ impl Parser {
                     | TokenKind::Block
                     | TokenKind::Text => {
                         // zero-arg instruction
-                        return Ok(Some(create_inst(&op_tok.value, vec![])?));
+                        Ok(Some(create_inst(&op_tok.value, vec![])?))
                     }
                     _ => {
                         let args = self.parse_args()?;
-                        return Ok(Some(create_inst(&op_tok.value, args)?));
+                        Ok(Some(create_inst(&op_tok.value, args)?))
                     }
                 }
             }
             _ => {
                 let t = self.peek();
-                return Err(ParseError {
+                Err(ParseError {
                     message: format!(
                         "unexpected token {:?} ('{}') at start of instruction",
                         t.kind, t.value
                     ),
                     line: t.line,
                     col: t.col,
-                });
+                })
             }
         }
     }
@@ -661,6 +664,14 @@ fn create_inst(op: &str, mut args: Vec<String>) -> Result<Inst, ParseError> {
 
     let args_len = args.len();
 
+    // Special no-amount shift form: `..., rrx`
+    if args_len >= 3 && args.last().is_some_and(|a| a == "rrx") {
+        args.pop();
+        let mut inst = create_inst(&op, args)?;
+        inst.op[2] = "rrx".to_owned();
+        return Ok(inst);
+    }
+
     // Shift-op folding: if the second-to-last arg is a shift operator,
     // fold it into the op vector's third slot (as in the Racket original).
     if args_len >= 4 {
@@ -704,19 +715,17 @@ fn create_inst(op: &str, mut args: Vec<String>) -> Result<Inst, ParseError> {
     op = bare_op;
 
     // ldr / str: treat fp (r99 in original) and scale offset by /4
-    if op == "ldr" || op == "str" {
-        if args_len >= 3 {
-            let offset = &args[2];
-            // Only scale if the offset does NOT start with 'r' (i.e. it is a literal)
-            if !offset.starts_with('r') {
-                if let Ok(n) = offset.parse::<i64>() {
-                    args[2] = (n / 4).to_string();
-                }
-            }
+    if (op == "ldr" || op == "str") && args_len >= 3 {
+        let offset = &args[2];
+        // Only scale if the offset does NOT start with 'r' (i.e. it is a literal)
+        if !offset.starts_with('r')
+            && let Ok(n) = offset.parse::<i64>()
+        {
+            args[2] = (n / 4).to_string();
         }
     }
 
-    let renamed: Vec<String> = args.into_iter().map(|a| rename(a)).collect();
+    let renamed: Vec<String> = args.into_iter().map(rename).collect();
 
     Ok(Inst::real(&op, &cond_type, "", renamed))
 }
@@ -771,6 +780,68 @@ fn parse_cond_code(cond: &str) -> Result<CondCode, ParseError> {
         "le" => Ok(CondCode::Le),
         _ => Err(ParseError {
             message: format!("unsupported condition code suffix '{cond}'"),
+            line: 0,
+            col: 0,
+        }),
+    }
+}
+
+fn parse_shift_amount<WShift: Clone + From<usize> + Into<usize>>(
+    amount: i64,
+    op: &str,
+) -> Result<WShift, ParseError> {
+    let amount_orig = amount;
+    if amount < 0 {
+        return Err(ParseError {
+            message: format!("shift amount is '{amount_orig}, but shift amount cannot be negative"),
+            line: 0,
+            col: 0,
+        });
+    }
+    let amount = WShift::from(amount as usize);
+    if amount.clone().into() != amount_orig as usize {
+        return Err(ParseError {
+            message: format!("invalid shift amount '{amount_orig}' for {op}"),
+            line: 0,
+            col: 0,
+        });
+    }
+    Ok(amount)
+}
+
+fn parse_shift_code<WShift: Clone + From<usize> + Into<usize>>(
+    shift: &str,
+    parsed_args: &mut Vec<ParsedArg>,
+) -> Result<ShiftCode<WShift>, ParseError> {
+    let shift = if shift == "asl" { "lsl" } else { shift };
+    if shift.is_empty() {
+        return Ok(ShiftCode::None);
+    }
+    if shift == "rrx" {
+        return Ok(ShiftCode::Rrx);
+    }
+    let Some(last) = parsed_args.pop() else {
+        return Err(ParseError {
+            message: format!("missing shift amount for '{shift}'"),
+            line: 0,
+            col: 0,
+        });
+    };
+    let ParsedArg::Imm(amount) = last else {
+        return Err(ParseError {
+            message: format!("shift amount must be immediate for '{shift}'"),
+            line: 0,
+            col: 0,
+        });
+    };
+    let amount = parse_shift_amount(amount, shift)?;
+    match shift {
+        "asr" => Ok(ShiftCode::Asr(amount)),
+        "lsl" => Ok(ShiftCode::Lsl(amount)),
+        "lsr" => Ok(ShiftCode::Lsr(amount)),
+        "ror" => Ok(ShiftCode::Ror(amount)),
+        _ => Err(ParseError {
+            message: format!("unsupported shift op '{shift}'"),
             line: 0,
             col: 0,
         }),
@@ -865,6 +936,15 @@ fn map_opcode(op: &str, args: &[ParsedArg]) -> Result<OpCode, ParseError> {
                 col: 0,
             }),
         },
+        "cmp" => match args {
+            [ParsedArg::Reg(_), ParsedArg::Reg(_)] => Ok(OpCode::Cmp),
+            [ParsedArg::Reg(_), ParsedArg::Imm(_)] => Ok(OpCode::CmpI),
+            _ => Err(ParseError {
+                message: "unsupported cmp operands".into(),
+                line: 0,
+                col: 0,
+            }),
+        },
         _ => Err(ParseError {
             message: format!("unsupported opcode '{op}'"),
             line: 0,
@@ -873,7 +953,7 @@ fn map_opcode(op: &str, args: &[ParsedArg]) -> Result<OpCode, ParseError> {
     }
 }
 
-fn translate_inst<W: Word>(inst: &Inst) -> Result<arm::Inst<W>, ParseError> {
+fn translate_inst<W: Word, WShift: Word>(inst: &Inst) -> Result<arm::Inst<W, WShift>, ParseError> {
     if inst.is_hole() {
         return Err(ParseError {
             message: "cannot translate hole instruction".into(),
@@ -888,16 +968,8 @@ fn translate_inst<W: Word>(inst: &Inst) -> Result<arm::Inst<W>, ParseError> {
             col: 0,
         });
     }
-    if !inst.op[2].is_empty() {
-        return Err(ParseError {
-            message: format!("cannot translate folded shift op '{}'", inst.op[2]),
-            line: 0,
-            col: 0,
-        });
-    }
-
     let cond_code = parse_cond_code(&inst.op[1])?;
-    let parsed_args: Vec<ParsedArg> = inst
+    let mut parsed_args: Vec<ParsedArg> = inst
         .args
         .iter()
         .map(|a| {
@@ -908,6 +980,7 @@ fn translate_inst<W: Word>(inst: &Inst) -> Result<arm::Inst<W>, ParseError> {
             })
         })
         .collect::<Result<_, _>>()?;
+    let shift_code = parse_shift_code(&inst.op[2], &mut parsed_args)?;
     let op_code = map_opcode(&inst.op[0], &parsed_args)?;
     let arg_types = op_code.arg_types();
     let mut args = [W::from(0usize); 3];
@@ -956,13 +1029,17 @@ fn translate_inst<W: Word>(inst: &Inst) -> Result<arm::Inst<W>, ParseError> {
     Ok(arm::Inst {
         op_code,
         cond_code,
+        shift: shift_code,
         args,
     })
 }
 
 /// Parse to the old stringy Inst format, then translate each instruction to typed arm::Inst.
-pub fn parse<W: Word>(src: &str) -> Result<Vec<arm::Inst<W>>, ParseError> {
-    parse_raw(src)?.iter().map(translate_inst::<W>).collect()
+pub fn parse<W: Word, WShift: Word>(src: &str) -> Result<Vec<arm::Inst<W, WShift>>, ParseError> {
+    parse_raw(src)?
+        .iter()
+        .map(translate_inst::<W, WShift>)
+        .collect()
 }
 
 /// Corresponds to `liveness-from-file` in the original.
@@ -1016,7 +1093,7 @@ pub fn info_from_file(path: &str) -> Result<Vec<LiveValue>, Box<dyn std::error::
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CondCode, OpCode, Word4};
+    use crate::{CondCode, OpCode, ShiftCode, Word4};
 
     fn op(inst: &Inst) -> (&str, &str, &str) {
         (&inst.op[0], &inst.op[1], &inst.op[2])
@@ -1104,10 +1181,11 @@ mod tests {
 
     #[test]
     fn test_parse_simple_mov() {
-        let insts = parse::<Word4>("mov r0, r1").unwrap();
+        let insts = parse::<Word4, Word2>("mov r0, r1").unwrap();
         assert_eq!(insts.len(), 1);
         assert_eq!(insts[0].op_code, OpCode::Mov);
         assert_eq!(insts[0].cond_code, CondCode::Al);
+        assert_eq!(insts[0].shift, ShiftCode::None);
         assert_eq!(usize::from(insts[0].args[0]), 0);
         assert_eq!(usize::from(insts[0].args[1]), 1);
     }
@@ -1115,15 +1193,86 @@ mod tests {
     #[test]
     fn test_parse_preserves_old_hole_parse_but_rejects_translation() {
         assert!(parse_raw("?").unwrap()[0].is_hole());
-        let err = parse::<Word4>("?").unwrap_err();
+        let err = parse::<Word4, Word2>("?").unwrap_err();
         assert!(err.message.contains("hole"));
     }
 
     #[test]
-    fn test_parse_rejects_shift_folded_inst() {
-        let folded = parse_raw("add r0, r1, r2, lsl #2").unwrap();
-        assert_eq!(folded[0].op[2], "lsl");
-        let err = parse::<Word4>("add r0, r1, r2, lsl #2").unwrap_err();
-        assert!(err.message.contains("folded shift"));
+    fn test_parse_accepts_shift_folded_inst() {
+        let insts = parse::<Word4, Word2>("add r0, r1, r2, lsl #2").unwrap();
+        assert_eq!(insts.len(), 1);
+        assert_eq!(insts[0].op_code, OpCode::Add);
+        assert_eq!(insts[0].shift, ShiftCode::Lsl(2.into()));
+    }
+
+    #[test]
+    fn test_parse_rejects_invalid_shift_amount() {
+        let err = parse::<Word4, Word3>("add r0, r1, r2, lsl #17").unwrap_err();
+        dbg!(&err);
+        assert!(err.message.contains("invalid shift amount"));
+    }
+
+    #[test]
+    fn test_parse_mov_with_shift() {
+        let insts = parse::<Word4, Word2>("mov r0, r1, rrx").unwrap();
+        assert_eq!(insts.len(), 1);
+        assert_eq!(insts[0].op_code, OpCode::Mov);
+        assert_eq!(insts[0].shift, ShiftCode::Rrx);
+    }
+
+    #[test]
+    fn test_parse_add_with_rrx_shift() {
+        let raw = parse_raw("add r0, r1, r2, rrx").unwrap();
+        assert_eq!(op(&raw[0]), ("add", "", "rrx"));
+        assert_eq!(raw[0].args, vec!["r0", "r1", "r2"]);
+
+        let insts = parse::<Word4, Word2>("add r0, r1, r2, rrx").unwrap();
+        assert_eq!(insts.len(), 1);
+        assert_eq!(insts[0].op_code, OpCode::Add);
+        assert_eq!(insts[0].shift, ShiftCode::Rrx);
+    }
+
+    #[test]
+    fn test_parse_rejects_rrx_with_amount() {
+        let err = parse::<Word4, Word2>("mov r0, r1, rrx, #1").unwrap_err();
+        assert!(
+            err.message.contains("invalid operand") || err.message.contains("too many operands")
+        );
+    }
+
+    #[test]
+    fn test_parse_rejects_mov_rrx_without_source_reg() {
+        let err = parse::<Word4, Word2>("mov r0, rrx").unwrap_err();
+        assert!(
+            err.message.contains("invalid operand")
+                || err.message.contains("unsupported mov operands")
+        );
+    }
+
+    #[test]
+    fn test_parse_rejects_negative_shift_amount() {
+        let err = parse::<Word4, Word2>("add r0, r1, r2, lsl #-1").unwrap_err();
+        dbg!(&err);
+        assert!(err.message.contains("negative"));
+    }
+
+    #[test]
+    fn test_parse_rejects_register_shift_amount() {
+        let err = parse::<Word4, Word2>("add r0, r1, r2, lsl r3").unwrap_err();
+        assert!(err.message.contains("shift amount must be immediate"));
+    }
+
+    #[test]
+    fn test_parse_folded_asl_becomes_lsl_shift_code() {
+        let insts = parse::<Word4, Word2>("add r0, r1, r2, asl #2").unwrap();
+        assert_eq!(insts[0].shift, ShiftCode::Lsl(2.into()));
+    }
+
+    #[test]
+    fn test_parse_conditional_with_shift() {
+        let insts = parse::<Word4, Word2>("addeq r0, r1, r2, lsr #3").unwrap();
+        assert_eq!(insts[0].op_code, OpCode::Add);
+        assert_eq!(insts[0].cond_code, CondCode::Eq);
+        assert_eq!(insts[0].shift, ShiftCode::Lsr(3.into()));
     }
 }

@@ -1,26 +1,26 @@
 //! The main loop for synthesis and optimization.
 //! Here we have basically the code that you would see in the actual paper that describes Lens.
 
-use crate::Direction;
 use crate::all::All;
 use crate::arm::enumerate::{EnumerationInfo, EnumerationInfoOptions};
-use crate::arm::{
-    BackwardMap, Flags, Inst, Register, State, StateVars, SymbolicState, extend_program_for_each,
-};
+use crate::arm::{BackwardMap, Inst, Register, State};
 use crate::collect_registers::Collector;
+use crate::direction::Direction;
 use crate::graph;
 use crate::len::Len;
-use crate::oracle::{self, Oracle, SmtOracle};
+use crate::oracle::{Oracle, SmtOracle};
 use crate::programs;
-use crate::reduce_bit_width::Reducer;
+use crate::reduce_bit_width::{ImmediateInfo, Reducer};
 use crate::tui::TuiHook;
+use crate::verify::{self, verify};
 use crate::word::prelude::*;
 
 // std imports
 use std::ops::ControlFlow::{Break, Continue};
 
-// smt stuff!
-use crate::smtlib_utils::bool_term_to_bool;
+use serde::de::DeserializeOwned;
+
+use functionality::prelude::*;
 
 // =========================================== Graph ==============================================
 
@@ -30,88 +30,19 @@ type Programs<W> = programs::Programs<Inst<W>>;
 
 type Graph<W> = graph::Graph<State<W>, Programs<W>>;
 
-// ========================================== Oracle ==============================================
-
-impl<W: Word> oracle::smt::Inst for Inst<W> {
-    type State = State<W>;
-
-    type StateVars<'st> = StateVars<'st, W::SmtWord<'st>>;
-
-    type SymbolicState<'st> = SymbolicState<'st, W::SmtWord<'st>>;
-
-    fn new_state_vars<'st>(st: &'st smtlib::Storage, name: &str) -> Self::StateVars<'st> {
-        StateVars::new(st, name)
-    }
-
-    fn state_neq<'st>(
-        s1: Self::SymbolicState<'st>,
-        s2: Self::SymbolicState<'st>,
-    ) -> smtlib::Bool<'st> {
-        !s1.eq(s2)
-    }
-
-    fn step_symbolic<'st>(&self, s: &mut Self::SymbolicState<'st>) {
-        self.run_symbolic(s);
-    }
-
-    fn step<'st>(&self, s: &mut Self::State) {
-        self.run(s);
-    }
-
-    fn extract_from_model<'st>(
-        model: &smtlib::Model<'st>,
-        s: StateVars<'st, W::SmtWord<'st>>,
-    ) -> State<W> {
-        // == Registers ==
-        let mut state = State::default();
-        for (i, var) in s.registers.iter().enumerate() {
-            let reg = Register(i as u8);
-            let val = model
-                .eval(*var)
-                .map(W::SmtWord::try_into_word)
-                .unwrap_or_else(|| Some(0.into()))
-                //.try_into()
-                .unwrap_or_else(|| {
-                    panic!(
-                        "Failed to convert variable '{var:?}' to the right type in model {model}."
-                    )
-                });
-            state.set_register(
-                reg,
-                val.into_word(), /* This is actually the same word type but whatever */
-            );
-        }
-        // == Flags ==
-        let load_bool = |b| {
-            model
-                .eval(b)
-                .and_then(|b| bool_term_to_bool(b))
-                .unwrap_or(false /* Arbitrary default, result did not matter */)
-        };
-        state.set_flags(
-            Flags {
-                z: load_bool(s.flags.z),
-                n: load_bool(s.flags.n),
-                c: load_bool(s.flags.c),
-                v: load_bool(s.flags.v),
-            }
-            .into(),
-        );
-        state
-    }
-}
-
 // ====================================== Implementation ==========================================
 
 // This is the main function that gets exposed.
 /// `WT` for word size of the target program.
 /// `WS` for word size of the synthesis process.
-pub fn optimize<WT: Word, WS: Word + serde::de::DeserializeOwned>(
+pub fn optimize<WT: Word + HasBitWord, WS: Word + HasBitWord + serde::de::DeserializeOwned>(
     program: &[Inst<WT>],
-    inputs: &[&[(Register, WT)]], // TODO: Return a program in Program<WT> instead...
+    additional_registers: impl IntoIterator<Item = Register>,
+    additional_immediates: impl IntoIterator<Item = WT>,
     tui: &impl for<'g> TuiHook<&'g Graph<WS>, State<WS>>,
 ) -> Option<Program<WT>>
 where
+    BitWord<WS>: DeserializeOwned,
     <WS as All>::Iter: Clone,
 {
     let mut reducer = Reducer::<WT, WS>::default();
@@ -120,40 +51,24 @@ where
         // This puts the original unreduced constants into the reducer.
         reduced_program.push(inst.reduce(&mut reducer));
     }
-
-    // Run the program on each input to get the outputs. We call these "test cases".
-    let test_cases: Vec<(State<WT>, State<WT>)> = inputs
-        .iter()
-        .map(|input| {
-            let input = State::from((
-                Flags::default(),
-                input.iter().map(|(r, v)| (*r, v.into_word())),
-            ));
-            let mut output = input;
-            for inst in program {
-                inst.run(&mut output);
-            }
-            (input, output)
-        })
-        .collect();
-    let _test_cases_reduced: Vec<(State<WS>, State<WS>)> = test_cases
-        .iter()
-        .map(|(input, _output)| {
-            let input = input.reduce(&mut reducer.clone());
-            let mut output = input;
-            for inst in &reduced_program {
-                inst.run(&mut output);
-            }
-            (input, output)
-        })
+    let additional_immediates_reduced: Vec<WS> = additional_immediates
+        .into_iter()
+        .map(|i| reducer.reduce(i, &ImmediateInfo { is_shift: false }))
         .collect();
 
     // Collect all the registers and immediates that might be useful for synthesis.
-    let mut collector = Collector::new();
-    collector.program(program);
-    collector.test_cases(&test_cases);
-    let Collector { registers } = collector;
-    let immediates: Vec<WS> = reducer.immediates().chain([0.into()]).collect();
+    let registers = Collector::new()
+        .mutate(|c| c.program(program))
+        .pipe(|c| c.registers)
+        .mutate(|r| r.extend(additional_registers))
+        .mutate(|r| r.sort())
+        .mutate(|r| r.dedup());
+    let immediates: Vec<WS> = reducer
+        .immediates()
+        .chain(additional_immediates_reduced)
+        .collect::<Vec<WS>>()
+        .mutate(|r| r.sort())
+        .mutate(|r| r.dedup());
 
     // let oracle = TestCasesOracle { test_cases };
     // let oracle_reduced = TestCasesOracle {
@@ -174,7 +89,7 @@ where
     )
 }
 
-fn synthesize<WT: Word, W: Word + serde::de::DeserializeOwned>(
+fn synthesize<WT: Word + HasBitWord, W: Word + HasBitWord + serde::de::DeserializeOwned>(
     registers: &[Register],
     immediates: &[W],
     oracle: impl Oracle<[Inst<WT>], State<WT>>,
@@ -186,6 +101,7 @@ fn synthesize<WT: Word, W: Word + serde::de::DeserializeOwned>(
     tui: &impl for<'a> TuiHook<&'a Graph<W>, State<W>>,
 ) -> Option<Program<WT>>
 where
+    BitWord<W>: DeserializeOwned,
     <W as All>::Iter: Clone,
 {
     // The forward and backward graphs start while having the empty program.
@@ -195,6 +111,8 @@ where
     let enumeration_info = &EnumerationInfo::<W> {
         registers: EnumerationInfoOptions::Limited(registers),
         immediates: EnumerationInfoOptions::Limited(immediates),
+        include_nop: false,
+        skip_cond_code: false,
     };
     let mut globals = Globals {
         oracle,
@@ -277,7 +195,7 @@ where
     }
 }
 
-enum ConnectAndRefineResult<W: Word> {
+enum ConnectAndRefineResult<W: Word + HasBitWord> {
     Found(Program<W>),
     Continue,
 }
@@ -285,8 +203,8 @@ enum ConnectAndRefineResult<W: Word> {
 /// WT - word for the target program. WS - word for the synthesis process.
 struct Globals<
     'tui,
-    WT: Word,
-    WS: Word,
+    WT: Word + HasBitWord,
+    WS: Word + HasBitWord,
     OT: Oracle<[Inst<WT>], State<WT>>,
     OS: Oracle<[Inst<WS>], State<WS>>,
     TUI: for<'g> TuiHook<&'g Graph<WS>, State<WS>>,
@@ -307,12 +225,12 @@ struct Globals<
     total_instructions: usize,
 }
 
-enum ProgramOrRetry<W: Word> {
+enum ProgramOrRetry<W: Word + HasBitWord> {
     Program(Program<W>),
     Retry,
 }
 
-fn connect_and_refine<WT: Word, WS: Word>(
+fn connect_and_refine<WT: Word + HasBitWord, WS: Word + HasBitWord>(
     globals: &mut Globals<
         '_,
         WT,
@@ -347,35 +265,30 @@ fn connect_and_refine<WT: Word, WS: Word>(
                             program.extend(prefix.iter());
                             program.push(inst);
                             program.extend(postfix.iter());
-                            match globals.oracle_reduced.check_program(&program) {
-                                // Found!
-                                Ok(()) => extend_program_for_each(
-                                    &program,
-                                    &globals.extender,
-                                    |extended_program| match globals
-                                        .oracle
-                                        .check_program(extended_program)
-                                    {
-                                        Ok(()) => {
-                                            Break(ProgramOrRetry::Program(extended_program.to_vec()))
-                                        }
-                                        Err(_) => Continue(()),
-                                    },
-                                ),
-                                Err((inp, out)) => {
+                            let (inputs, outputs) = (&mut globals.inputs, &mut globals.outputs);
+                            match verify(
+                                &program,
+                                &globals.extender,
+                                &mut globals.oracle_reduced,
+                                &mut globals.oracle,
+                                |equivalent_prog| Break(ProgramOrRetry::Program(equivalent_prog.to_vec())),
+                            ) {
+                                verify::Result::CounterExample(inp, out) => {
                                     tui.found_counter_example( inp, out,);
                                     let mut actual = inp;
                                     program.iter().for_each(|i| i.run(&mut actual));
                                     debug_assert!(
-                                        !has_counter_example_been_seen(globals, &inp, &out),
+                                        !has_counter_example_been_seen(inputs, outputs, &inp, &out),
                                         "Counter-example from reduced oracle should not have been seen before."
                                     );
                                     debug_assert!(actual != out, "Found mismatched interpreter behaviours!");
-                                    globals.inputs.push(inp);
-                                    globals.outputs.push(out);
+                                    inputs.push(inp);
+                                    outputs.push(out);
                                     counter_example_added = true;
                                     Break(ProgramOrRetry::Retry)
                                 }
+                                verify::Result::Break(x) => Break(x),
+                                verify::Result::Continue => Continue(()),
                             }
                         })
                     })
@@ -446,7 +359,7 @@ fn connect_and_refine<WT: Word, WS: Word>(
 /// Go through each program prefix in the graph, and expand it by one
 /// instruction forward. This is done for each program, and for each
 /// instruction.
-fn expand_forward<W: Word>(
+fn expand_forward<W: Word + HasBitWord>(
     graph: &mut Graph<W>,
     ei: &EnumerationInfo<W>,
     tui: &impl for<'g> TuiHook<&'g Graph<W>, State<W>>,
@@ -458,7 +371,7 @@ fn expand_forward<W: Word>(
     })
 }
 
-fn expand_backward<W: Word>(
+fn expand_backward<W: Word + HasBitWord>(
     graph: &mut Graph<W>,
     ei: &EnumerationInfo<W>,
     tui: &impl for<'g> TuiHook<&'g Graph<W>, State<W>>,
@@ -466,11 +379,11 @@ fn expand_backward<W: Word>(
     bm: &BackwardMap<W>,
 ) {
     expand_forward_or_backward(graph, ei, tui, total_inst, |state, inst| {
-        inst.run_backward(state, bm).into_iter().cloned()
+        inst.run_backward(state, bm).into_iter()
     });
 }
 
-fn expand_forward_or_backward<W: Word, StepRet: IntoIterator<Item = State<W>>>(
+fn expand_forward_or_backward<W: Word + HasBitWord, StepRet: IntoIterator<Item = State<W>>>(
     graph: &mut Graph<W>,
     ei: &EnumerationInfo<W>,
     tui: &impl for<'g> TuiHook<&'g Graph<W>, State<W>>,
@@ -493,7 +406,7 @@ fn expand_forward_or_backward<W: Word, StepRet: IntoIterator<Item = State<W>>>(
     tui.progress(total_inst, total_inst);
     debug_assert_ne!(graph.n_programs(), 0);
 
-    fn recurse<W: Word, StepRet: IntoIterator<Item = State<W>>>(
+    fn recurse<W: Word + HasBitWord, StepRet: IntoIterator<Item = State<W>>>(
         old_graph: &Graph<W>,
         new_graph: &mut Graph<W>,
         inst: Inst<W>,
@@ -519,7 +432,7 @@ fn expand_forward_or_backward<W: Word, StepRet: IntoIterator<Item = State<W>>>(
     }
 }
 
-fn build_forward<W: Word>(graph: &mut Graph<W>, input: &State<W>) {
+fn build_forward<W: Word + HasBitWord>(graph: &mut Graph<W>, input: &State<W>) {
     build_forwards_or_backwards(graph, input, |program, mut state| {
         for inst in program {
             inst.run(&mut state);
@@ -528,7 +441,11 @@ fn build_forward<W: Word>(graph: &mut Graph<W>, input: &State<W>) {
     });
 }
 
-fn build_backward<W: Word>(graph: &mut Graph<W>, input: &State<W>, bm: &BackwardMap<W>) {
+fn build_backward<W: Word + HasBitWord>(
+    graph: &mut Graph<W>,
+    input: &State<W>,
+    bm: &BackwardMap<W>,
+) {
     build_forwards_or_backwards(graph, input, |program, output| {
         // A vector of reaching states, that we push backwards in time, one instruction at a time.
         let mut states = vec![output];
@@ -536,7 +453,7 @@ fn build_backward<W: Word>(graph: &mut Graph<W>, input: &State<W>, bm: &Backward
         for inst in program.iter().rev() {
             for state in states.drain(..) {
                 for new_state in inst.run_backward(state, bm) {
-                    new_states.push(*new_state);
+                    new_states.push(new_state);
                 }
             }
             std::mem::swap(&mut states, &mut new_states);
@@ -546,7 +463,7 @@ fn build_backward<W: Word>(graph: &mut Graph<W>, input: &State<W>, bm: &Backward
     });
 }
 
-fn build_forwards_or_backwards<W: Word, StepRet: IntoIterator<Item = State<W>>>(
+fn build_forwards_or_backwards<W: Word + HasBitWord, StepRet: IntoIterator<Item = State<W>>>(
     graph: &mut Graph<W>,
     input: &State<W>,
     step: impl Fn(&Program<W>, State<W>) -> StepRet,
@@ -569,21 +486,14 @@ fn build_forwards_or_backwards<W: Word, StepRet: IntoIterator<Item = State<W>>>(
 
 /// Checks if the given counter-example has already been seen, by searching the input-output pairs
 /// in the global context.
-fn has_counter_example_been_seen<WT: Word, WS: Word>(
-    globals: &mut Globals<
-        '_,
-        WT,
-        WS,
-        impl Oracle<[Inst<WT>], State<WT>>,
-        impl Oracle<[Inst<WS>], State<WS>>,
-        impl for<'g> TuiHook<&'g Graph<WS>, State<WS>>,
-    >,
+fn has_counter_example_been_seen<WS: Word + HasBitWord>(
+    inputs: &[State<WS>],
+    outputs: &[State<WS>],
     inp: &State<WS>,
     out: &State<WS>,
 ) -> bool {
-    globals
-        .inputs
+    inputs
         .iter()
-        .zip(&globals.outputs)
+        .zip(outputs)
         .any(|(i, o)| i == inp && o == out)
 }

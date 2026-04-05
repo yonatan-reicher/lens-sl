@@ -1,4 +1,3 @@
-use crate::iter_slice_or_single::Iter;
 use crate::word::prelude::*;
 use rustc_hash::FxHashMap;
 
@@ -44,11 +43,13 @@ impl<WBig: Word, WSmall: Word> Reducer<WBig, WSmall> {
     }
 
     #[inline]
-    pub fn extend(&self, value: WSmall) -> Iter<'_, WBig> {
+    pub fn extend(&self, value: WSmall) -> impl Iterator<Item = WBig> + Clone {
+        use itertools::Either::{Left, Right};
+        use std::iter::once;
         self.0
             .get(&value)
-            .map_or(Iter::Single(value.into().into()), |v| {
-                Iter::Slice(v.as_slice())
+            .map_or(Left(once(value.into_word::<WBig>())), |v| {
+                Right(v.iter().cloned())
             })
     }
 
