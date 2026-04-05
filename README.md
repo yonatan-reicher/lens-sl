@@ -12,9 +12,11 @@ it faster and easier to maintain and expand.
 
 - `cargo test --lib` - Run unit tests for the library.
 - `cargo test` - Run all tests (excluding ignored).
+- `cargo test-slow` - Run the ignored tests, which are slower and output things
+  to the screen.
 - `cargo run <name>` - Optimize one of the programs in the `programs/` directory.
 - `cargo run --bin arm` - Run the arm interpreter binary.
-- `cargo run --bin benchmark` - Run the benchmarks!
+- `cargo benchmark` - Run the benchmarks!
 - `cargo run` - Run the main entry point.
 
 ## More Markdown Files
