@@ -123,6 +123,9 @@ impl<W: Word + HasBitWord> BackwardMap<W, BitWord<W>> {
                 } {
                     let estimated_time = humantime::Duration::from(estimated_time);
                     print!(" ET: {estimated_time}");
+                    // Print some spaces to remove characters that were printed previously if the
+                    // line was longer last time
+                    print!("        ");
                 }
                 let _ = std::io::Write::flush(&mut std::io::stdout());
             }
