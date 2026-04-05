@@ -295,7 +295,7 @@ fn connect_and_refine<WT: Word + HasBitWord, WS: Word + HasBitWord>(
                                 "Counter-example from reduced oracle should not have been seen before."
                             );
                             globals.inputs.push(inp);
-                            globals.outputs.push(out); 
+                            globals.outputs.push(out);
                             Break(ProgramOrRetry::Retry)
                         },
                         verify::Result::Break(prog) => Break(prog),
