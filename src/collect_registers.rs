@@ -44,6 +44,7 @@ impl Collector {
 
     // --- Test cases ---
 
+    #[allow(unused)]
     pub fn test_cases<W: Word, S: State<W>>(&mut self, test_cases: &[(S, S)]) {
         for (input, output) in test_cases {
             self.state(input);
