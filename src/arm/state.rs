@@ -9,7 +9,7 @@ use crate::bool::prelude::*;
 use crate::collect_registers;
 use crate::reduce_bit_width::Reducer;
 use crate::word::prelude::*;
-use std::fmt::{self, Display, Formatter};
+use std::fmt::{self, Debug, Display, Formatter};
 // derive macros
 use derive_more::Display;
 use serde::{Deserialize, Serialize};
@@ -49,7 +49,7 @@ pub trait StateTrait<W: AbstractWord>: Get<W> + Set<W> {}
 
 // ============================= State =============================
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(test, derive(Arbitrary))]
 pub struct State<W> {
     /// This vector is always sorted by register. Registers that are zero are omitted.
@@ -272,6 +272,16 @@ where
             ret.set_register(r, v);
         }
         ret
+    }
+}
+
+impl<W: Debug> Debug for State<W> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "{}", self.flags)?;
+        for (r, v) in Register::all().zip(&self.registers) {
+            write!(f, " {r}={v:>2?}")?;
+        }
+        Ok(())
     }
 }
 
