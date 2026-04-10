@@ -615,6 +615,10 @@ impl BitMask {
     pub const fn is_empty(&self) -> bool {
         self.0 == 0
     }
+
+    pub const fn is_sub_mask(&self, other: &Self) -> bool {
+        self.0 & other.0 == self.0
+    }
 }
 
 impl<B> Index<Register> for Mask<B> {
@@ -800,6 +804,13 @@ impl<W> Masked<W> {
         W: Copy + Default,
     {
         self.mask.into_mask().sub_masks().map(move |m| self & m)
+    }
+
+    pub fn is_sub_state(&self, other: &Self) -> bool
+    where
+        W: Word,
+    {
+        self.mask().is_sub_mask(&other.mask()) && *self == *other & self.mask().into_mask()
     }
 
     /// TODO: Move to a new 'Effect' type?
