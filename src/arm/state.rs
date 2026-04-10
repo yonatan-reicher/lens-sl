@@ -547,9 +547,10 @@ impl Mask {
     }
 
     /// The sub-mask are the masks that contain only a single thing
-    pub fn singleton_sub_masks(self) -> impl Iterator<Item = Mask> {
+    pub fn singleton_sub_masks(self) -> impl Iterator<Item = Mask> + Clone {
         return I(self);
 
+        #[derive(Clone)]
         struct I(Mask);
         impl Iterator for I {
             type Item = Mask;
@@ -568,7 +569,7 @@ impl Mask {
     }
 
     /// This is the power-set!
-    pub fn sub_masks(self) -> impl Iterator<Item = Mask> {
+    pub fn sub_masks(self) -> impl Iterator<Item = Mask> + Clone {
         self.singleton_sub_masks().powerset().map(|singletons| {
             singletons
                 .into_iter()
@@ -792,6 +793,13 @@ impl<W> Masked<W> {
             .into_mask()
             .singleton_sub_masks()
             .map(move |m| self & m)
+    }
+
+    pub fn sub_states(self) -> impl Iterator<Item = Self> + Clone
+    where
+        W: Copy + Default,
+    {
+        self.mask.into_mask().sub_masks().map(move |m| self & m)
     }
 
     /// TODO: Move to a new 'Effect' type?
