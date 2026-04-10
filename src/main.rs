@@ -4,9 +4,12 @@ use lens_sl::{LiveValue, Register, Word4, Word8, Word64, inst, optimize, optimiz
 use lens_sl::{NoTui, Tui};
 
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() > 2 {
-        eprintln!("Usage: {} [PROGRAM_PATH]", args[0]);
+    let args: &mut Vec<String> = &mut std::env::args().collect();
+    let sl = parse_flag(args, "--sl");
+    let h = parse_flag(args, "--help") || parse_flag(args, "-h");
+
+    if args.len() > 2 || h {
+        eprintln!("Usage: {} [--sl] [PROGRAM_PATH]", args[0]);
         std::process::exit(1);
     }
 
@@ -56,14 +59,27 @@ fn main() {
     // Keep parsed live-out info available until `optimize` accepts it directly.
     let _live_out = live_out;
 
-    let tui = Tui::default();
-    let p = optimize_sl::<Word64, Word4>(
-        &program,
-        vec![], // additional_registers
-        vec![], // additional_immediates
-        &tui,   // */ &NoTui,
-    );
-    tui.close();
+    let p = if sl {
+        let tui = Tui::default();
+        let ret = optimize_sl::<Word64, Word4>(
+            &program,
+            vec![], // additional_registers
+            vec![], // additional_immediates
+            &tui,   // */ &NoTui,
+        );
+        tui.close();
+        ret
+    } else {
+        let tui = Tui::default();
+        let ret = optimize::<Word64, Word4>(
+            &program,
+            vec![], // additional_registers
+            vec![], // additional_immediates
+            &tui,
+        );
+        tui.close();
+        ret
+    };
     let Some(p) = p else {
         println!("No equivalent program found");
         return;
@@ -72,4 +88,11 @@ fn main() {
     for inst in p {
         println!("{inst}");
     }
+}
+
+fn parse_flag(args: &mut Vec<String>, flag: &str) -> bool {
+    args.iter()
+        .position(|a| *a == flag)
+        .map(|i| args.remove(i))
+        .is_some()
 }
