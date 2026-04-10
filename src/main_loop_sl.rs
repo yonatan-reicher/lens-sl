@@ -203,8 +203,14 @@ where
         tui.searching();
         tui.progress(0, globals.total_instructions);
         // Look for a program that can start from all these.
-        let (inputs, outputs) = (globals.inputs.clone(), globals.outputs.clone());
-        let res = connect(&mut globals, &mut bank, &mut vec![], &inputs, &outputs);
+        let res = loop {
+            let (inputs, outputs) = (globals.inputs.clone(), globals.outputs.clone());
+            break match connect(&mut globals, &mut bank, &mut vec![], &inputs, &outputs) {
+                Continue(()) => ConnectAndRefineResult::Continue,
+                Break(ProgramOrRetry::Program(p)) => ConnectAndRefineResult::Found(p),
+                Break(ProgramOrRetry::Retry) => continue,
+            };
+        };
         match res {
             ConnectAndRefineResult::Found(prog) => {
                 println!("Found program of length {}", prog.len());
@@ -272,32 +278,24 @@ fn connect<WT, W>(
     program: &mut Vec<Inst<W>>,
     input_states: &[MaskedState<W>],
     output_states: &[MaskedState<W>],
-) -> ConnectAndRefineResult<WT>
+) -> ControlFlow<ProgramOrRetry<WT>>
 where
     WT: Word + HasBitWord,
     W: Word + HasBitWord,
 {
     // Do we need to add more instructions?
     if program.len() >= g.forward_length {
-        use ConnectAndRefineResult as R;
         // Did we succeed?
         return if input_states == output_states {
-            match verify(program, g) {
-                Continue(()) => R::Continue,
-                Break(ProgramOrRetry::Retry) => {
-                    let (inputs, outputs) = (g.inputs.clone(), g.outputs.clone());
-                    connect(g, bank, &mut vec![], &inputs, &outputs)
-                }
-                Break(ProgramOrRetry::Program(p)) => R::Found(p),
-            }
+            verify(program, g)
         } else {
-            R::Continue
+            Continue(())
         };
     }
     // First we need to check that all the states are properly represented in the bank.
     for inp in input_states
         .iter()
-        .flat_map(|s| s.singleton_sub_states())
+        .flat_map(|s| s.sub_states())
         .filter(|s| !bank.contains_key(s))
         .collect::<Vec<_>>()
     {
@@ -330,7 +328,7 @@ where
                     bank.get(&sub_state)
                         .unwrap_or(&empty)
                         .iter()
-                        .flat_map(|(out, set)| set.iter().map(|inst| (*out, *inst)))
+                        .flat_map(|(_, set)| set.iter().copied())
                 })
                 .collect::<FxHashSet<_>>()
         })
@@ -344,17 +342,14 @@ where
                 .filter(|x| sets.iter().all(|s| s.contains(x)))
                 .collect::<FxHashSet<_>>()
         });
-    for (out, inst) in insts {
+    for inst in insts {
         // Recurse motha fucka!
         program.push(inst);
-        let next_states = &input_states.iter().map(|s| out | *s).collect::<Vec<_>>();
-        match connect(g, bank, program, next_states, output_states) {
-            ConnectAndRefineResult::Found(p) => return ConnectAndRefineResult::Found(p),
-            ConnectAndRefineResult::Continue => (),
-        }
+        let next_states = &input_states.iter().map(|s| inst.run_masked(*s).unwrap()).collect::<Vec<_>>();
+        connect(g, bank, program, next_states, output_states)?;
         program.pop();
     }
-    ConnectAndRefineResult::Continue
+    Continue(())
 }
 
 /// Go through each program prefix in the graph, and expand it by one
