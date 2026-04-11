@@ -12,13 +12,15 @@ use std::time::Instant;
 
 struct Options {
     parallel: bool,
+    sl: bool,
 }
 
+static O: std::sync::LazyLock<Options> = std::sync::LazyLock::new(parse_options);
+
 fn main() {
-    let o = parse_options();
     let benchmarks = benchmarks();
 
-    if o.parallel {
+    if O.parallel {
         run_all_parallel(&benchmarks);
     } else {
         run_all_sequential(&benchmarks);
