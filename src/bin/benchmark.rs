@@ -10,11 +10,15 @@ use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
+struct Options {
+    parallel: bool,
+}
+
 fn main() {
-    let parallel = parse_parallel_flag();
+    let o = parse_options();
     let benchmarks = benchmarks();
 
-    if parallel {
+    if o.parallel {
         run_all_parallel(&benchmarks);
     } else {
         run_all_sequential(&benchmarks);
@@ -238,14 +242,16 @@ impl Benchmark {
     }
 }
 
-fn parse_parallel_flag() -> bool {
-    let mut parallel = false;
+fn parse_options() -> Options {
+    let mut ret = Options {
+        parallel: false,
+    };
     let mut args = env::args();
     let command = args.next().unwrap_or_else(|| "benchmark".to_string());
 
     for arg in args {
         match arg.as_str() {
-            "--parallel" | "-p" => parallel = true,
+            "--parallel" | "-p" => ret.parallel = true,
             "--help" | "-h" => {
                 print_usage(&command);
                 std::process::exit(0);
@@ -258,7 +264,7 @@ fn parse_parallel_flag() -> bool {
         }
     }
 
-    parallel
+    ret
 }
 
 fn print_usage(command: &str) {
