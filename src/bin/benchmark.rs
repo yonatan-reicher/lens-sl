@@ -261,7 +261,7 @@ fn parse_options() -> Options {
             _ => {
                 eprintln!("error: unknown argument '{arg}'");
                 print_usage(&command);
-                std::process::exit(2);
+                std::process::exit(1);
             }
         }
     }
