@@ -9,7 +9,7 @@ use crate::bool::prelude::*;
 use crate::collect_registers;
 use crate::reduce_bit_width::Reducer;
 use crate::word::prelude::*;
-use std::fmt::{self, Display, Formatter};
+use std::fmt::{self, Debug, Display, Formatter};
 // derive macros
 use derive_more::Display;
 use serde::{Deserialize, Serialize};
@@ -49,7 +49,7 @@ pub trait StateTrait<W: AbstractWord>: Get<W> + Set<W> {}
 
 // ============================= State =============================
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(test, derive(Arbitrary))]
 pub struct State<W> {
     /// This vector is always sorted by register. Registers that are zero are omitted.
@@ -272,6 +272,16 @@ where
             ret.set_register(r, v);
         }
         ret
+    }
+}
+
+impl<W: Debug> Debug for State<W> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "{}", self.flags)?;
+        for (r, v) in Register::all().zip(&self.registers) {
+            write!(f, " {r}={v:>2?}")?;
+        }
+        Ok(())
     }
 }
 
@@ -547,9 +557,10 @@ impl Mask {
     }
 
     /// The sub-mask are the masks that contain only a single thing
-    pub fn singleton_sub_masks(self) -> impl Iterator<Item = Mask> {
+    pub fn singleton_sub_masks(self) -> impl Iterator<Item = Mask> + Clone {
         return I(self);
 
+        #[derive(Clone)]
         struct I(Mask);
         impl Iterator for I {
             type Item = Mask;
@@ -568,7 +579,7 @@ impl Mask {
     }
 
     /// This is the power-set!
-    pub fn sub_masks(self) -> impl Iterator<Item = Mask> {
+    pub fn sub_masks(self) -> impl Iterator<Item = Mask> + Clone {
         self.singleton_sub_masks().powerset().map(|singletons| {
             singletons
                 .into_iter()
@@ -613,6 +624,10 @@ impl BitMask {
 
     pub const fn is_empty(&self) -> bool {
         self.0 == 0
+    }
+
+    pub const fn is_sub_mask(&self, other: &Self) -> bool {
+        self.0 & other.0 == self.0
     }
 }
 
@@ -792,6 +807,20 @@ impl<W> Masked<W> {
             .into_mask()
             .singleton_sub_masks()
             .map(move |m| self & m)
+    }
+
+    pub fn sub_states(self) -> impl Iterator<Item = Self> + Clone
+    where
+        W: Copy + Default,
+    {
+        self.mask.into_mask().sub_masks().map(move |m| self & m)
+    }
+
+    pub fn is_sub_state(&self, other: &Self) -> bool
+    where
+        W: Word,
+    {
+        self.mask().is_sub_mask(&other.mask()) && *self == *other & self.mask().into_mask()
     }
 
     /// TODO: Move to a new 'Effect' type?

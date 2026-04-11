@@ -13,12 +13,12 @@ use crate::oracle::{Oracle, SmtOracle};
 use crate::programs_sl as programs;
 use crate::reduce_bit_width::{ImmediateInfo, Reducer};
 use crate::tui::TuiHook;
-use crate::verify::{self, verify};
 use crate::word::prelude::*;
 
 // std imports
-use std::ops::ControlFlow::{Break, Continue};
+use std::ops::ControlFlow::{self, Break, Continue};
 
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde::de::DeserializeOwned;
 
 use functionality::prelude::*;
@@ -117,6 +117,10 @@ where
     BitWord<WS>: DeserializeOwned,
     <WS as All>::Iter: Clone,
 {
+    if program.is_empty() {
+        return None;
+    }
+
     let mut reducer = Reducer::<WT, WS>::default();
     let mut reduced_program = Vec::with_capacity(program.len());
     for inst in program {
@@ -157,6 +161,8 @@ where
     )
 }
 
+type Bank<W> = FxHashMap<MaskedState<W>, FxHashMap<MaskedState<W>, FxHashSet<Inst<W>>>>;
+
 #[allow(clippy::too_many_arguments)]
 fn synthesize<WT, W>(
     registers: &[Register],
@@ -176,8 +182,7 @@ where
     BitWord<W>: DeserializeOwned,
     <W as All>::Iter: Clone,
 {
-    // The graph starts with having just the empty program.
-    let mut graph = Graph::Leaf(Programs::empty_program());
+    let mut bank: Bank<W> = Default::default();
     let enumeration_info = &EnumerationInfo::<W> {
         registers: EnumerationInfoOptions::Limited(registers),
         immediates: EnumerationInfoOptions::Limited(immediates),
@@ -194,17 +199,22 @@ where
         tui,
         total_instructions: Inst::enumerate(*enumeration_info).count(),
         original_reduced,
+        registers,
+        immediates,
     };
-    tui.report_graph(Direction::Forward, &graph);
-    // ------------------------------- Initialization ---------------------------------------------
-    for inst in Inst::enumerate(*enumeration_info) {
-        graph.insert_all(&[], [inst.into()]);
-    }
     loop {
         // ------------------------------ Search Phase --------------------------------------------
         tui.searching();
         tui.progress(0, globals.total_instructions);
-        let res = connect_and_refine::<WT, W>(&mut globals, &mut graph, 1);
+        // Look for a program that can start from all these.
+        let res = loop {
+            let (inputs, outputs) = (globals.inputs.clone(), globals.outputs.clone());
+            break match connect(&mut globals, &mut bank, &mut vec![], &inputs, &outputs) {
+                Continue(()) => ConnectAndRefineResult::Continue,
+                Break(ProgramOrRetry::Program(p)) => ConnectAndRefineResult::Found(p),
+                Break(ProgramOrRetry::Retry) => continue,
+            };
+        };
         match res {
             ConnectAndRefineResult::Found(prog) => {
                 println!("Found program of length {}", prog.len());
@@ -213,16 +223,14 @@ where
             ConnectAndRefineResult::Continue => {}
         }
         tui.progress(globals.total_instructions, globals.total_instructions);
-        tui.report_graph(Direction::Forward, &graph);
         if globals.forward_length == original_length - 1 {
             return None;
         }
         // ------------------------------ Expand Phase --------------------------------------------
         let direction = Direction::Forward;
         tui.expanding(direction);
-        expand(&mut graph, globals.tui);
+        //expand(&mut todo!(), globals.tui);
         globals.forward_length += 1;
-        tui.report_graph(Direction::Forward, &graph);
     }
 }
 
@@ -252,6 +260,8 @@ struct Globals<
     /// The total instructions we are enumerating
     total_instructions: usize,
     original_reduced: Program<WS>,
+    registers: &'tui [Register],
+    immediates: &'tui [WS],
 }
 
 enum ProgramOrRetry<W: Word + HasBitWord> {
@@ -259,86 +269,91 @@ enum ProgramOrRetry<W: Word + HasBitWord> {
     Retry,
 }
 
-fn connect_and_refine<WT: Word + HasBitWord, WS: Word + HasBitWord>(
-    globals: &mut Globals<
+fn connect<WT, W>(
+    g: &mut Globals<
         '_,
         WT,
-        WS,
+        W,
         impl Oracle<[Inst<WT>], State<WT>>,
-        impl Oracle<[Inst<WS>], State<WS>>,
-        impl for<'a> TuiHook<&'a Graph<WS>, MaskedState<WS>>,
+        impl Oracle<[Inst<W>], State<W>>,
+        impl for<'g> TuiHook<&'g Graph<W>, MaskedState<W>>,
     >,
-    graph: &mut Graph<WS>,
-    // This is the index of the input/output pair we are currently trying to connect.
-    k: usize,
-) -> ConnectAndRefineResult<WT> {
-    if k > globals.inputs.len() {
-        match &graph {
-            Graph::Leaf(programs) => {
-                // We found a class of candidate programs.
-                // Try each one. If one works, return it. If none work, adds all counter-examples.
-                let ret = programs.try_each(&mut |program| {
-                    match verify(
-                        &program,
-                        &globals.extender,
-                        &mut globals.oracle_reduced,
-                        &mut globals.oracle,
-                        |equivalent_prog| Break(ProgramOrRetry::Program(equivalent_prog.to_vec()))
-                    ) {
-                        verify::Result::CounterExample(inp, _out) => {
-                            let read_mask = what_program_reads(globals.original_reduced.iter().cloned(), &inp);
-                            let inp = inp.masked(read_mask.into());
-                            let out = run_program_masked(globals.original_reduced.iter().cloned(), inp).expect("the counter example found by the oracle must be runnable and the input mask for the program must be enough for it to run");
-                            globals.tui.found_counter_example(inp, out);
-                            debug_assert!(
-                                !has_counter_example_been_seen(globals, &inp, &out),
-                                "Counter-example from reduced oracle should not have been seen before."
-                            );
-                            globals.inputs.push(inp);
-                            globals.outputs.push(out);
-                            Break(ProgramOrRetry::Retry)
-                        },
-                        verify::Result::Break(prog) => Break(prog),
-                        verify::Result::Continue => Continue(()),
-                    }
-                });
-                match ret {
-                    Break(ProgramOrRetry::Program(p)) => return ConnectAndRefineResult::Found(p),
-                    Break(ProgramOrRetry::Retry) => return connect_and_refine(globals, graph, k),
-                    Continue(()) => (),
-                }
-            }
-            _ => {
-                println!("Graph is not leaves at the end.");
-                panic!();
-            }
+    bank: &mut Bank<W>,
+    program: &mut Vec<Inst<W>>,
+    input_states: &[MaskedState<W>],
+    output_states: &[MaskedState<W>],
+) -> ControlFlow<ProgramOrRetry<WT>>
+where
+    WT: Word + HasBitWord,
+    W: Word + HasBitWord,
+{
+    // Do we need to add more instructions?
+    if program.len() >= g.forward_length {
+        // Did we succeed?
+        return if input_states == output_states {
+            verify(program, g)
+        } else {
+            Continue(())
+        };
+    }
+    // First we need to check that all the states are properly represented in the bank.
+    for inp in input_states
+        .iter()
+        .flat_map(|s| s.sub_states())
+        .filter(|s| !bank.contains_key(s))
+        .collect::<Vec<_>>()
+    {
+        let mut e = FxHashMap::<_, FxHashSet<_>>::default();
+        for inst in Inst::enumerate(EnumerationInfo {
+            registers: EnumerationInfoOptions::Limited(g.registers),
+            immediates: EnumerationInfoOptions::Limited(g.immediates),
+            include_nop: false,
+            skip_cond_code: false,
+        }) {
+            let Some(out) = inst.run_masked(inp) else {
+                continue;
+            };
+            e.entry(out).or_default().insert(inst);
         }
+        bank.insert(inp, e);
     }
-
-    if matches!(graph, Graph::Leaf(..)) {
-        build_forward(graph, &globals.inputs[k - 1]);
+    // Find all instructions (and their effects!) that can run from the current states.
+    // Instead of doing this by iterating all instructions, do this by intersection of equivalence
+    // classes that can run from the states.
+    let empty = Default::default();
+    let empty1 = Default::default();
+    let insts = input_states
+        .iter()
+        .map(|state| {
+            // For this state, return the equivalence classes that can run from it.
+            state
+                .sub_states()
+                .flat_map(|sub_state| {
+                    bank.get(&sub_state)
+                        .unwrap_or(&empty)
+                        .iter()
+                        .flat_map(|(_, set)| set.iter().copied())
+                })
+                .collect::<FxHashSet<_>>()
+        })
+        .collect::<Vec<_>>()
+        // Intersect!
+        .pipe(|sets| {
+            let smallest = sets.iter().min_by_key(|s| s.len()).unwrap_or(&empty1);
+            smallest
+                .iter()
+                .cloned()
+                .filter(|x| sets.iter().all(|s| s.contains(x)))
+                .collect::<FxHashSet<_>>()
+        });
+    for inst in insts {
+        // Recurse motha fucka!
+        program.push(inst);
+        let next_states = &input_states.iter().map(|s| inst.run_masked(*s).unwrap()).collect::<Vec<_>>();
+        connect(g, bank, program, next_states, output_states)?;
+        program.pop();
     }
-
-    let Graph::Nest(map) = graph else {
-        panic!();
-    };
-    for ((inp, out), sub_graph) in map {
-        // Check if the input and output feel good to match against the real ones.
-        // The input just needs to be at least as general as the real input.
-        // The output needs to match exactly.
-        let (ce_inp, ce_out) = (&globals.inputs[k - 1], &globals.outputs[k - 1]);
-        let missing_inputs = inp.mask() & !ce_inp.mask();
-        let ce_inp_masked = *ce_inp & inp.mask().into_mask();
-        let good = missing_inputs.is_empty() && ce_inp_masked == *inp && ce_out == out;
-        if good {
-            let res = connect_and_refine(globals, sub_graph, k + 1);
-            match res {
-                ConnectAndRefineResult::Found(prog) => return ConnectAndRefineResult::Found(prog),
-                ConnectAndRefineResult::Continue => {}
-            }
-        }
-    }
-    ConnectAndRefineResult::Continue
+    Continue(())
 }
 
 /// Go through each program prefix in the graph, and expand it by one
@@ -480,4 +495,45 @@ fn has_counter_example_been_seen<WT: Word + HasBitWord, WS: Word + HasBitWord>(
         .iter()
         .zip(&globals.outputs)
         .any(|(i, o)| i == inp && o == out)
+}
+
+fn verify<WT, WS>(
+    prog: &[Inst<WS>],
+    g: &mut Globals<
+        '_,
+        WT,
+        WS,
+        impl Oracle<[Inst<WT>], State<WT>>,
+        impl Oracle<[Inst<WS>], State<WS>>,
+        impl for<'g> TuiHook<&'g Graph<WS>, MaskedState<WS>>,
+    >,
+) -> ControlFlow<ProgramOrRetry<WT>>
+where
+    WT: Word + HasBitWord,
+    WS: Word + HasBitWord,
+{
+    use crate::verify;
+    match verify::verify(
+        prog,
+        &g.extender,
+        &mut g.oracle_reduced,
+        &mut g.oracle,
+        |equivalent_prog| Break(ProgramOrRetry::Program(equivalent_prog.to_vec())),
+    ) {
+        verify::Result::CounterExample(inp, _out) => {
+            let read_mask = what_program_reads(g.original_reduced.iter().cloned(), &inp);
+            let inp = inp.masked(read_mask.into());
+            let out = run_program_masked(g.original_reduced.iter().cloned(), inp).expect("the counter example found by the oracle must be runnable and the input mask for the program must be enough for it to run");
+            g.tui.found_counter_example(inp, out);
+            assert!(
+                !has_counter_example_been_seen(g, &inp, &out),
+                "Counter-example from reduced oracle should not have been seen before."
+            );
+            g.inputs.push(inp);
+            g.outputs.push(out);
+            Break(ProgramOrRetry::Retry)
+        }
+        verify::Result::Break(prog) => Break(prog),
+        verify::Result::Continue => Continue(()),
+    }
 }

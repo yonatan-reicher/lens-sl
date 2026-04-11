@@ -338,7 +338,7 @@ pub struct Inst<W, WShift = BitWord<W>> {
 pub mod state;
 
 use state::{BitMask, Mask};
-pub use state::{Flags, FlagsBitField, State, StateVars, SymbolicState};
+pub use state::{Flags, FlagsBitField, State};
 
 // ========================================= Semantics =============================================
 
@@ -372,7 +372,7 @@ impl<W: Word + HasBitWord> Inst<W> {
         *state = semantics::run(self, &input, &mut read_mask, &mut write_mask, &())
     }
 
-    pub fn run_symbolic<'st>(&self, state: &mut SymbolicState<'st, W::SmtWord<'st>>) {
+    pub fn run_symbolic<'st>(&self, state: &mut state::SymbolicState<'st, W::SmtWord<'st>>) {
         let input = *state;
         let (mut read_mask, mut write_mask) = (Mask::empty(), Mask::empty());
         let st = state.registers[0].st();

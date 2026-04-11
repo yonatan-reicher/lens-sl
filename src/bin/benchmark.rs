@@ -1,14 +1,33 @@
 use lens_sl::{Inst, Word4, Word64, inst};
+use std::env;
 use std::fs;
 use std::hint::black_box;
 use std::ops::ControlFlow::{self, Break, Continue};
+use std::panic;
 use std::path::Path;
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 use std::time::Instant;
 
 fn main() {
-    for b in benchmarks() {
+    let parallel = parse_parallel_flag();
+    let benchmarks = benchmarks();
+
+    if parallel {
+        run_all_parallel(&benchmarks);
+    } else {
+        run_all_sequential(&benchmarks);
+    }
+}
+
+fn run_all_sequential(benchmarks: &[Benchmark]) {
+    for b in benchmarks {
         let b = black_box(b); // Don't let the compiler optimize the input
-        run(&b);
+        print!("{} - ...", b.name);
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+        let result = run(b);
+        print_result(b, &result);
     }
 }
 
@@ -16,7 +35,40 @@ macro_rules! dyn_fn_mut {
     ($e:expr) => {{ (&mut $e) as &mut dyn FnMut(_) -> _ }};
 }
 
-fn run(b: &Benchmark) {
+fn run_all_parallel(benchmarks: &[Benchmark]) {
+    // Parallel runs can trigger assertion panics for some benchmark inputs.
+    // Keep output readable by suppressing default panic backtraces and reporting panics per benchmark.
+    let previous_panic_hook = panic::take_hook();
+    panic::set_hook(Box::new(|_| {}));
+    thread::scope(|scope| {
+        let (tx, rx) = mpsc::channel::<(usize, BenchmarkResult)>();
+        for (index, b) in benchmarks.iter().enumerate() {
+            let b = black_box(b); // Don't let the compiler optimize the input
+            let tx = tx.clone();
+            scope.spawn(move || {
+                let result = match panic::catch_unwind(|| run(b)) {
+                    Ok(result) => result,
+                    Err(payload) => BenchmarkResult {
+                        success: false,
+                        elapsed: Duration::ZERO,
+                        found: vec![],
+                        panic_message: Some(panic_payload_to_string(payload)),
+                    },
+                };
+                let _ = tx.send((index, result));
+            });
+        }
+        drop(tx);
+
+        for _ in 0..benchmarks.len() {
+            let (index, result) = rx.recv().expect("benchmark worker disconnected");
+            print_result(&benchmarks[index], &result);
+        }
+    });
+    panic::set_hook(previous_panic_hook);
+}
+
+fn run(b: &Benchmark) -> BenchmarkResult {
     let mut found = vec![];
     let (callback, default) = match &b.expected {
         Some(expected) => (
@@ -37,28 +89,43 @@ fn run(b: &Benchmark) {
             true,
         ),
     };
-    // Show that we are starting to run...
-    print!("{} - ...", b.name);
-    let _ = std::io::Write::flush(&mut std::io::stdout());
-    let (success, elapsed) = {
-        // Run!
-        let started_at = Instant::now();
-        let ret = b.optimize(callback);
-        let elapsed = started_at.elapsed();
-        (ret.break_value().unwrap_or(default), elapsed)
-    };
-    let mark = if success { "✅" } else { "❌" };
-    println!("{} - {mark} {}", b.name, humantime::Duration::from(elapsed));
-    if !success {
-        if found.is_empty() {
+
+    // Run!
+    let started_at = Instant::now();
+    let ret = b.optimize(callback);
+    let elapsed = started_at.elapsed();
+    let success = ret.break_value().unwrap_or(default);
+    BenchmarkResult {
+        success,
+        elapsed,
+        found,
+        panic_message: None,
+    }
+}
+
+fn print_result(b: &Benchmark, result: &BenchmarkResult) {
+    if let Some(message) = &result.panic_message {
+        println!("{} - 💥 thread panicked", b.name);
+        println!("  Panic: {message}");
+        return;
+    }
+
+    let mark = if result.success { "✅" } else { "❌" };
+    println!(
+        "{} - {mark} {}",
+        b.name,
+        humantime::Duration::from(result.elapsed)
+    );
+    if !result.success {
+        if result.found.is_empty() {
             println!("  Found nothing.");
         } else {
             println!("  Found:");
-            for prog in found {
+            for prog in &result.found {
                 if prog.is_empty() {
                     println!("  · <empty program>");
                 } else {
-                    for (i, inst) in prog.into_iter().enumerate() {
+                    for (i, inst) in prog.iter().enumerate() {
                         let c = if i == 0 { '·' } else { ' ' };
                         println!("  {} {}", c, inst);
                     }
@@ -152,6 +219,13 @@ struct Benchmark {
     expected: Option<Vec<Inst<W>>>,
 }
 
+struct BenchmarkResult {
+    success: bool,
+    elapsed: Duration,
+    found: Vec<Vec<Inst<W>>>,
+    panic_message: Option<String>,
+}
+
 type W = Word64;
 
 impl Benchmark {
@@ -161,5 +235,42 @@ impl Benchmark {
             f(x)?;
         }
         Continue(())
+    }
+}
+
+fn parse_parallel_flag() -> bool {
+    let mut parallel = false;
+    let mut args = env::args();
+    let command = args.next().unwrap_or_else(|| "benchmark".to_string());
+
+    for arg in args {
+        match arg.as_str() {
+            "--parallel" | "-p" => parallel = true,
+            "--help" | "-h" => {
+                print_usage(&command);
+                std::process::exit(0);
+            }
+            _ => {
+                eprintln!("error: unknown argument '{arg}'");
+                print_usage(&command);
+                std::process::exit(2);
+            }
+        }
+    }
+
+    parallel
+}
+
+fn print_usage(command: &str) {
+    eprintln!("Usage: {command} [--parallel]");
+}
+
+fn panic_payload_to_string(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else if let Some(message) = payload.downcast_ref::<&'static str>() {
+        (*message).to_string()
+    } else {
+        "non-string panic payload".to_string()
     }
 }
