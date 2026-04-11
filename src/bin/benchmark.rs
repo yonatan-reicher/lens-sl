@@ -236,7 +236,12 @@ type W = Word64;
 
 impl Benchmark {
     pub fn optimize<T>(&self, mut f: impl FnMut(Vec<Inst<W>>) -> ControlFlow<T>) -> ControlFlow<T> {
-        let x = lens_sl::optimize::<W, Word4>(&self.input, vec![], vec![], &lens_sl::NoTui);
+        let optimize = if O.sl {
+            lens_sl::optimize_sl::<W, Word4>
+        } else {
+            lens_sl::optimize::<W, Word4>
+        };
+        let x = optimize(&self.input, vec![], vec![], &lens_sl::NoTui);
         if let Some(x) = x {
             f(x)?;
         }
@@ -247,6 +252,7 @@ impl Benchmark {
 fn parse_options() -> Options {
     let mut ret = Options {
         parallel: false,
+        sl: false,
     };
     let mut args = env::args();
     let command = args.next().unwrap_or_else(|| "benchmark".to_string());
@@ -254,6 +260,7 @@ fn parse_options() -> Options {
     for arg in args {
         match arg.as_str() {
             "--parallel" | "-p" => ret.parallel = true,
+            "--sl" => ret.sl = true,
             "--help" | "-h" => {
                 print_usage(&command);
                 std::process::exit(0);
@@ -270,7 +277,7 @@ fn parse_options() -> Options {
 }
 
 fn print_usage(command: &str) {
-    eprintln!("Usage: {command} [--parallel]");
+    eprintln!("Usage: {command} [--sl] [--parallel]");
 }
 
 fn panic_payload_to_string(payload: Box<dyn std::any::Any + Send>) -> String {
