@@ -20,6 +20,11 @@ static O: std::sync::LazyLock<Options> = std::sync::LazyLock::new(parse_options)
 fn main() {
     let benchmarks = benchmarks();
 
+    println!("Loaded {} benchmarks.", benchmarks.len());
+    for (i, b) in benchmarks.iter().enumerate() {
+        println!("{:<3} {}", format!("{}.", i+1), b.name);
+    }
+
     if O.parallel {
         run_all_parallel(&benchmarks);
     } else {
