@@ -117,6 +117,10 @@ where
     BitWord<WS>: DeserializeOwned,
     <WS as All>::Iter: Clone,
 {
+    if program.is_empty() {
+        return None;
+    }
+
     let mut reducer = Reducer::<WT, WS>::default();
     let mut reduced_program = Vec::with_capacity(program.len());
     for inst in program {
