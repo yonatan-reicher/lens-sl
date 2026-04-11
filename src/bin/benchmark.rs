@@ -132,8 +132,7 @@ fn print_result(b: &Benchmark, result: &BenchmarkResult) {
                     println!("  · <empty program>");
                 } else {
                     for (i, inst) in prog.iter().enumerate() {
-                        let c = if i == 0 { '·' } else { ' ' };
-                        println!("  {} {}", c, inst);
+                        println!("  {:>3}│ {}", i + 1, inst);
                     }
                 }
             }
