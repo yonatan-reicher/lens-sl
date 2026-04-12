@@ -241,7 +241,7 @@ where
                         .collect::<Vec<_>>()
                     {
                         // TODO: call this init_state_in_bank or something like that. Also make it so instructions
-                        // are only added when the state is excatly what they read.
+                        // are only added when the state is exactly what they read.
                         let mut e = FxHashMap::<_, FxHashSet<_>>::default();
                         for inst in Inst::enumerate(EnumerationInfo {
                             registers: EnumerationInfoOptions::Limited(g.registers),
