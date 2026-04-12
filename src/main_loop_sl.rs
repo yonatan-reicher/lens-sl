@@ -237,8 +237,6 @@ where
                 tui.progress(i, len);
                 let res = {
                     let input_states: &[MaskedState<W>] = &inputs;
-                    let output_states: &[MaskedState<W>] = &outputs;
-                    let should_cancel: &ShouldCancel = &should_cancel;
                     // First we need to check that all the states are properly represented in the bank.
                     for inp in input_states
                         .iter()
