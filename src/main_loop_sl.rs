@@ -364,7 +364,6 @@ struct Globals<
     immediates: &'tui [WS],
 }
 
-// TODO: OrCancel...
 enum ProgramOrRetry<W: Word + HasBitWord> {
     Program(Program<W>),
     Retry,
