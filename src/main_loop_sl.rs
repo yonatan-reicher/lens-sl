@@ -221,19 +221,24 @@ where
                 .into_iter()
                 .enumerate()
             {
+                // Should we stop?
+                if should_cancel.check() {
+                    return Err(Cancelled);
+                }
+                // Did we succeed?
+                if inputs == outputs {
+                    match verify(&prog, &mut g) {
+                        Continue(()) => todo!(),
+                        Break(ProgramOrRetry::Program(p)) => return Ok(Some(p)),
+                        Break(ProgramOrRetry::Retry) => continue 'restart,
+                        Break(ProgramOrRetry::Cancel) => return Err(Cancelled),
+                    }
+                }
                 tui.progress(i, len);
-                let res = match {
+                let res = {
                     let input_states: &[MaskedState<W>] = &inputs;
                     let output_states: &[MaskedState<W>] = &outputs;
                     let should_cancel: &ShouldCancel = &should_cancel;
-                    // Should we stop?
-                    if should_cancel.check() {
-                        return Break(ProgramOrRetry::Cancel);
-                    }
-                    // Did we succeed?
-                    if input_states == output_states {
-                        return verify(&prog, g);
-                    }
                     // First we need to check that all the states are properly represented in the bank.
                     for inp in input_states
                         .iter()
@@ -303,7 +308,8 @@ where
                             .push((next_states, prog.clone().mutate(|p| p.push(inst))));
                     }
                     Continue(())
-                } {
+                };
+                let res = match res {
                     Continue(()) => ConnectAndRefineResult::Continue,
                     Break(ProgramOrRetry::Program(p)) => ConnectAndRefineResult::Found(p),
                     Break(ProgramOrRetry::Retry) => continue 'restart,
