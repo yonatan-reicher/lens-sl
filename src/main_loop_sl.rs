@@ -186,14 +186,13 @@ where
     BitWord<W>: DeserializeOwned,
     <W as All>::Iter: Clone,
 {
-    let mut bank: Bank<W> = Default::default();
     let enumeration_info = &EnumerationInfo::<W> {
         registers: EnumerationInfoOptions::Limited(registers),
         immediates: EnumerationInfoOptions::Limited(immediates),
         include_nop: false,
         skip_cond_code: false,
     };
-    let mut globals = Globals {
+    let mut g = Globals {
         oracle,
         oracle_reduced,
         inputs: vec![],
@@ -205,47 +204,50 @@ where
         original_reduced,
         registers,
         immediates,
+        seen: Default::default(),
+        current_states: Default::default(),
+        next_states: Default::default(),
+        bank: Default::default(),
     };
-    let mut seen = vec![];
-    // Here vector actually refers to mathematical vectors of states.
-    let mut current_state_vectors = vec![];
-    let mut next_state_vectors = vec![];
-    loop {
-        tui.searching();
-        tui.progress(0, globals.total_instructions);
-        // Look for a program that can start from all these.
-        let res = loop {
-            let (inputs, outputs) = (globals.inputs.clone(), globals.outputs.clone());
-            break match connect(
-                &mut globals,
-                &mut bank,
-                &mut vec![],
-                &inputs,
-                &outputs,
-                &should_cancel,
-            ) {
-                Continue(()) => ConnectAndRefineResult::Continue,
-                Break(ProgramOrRetry::Program(p)) => ConnectAndRefineResult::Found(p),
-                Break(ProgramOrRetry::Retry) => continue,
-                Break(ProgramOrRetry::Cancel) => return Err(Cancelled),
-            };
-        };
-        match res {
-            ConnectAndRefineResult::Found(prog) => {
-                println!("Found program of length {}", prog.len());
-                return Ok(Some(prog));
+    'restart: loop {
+        let (inputs, outputs) = (g.inputs.clone(), g.outputs.clone());
+        g.current_states.clear();
+        g.current_states.push((inputs, vec![]));
+        for length in 0..g.original_reduced.len() {
+            dbg!(length);
+            tui.searching();
+            tui.progress(0, g.total_instructions);
+            let len = g.current_states.len();
+            for (i, (inputs, prog)) in std::mem::take(&mut g.current_states)
+                .into_iter()
+                .enumerate()
+            {
+                tui.progress(i, len);
+                let res = match connect(&mut g, prog, &inputs, &outputs, &should_cancel) {
+                    Continue(()) => ConnectAndRefineResult::Continue,
+                    Break(ProgramOrRetry::Program(p)) => ConnectAndRefineResult::Found(p),
+                    Break(ProgramOrRetry::Retry) => continue 'restart,
+                    Break(ProgramOrRetry::Cancel) => return Err(Cancelled),
+                };
+                match res {
+                    ConnectAndRefineResult::Found(prog) => {
+                        println!("Found program of length {}", prog.len());
+                        return Ok(Some(prog));
+                    }
+                    ConnectAndRefineResult::Continue => {}
+                }
             }
-            ConnectAndRefineResult::Continue => {}
+            tui.progress(len, len);
+            if g.forward_length == original_length - 1 {
+                return Ok(None);
+            }
+            // ------------------------------ Expand Phase --------------------------------------------
+            let direction = Direction::Forward;
+            tui.expanding(direction);
+            //expand(&mut todo!(), g.tui);
+            g.forward_length += 1;
+            std::mem::swap(&mut g.next_states, &mut g.current_states);
         }
-        tui.progress(globals.total_instructions, globals.total_instructions);
-        if globals.forward_length == original_length - 1 {
-            return Ok(None);
-        }
-        // ------------------------------ Expand Phase --------------------------------------------
-        let direction = Direction::Forward;
-        tui.expanding(direction);
-        //expand(&mut todo!(), globals.tui);
-        globals.forward_length += 1;
     }
 }
 
@@ -268,6 +270,10 @@ struct Globals<
     oracle_reduced: OS,
     inputs: Vec<MaskedState<WS>>,
     outputs: Vec<MaskedState<WS>>,
+    seen: FxHashSet<Vec<MaskedState<WS>>>,
+    current_states: Vec<(Vec<MaskedState<WS>>, Program<WS>)>,
+    next_states: Vec<(Vec<MaskedState<WS>>, Program<WS>)>,
+    bank: Bank<WS>,
     /// The length of the prefixes of the program being built.
     forward_length: usize,
     extender: Reducer<WT, WS>,
@@ -295,8 +301,7 @@ fn connect<WT, W>(
         impl Oracle<[Inst<W>], State<W>>,
         impl for<'g> TuiHook<&'g Graph<W>, MaskedState<W>>,
     >,
-    bank: &mut Bank<W>,
-    program: &mut Vec<Inst<W>>,
+    program: Vec<Inst<W>>,
     input_states: &[MaskedState<W>],
     output_states: &[MaskedState<W>],
     should_cancel: &ShouldCancel,
@@ -311,13 +316,13 @@ where
     }
     // Did we succeed?
     if input_states == output_states {
-        return verify(program, g)
+        return verify(&program, g);
     }
     // First we need to check that all the states are properly represented in the bank.
     for inp in input_states
         .iter()
         .flat_map(|s| s.sub_states())
-        .filter(|s| !bank.contains_key(s))
+        .filter(|s| !g.bank.contains_key(s))
         .collect::<Vec<_>>()
     {
         // TODO: call this init_state_in_bank or something like that. Also make it so instructions
@@ -334,7 +339,7 @@ where
             };
             e.entry(out).or_default().insert(inst);
         }
-        bank.insert(inp, e);
+        g.bank.insert(inp, e);
     }
     // Find all instructions (and their effects!) that can run from the current states.
     // Instead of doing this by iterating all instructions, do this by intersection of equivalence
@@ -344,11 +349,12 @@ where
     let insts = input_states
         .iter()
         .map(|state| {
-            // For this state, return the equivalence classes that can run from it.
+            // For this state, return set of commands that can run from it.
             state
                 .sub_states()
                 .flat_map(|sub_state| {
-                    bank.get(&sub_state)
+                    g.bank
+                        .get(&sub_state)
                         .unwrap_or(&empty)
                         .iter()
                         .flat_map(|(_, set)| set.iter().copied())
@@ -366,17 +372,21 @@ where
                 .collect::<FxHashSet<_>>()
         });
     for inst in insts {
-        // Recurse motha fucka!
-        program.push(inst);
-        let next_states = &input_states.iter().map(|s| inst.run_masked(*s).unwrap()).collect::<Vec<_>>();
-        connect(g, bank, program, next_states, output_states)?;
-        program.pop();
+        let next_states = input_states
+            .iter()
+            .map(|s| inst.run_masked(*s))
+            .collect::<Option<Vec<_>>>()
+            .unwrap();
+        if g.seen.contains(&next_states) {
+            continue;
+        }
+        // TODO: Add Hila's full seen set.
+        g.seen.insert(next_states.clone());
+        // TODO: you know how to solve this memory allocation...
+        g.next_states
+            .push((next_states, program.clone().mutate(|p| p.push(inst))));
     }
     Continue(())
-}
-
-        }
-    }
 }
 
 /// Checks if the given counter-example has already been seen, by searching the input-output pairs
