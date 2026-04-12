@@ -8,7 +8,6 @@ use crate::arm::{Register, State, run_program_masked, what_program_reads};
 use crate::collect_registers::Collector;
 use crate::direction::Direction;
 use crate::graph;
-use crate::len::Len;
 use crate::oracle::{Oracle, SmtOracle};
 use crate::programs_sl as programs;
 use crate::reduce_bit_width::{ImmediateInfo, Reducer};
