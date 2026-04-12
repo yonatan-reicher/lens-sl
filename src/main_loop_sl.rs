@@ -231,7 +231,6 @@ where
                         Continue(()) => todo!(),
                         Break(ProgramOrRetry::Program(p)) => return Ok(Some(p)),
                         Break(ProgramOrRetry::Retry) => continue 'restart,
-                        Break(ProgramOrRetry::Cancel) => return Err(Cancelled),
                     }
                 }
                 tui.progress(i, len);
@@ -311,7 +310,6 @@ where
                     Continue(()) => ConnectAndRefineResult::Continue,
                     Break(ProgramOrRetry::Program(p)) => ConnectAndRefineResult::Found(p),
                     Break(ProgramOrRetry::Retry) => continue 'restart,
-                    Break(ProgramOrRetry::Cancel) => return Err(Cancelled),
                 };
                 match res {
                     ConnectAndRefineResult::Found(prog) => {
@@ -373,7 +371,6 @@ struct Globals<
 enum ProgramOrRetry<W: Word + HasBitWord> {
     Program(Program<W>),
     Retry,
-    Cancel,
 }
 
 /// Checks if the given counter-example has already been seen, by searching the input-output pairs
