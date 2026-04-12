@@ -233,9 +233,8 @@ where
                     }
                 }
                 let res = {
-                    let input_states: &[MaskedState<W>] = &inputs;
                     // First we need to check that all the states are properly represented in the bank.
-                    for inp in input_states
+                    for inp in inputs
                         .iter()
                         .flat_map(|s| s.sub_states())
                         .filter(|s| !g.bank.contains_key(s))
@@ -262,7 +261,7 @@ where
                     // classes that can run from the states.
                     let empty = Default::default();
                     let empty1 = Default::default();
-                    let insts = input_states
+                    let insts = inputs
                         .iter()
                         .map(|state| {
                             // For this state, return set of commands that can run from it.
@@ -288,7 +287,7 @@ where
                                 .collect::<FxHashSet<_>>()
                         });
                     for inst in insts {
-                        let next_states = input_states
+                        let next_states = inputs
                             .iter()
                             .map(|s| inst.run_masked(*s))
                             .collect::<Option<Vec<_>>>()
