@@ -45,6 +45,22 @@ mod intersect_all;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Cancelled;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Algorithm {
+    #[default]
+    Lens,
+    LensSl,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Config<'a, WBig, WShiftBig = crate::word::BitWord<WBig>> {
+    algorithm: Algorithm,
+    program: &'a [Inst<WBig, WShiftBig>],
+    additional_registers: &'a [Register],
+    additional_immediates: &'a [WBig],
+    should_cancel: ShouldCancel,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum ShouldCancel {
     #[default]
