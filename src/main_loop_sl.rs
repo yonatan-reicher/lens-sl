@@ -185,6 +185,7 @@ where
     BitWord<W>: DeserializeOwned,
     <W as All>::Iter: Clone,
 {
+    // ----- Initialization ------------------------------------------------------------------------
     let enumeration_info = &EnumerationInfo::<W> {
         registers: EnumerationInfoOptions::Limited(registers),
         immediates: EnumerationInfoOptions::Limited(immediates),
@@ -208,25 +209,22 @@ where
         next_states: Default::default(),
         bank: Default::default(),
     };
+    // ----- The Actual Loop -----------------------------------------------------------------------
     'restart: loop {
-        let (inputs, outputs) = (g.inputs.clone(), g.outputs.clone());
         g.current_states.clear();
-        g.current_states.push((inputs, vec![]));
-        for length in 0..g.original_reduced.len() {
-            dbg!(length);
+        g.current_states.push((g.inputs.clone(), vec![]));
+        // ----- Reachingablity - Bfs loop to reach g.outputs --------------------------------------
+        for _length in 0..g.original_reduced.len() {
             tui.searching();
             tui.progress(0, g.total_instructions);
             let len = g.current_states.len();
-            for (i, (inputs, prog)) in std::mem::take(&mut g.current_states)
-                .into_iter()
-                .enumerate()
-            {
+            for (i, (inputs, prog)) in g.current_states.iter().cloned().enumerate() {
                 // Should we stop?
                 if should_cancel.check() {
                     return Err(Cancelled);
                 }
                 // Did we succeed?
-                if inputs == outputs {
+                if inputs == g.outputs {
                     match verify(&prog, &mut g) {
                         Continue(()) => todo!(),
                         Break(ProgramOrRetry::Program(p)) => return Ok(Some(p)),
