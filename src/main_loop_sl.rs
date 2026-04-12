@@ -222,7 +222,88 @@ where
                 .enumerate()
             {
                 tui.progress(i, len);
-                let res = match connect(&mut g, prog, &inputs, &outputs, &should_cancel) {
+                let res = match {
+                    let input_states: &[MaskedState<W>] = &inputs;
+                    let output_states: &[MaskedState<W>] = &outputs;
+                    let should_cancel: &ShouldCancel = &should_cancel;
+                    // Should we stop?
+                    if should_cancel.check() {
+                        return Break(ProgramOrRetry::Cancel);
+                    }
+                    // Did we succeed?
+                    if input_states == output_states {
+                        return verify(&prog, g);
+                    }
+                    // First we need to check that all the states are properly represented in the bank.
+                    for inp in input_states
+                        .iter()
+                        .flat_map(|s| s.sub_states())
+                        .filter(|s| !g.bank.contains_key(s))
+                        .collect::<Vec<_>>()
+                    {
+                        // TODO: call this init_state_in_bank or something like that. Also make it so instructions
+                        // are only added when the state is excatly what they read.
+                        let mut e = FxHashMap::<_, FxHashSet<_>>::default();
+                        for inst in Inst::enumerate(EnumerationInfo {
+                            registers: EnumerationInfoOptions::Limited(g.registers),
+                            immediates: EnumerationInfoOptions::Limited(g.immediates),
+                            include_nop: false,
+                            skip_cond_code: false,
+                        }) {
+                            let Some(out) = inst.run_masked(inp) else {
+                                continue;
+                            };
+                            e.entry(out).or_default().insert(inst);
+                        }
+                        g.bank.insert(inp, e);
+                    }
+                    // Find all instructions (and their effects!) that can run from the current states.
+                    // Instead of doing this by iterating all instructions, do this by intersection of equivalence
+                    // classes that can run from the states.
+                    let empty = Default::default();
+                    let empty1 = Default::default();
+                    let insts = input_states
+                        .iter()
+                        .map(|state| {
+                            // For this state, return set of commands that can run from it.
+                            state
+                                .sub_states()
+                                .flat_map(|sub_state| {
+                                    g.bank
+                                        .get(&sub_state)
+                                        .unwrap_or(&empty)
+                                        .iter()
+                                        .flat_map(|(_, set)| set.iter().copied())
+                                })
+                                .collect::<FxHashSet<_>>()
+                        })
+                        .collect::<Vec<_>>()
+                        // Intersect!
+                        .pipe(|sets| {
+                            let smallest = sets.iter().min_by_key(|s| s.len()).unwrap_or(&empty1);
+                            smallest
+                                .iter()
+                                .cloned()
+                                .filter(|x| sets.iter().all(|s| s.contains(x)))
+                                .collect::<FxHashSet<_>>()
+                        });
+                    for inst in insts {
+                        let next_states = input_states
+                            .iter()
+                            .map(|s| inst.run_masked(*s))
+                            .collect::<Option<Vec<_>>>()
+                            .unwrap();
+                        if g.seen.contains(&next_states) {
+                            continue;
+                        }
+                        // TODO: Add Hila's full seen set.
+                        g.seen.insert(next_states.clone());
+                        // TODO: you know how to solve this memory allocation...
+                        g.next_states
+                            .push((next_states, prog.clone().mutate(|p| p.push(inst))));
+                    }
+                    Continue(())
+                } {
                     Continue(()) => ConnectAndRefineResult::Continue,
                     Break(ProgramOrRetry::Program(p)) => ConnectAndRefineResult::Found(p),
                     Break(ProgramOrRetry::Retry) => continue 'restart,
@@ -289,103 +370,6 @@ enum ProgramOrRetry<W: Word + HasBitWord> {
     Program(Program<W>),
     Retry,
     Cancel,
-}
-
-fn connect<WT, W>(
-    g: &mut Globals<
-        '_,
-        WT,
-        W,
-        impl Oracle<[Inst<WT>], State<WT>>,
-        impl Oracle<[Inst<W>], State<W>>,
-        impl for<'g> TuiHook<&'g Graph<W>, MaskedState<W>>,
-    >,
-    program: Vec<Inst<W>>,
-    input_states: &[MaskedState<W>],
-    output_states: &[MaskedState<W>],
-    should_cancel: &ShouldCancel,
-) -> ControlFlow<ProgramOrRetry<WT>>
-where
-    WT: Word + HasBitWord,
-    W: Word + HasBitWord,
-{
-    // Should we stop?
-    if should_cancel.check() {
-        return Break(ProgramOrRetry::Cancel);
-    }
-    // Did we succeed?
-    if input_states == output_states {
-        return verify(&program, g);
-    }
-    // First we need to check that all the states are properly represented in the bank.
-    for inp in input_states
-        .iter()
-        .flat_map(|s| s.sub_states())
-        .filter(|s| !g.bank.contains_key(s))
-        .collect::<Vec<_>>()
-    {
-        // TODO: call this init_state_in_bank or something like that. Also make it so instructions
-        // are only added when the state is excatly what they read.
-        let mut e = FxHashMap::<_, FxHashSet<_>>::default();
-        for inst in Inst::enumerate(EnumerationInfo {
-            registers: EnumerationInfoOptions::Limited(g.registers),
-            immediates: EnumerationInfoOptions::Limited(g.immediates),
-            include_nop: false,
-            skip_cond_code: false,
-        }) {
-            let Some(out) = inst.run_masked(inp) else {
-                continue;
-            };
-            e.entry(out).or_default().insert(inst);
-        }
-        g.bank.insert(inp, e);
-    }
-    // Find all instructions (and their effects!) that can run from the current states.
-    // Instead of doing this by iterating all instructions, do this by intersection of equivalence
-    // classes that can run from the states.
-    let empty = Default::default();
-    let empty1 = Default::default();
-    let insts = input_states
-        .iter()
-        .map(|state| {
-            // For this state, return set of commands that can run from it.
-            state
-                .sub_states()
-                .flat_map(|sub_state| {
-                    g.bank
-                        .get(&sub_state)
-                        .unwrap_or(&empty)
-                        .iter()
-                        .flat_map(|(_, set)| set.iter().copied())
-                })
-                .collect::<FxHashSet<_>>()
-        })
-        .collect::<Vec<_>>()
-        // Intersect!
-        .pipe(|sets| {
-            let smallest = sets.iter().min_by_key(|s| s.len()).unwrap_or(&empty1);
-            smallest
-                .iter()
-                .cloned()
-                .filter(|x| sets.iter().all(|s| s.contains(x)))
-                .collect::<FxHashSet<_>>()
-        });
-    for inst in insts {
-        let next_states = input_states
-            .iter()
-            .map(|s| inst.run_masked(*s))
-            .collect::<Option<Vec<_>>>()
-            .unwrap();
-        if g.seen.contains(&next_states) {
-            continue;
-        }
-        // TODO: Add Hila's full seen set.
-        g.seen.insert(next_states.clone());
-        // TODO: you know how to solve this memory allocation...
-        g.next_states
-            .push((next_states, program.clone().mutate(|p| p.push(inst))));
-    }
-    Continue(())
 }
 
 /// Checks if the given counter-example has already been seen, by searching the input-output pairs
