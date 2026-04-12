@@ -339,22 +339,37 @@ where
     // Find all instructions (and their effects!) that can run from the current states.
     // Instead of doing this by iterating all instructions, do this by intersection of equivalence
     // classes that can run from the states.
-    for inst in Inst::enumerate(EnumerationInfo {
-        registers: EnumerationInfoOptions::Limited(g.registers),
-        immediates: EnumerationInfoOptions::Limited(g.immediates),
-        include_nop: false,
-        skip_cond_code: false,
-    }) {
+    let empty = Default::default();
+    let empty1 = Default::default();
+    let insts = input_states
+        .iter()
+        .map(|state| {
+            // For this state, return the equivalence classes that can run from it.
+            state
+                .sub_states()
+                .flat_map(|sub_state| {
+                    bank.get(&sub_state)
+                        .unwrap_or(&empty)
+                        .iter()
+                        .flat_map(|(_, set)| set.iter().copied())
+                })
+                .collect::<FxHashSet<_>>()
+        })
+        .collect::<Vec<_>>()
+        // Intersect!
+        .pipe(|sets| {
+            let smallest = sets.iter().min_by_key(|s| s.len()).unwrap_or(&empty1);
+            smallest
+                .iter()
+                .cloned()
+                .filter(|x| sets.iter().all(|s| s.contains(x)))
+                .collect::<FxHashSet<_>>()
+        });
+    for inst in insts {
         // Recurse motha fucka!
         program.push(inst);
-        let Some(next_states) = &input_states
-            .iter()
-            .map(|s| inst.run_masked(*s))
-            .collect::<Option<Vec<_>>>()
-        else {
-            continue;
-        };
-        connect(g, bank, program, next_states, output_states, should_cancel)?;
+        let next_states = &input_states.iter().map(|s| inst.run_masked(*s).unwrap()).collect::<Vec<_>>();
+        connect(g, bank, program, next_states, output_states)?;
         program.pop();
     }
     Continue(())
