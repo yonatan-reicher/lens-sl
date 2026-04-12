@@ -219,6 +219,7 @@ where
             tui.progress(0, g.total_instructions);
             let len = g.current_states.len();
             for (i, (inputs, prog)) in g.current_states.iter().cloned().enumerate() {
+                tui.progress(i, len);
                 // Should we stop?
                 if should_cancel.check() {
                     return Err(Cancelled);
@@ -231,7 +232,6 @@ where
                         Break(ProgramOrRetry::Retry) => continue 'restart,
                     }
                 }
-                tui.progress(i, len);
                 let res = {
                     let input_states: &[MaskedState<W>] = &inputs;
                     // First we need to check that all the states are properly represented in the bank.
