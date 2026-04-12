@@ -44,6 +44,23 @@ mod direction;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Cancelled;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ShouldCancel {
+    #[default]
+    Never,
+    At(std::time::Instant),
+}
+
+impl ShouldCancel {
+    pub fn check(&self) -> bool {
+        use ShouldCancel::*;
+        match self {
+            Never => false,
+            At(t) => std::time::Instant::now() >= *t,
+        }
+    }
+}
+
 // Let's expose just the necessary items.
 
 pub use arm::parse;

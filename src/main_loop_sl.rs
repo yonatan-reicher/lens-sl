@@ -1,7 +1,7 @@
 //! The main loop for synthesis and optimization.
 //! Here we have basically the code that you would see in the actual paper that describes Lens.
 
-use crate::Cancelled;
+use crate::{Cancelled, ShouldCancel};
 use crate::all::All;
 use crate::arm::enumerate::{EnumerationInfo, EnumerationInfoOptions};
 use crate::arm::state::Masked as MaskedState;
@@ -112,7 +112,7 @@ pub fn optimize<WT: Word + HasBitWord, WS: Word + HasBitWord + serde::de::Deseri
     program: &[Inst<WT>],
     additional_registers: impl IntoIterator<Item = Register>,
     additional_immediates: impl IntoIterator<Item = WT>,
-    should_cancel: impl FnMut() -> bool,
+    should_cancel: ShouldCancel,
     tui: &impl for<'g> TuiHook<&'g Graph<WS>, MaskedState<WS>>,
 ) -> Result<Option<Program<WT>>, Cancelled>
 where
@@ -177,7 +177,7 @@ fn synthesize<WT, W>(
     // In the future, this could be max_cost.
     original_length: usize,
     original_reduced: Program<W>,
-    mut should_cancel: impl FnMut() -> bool,
+    should_cancel: ShouldCancel,
     tui: &impl for<'a> TuiHook<&'a Graph<W>, MaskedState<W>>,
 ) -> Result<Option<Program<WT>>, Cancelled>
 where
@@ -219,7 +219,7 @@ where
                 &mut vec![],
                 &inputs,
                 &outputs,
-                &mut should_cancel,
+                &should_cancel,
             ) {
                 Continue(()) => ConnectAndRefineResult::Continue,
                 Break(ProgramOrRetry::Program(p)) => ConnectAndRefineResult::Found(p),
@@ -296,13 +296,13 @@ fn connect<WT, W>(
     program: &mut Vec<Inst<W>>,
     input_states: &[MaskedState<W>],
     output_states: &[MaskedState<W>],
-    should_cancel: &mut impl FnMut() -> bool,
+    should_cancel: &ShouldCancel,
 ) -> ControlFlow<ProgramOrRetry<WT>>
 where
     WT: Word + HasBitWord,
     W: Word + HasBitWord,
 {
-    if should_cancel() {
+    if should_cancel.check() {
         return Break(ProgramOrRetry::Cancel);
     }
     // Do we need to add more instructions?

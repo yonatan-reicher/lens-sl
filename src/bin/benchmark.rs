@@ -1,3 +1,4 @@
+use lens_sl::ShouldCancel;
 use lens_sl::{Cancelled, Inst, Word4, Word64, inst};
 use std::env;
 use std::fs;
@@ -264,8 +265,10 @@ impl Benchmark {
         } else {
             lens_sl::optimize::<W, Word4>
         };
-        let end_instant = O.timeout.map(|t| Instant::now() + t);
-        let should_cancel = || end_instant.is_some_and(|i| Instant::now() > i);
+        let should_cancel = match O.timeout {
+            None => ShouldCancel::Never,
+            Some(d) => ShouldCancel::At(Instant::now() + d),
+        };
         match optimize(&self.input, vec![], vec![], should_cancel, &lens_sl::NoTui) {
             Ok(None) => (),
             Ok(Some(p)) => f(p).map_break(Ok)?,

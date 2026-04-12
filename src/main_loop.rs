@@ -1,7 +1,7 @@
 //! The main loop for synthesis and optimization.
 //! Here we have basically the code that you would see in the actual paper that describes Lens.
 
-use crate::Cancelled;
+use crate::{Cancelled, ShouldCancel};
 use crate::all::All;
 use crate::arm::enumerate::{EnumerationInfo, EnumerationInfoOptions};
 use crate::arm::{BackwardMap, Inst, Register, State};
@@ -40,7 +40,7 @@ pub fn optimize<WT: Word + HasBitWord, WS: Word + HasBitWord + serde::de::Deseri
     program: &[Inst<WT>],
     additional_registers: impl IntoIterator<Item = Register>,
     additional_immediates: impl IntoIterator<Item = WT>,
-    should_cancel: impl FnMut() -> bool,
+    should_cancel: ShouldCancel,
     tui: &impl for<'g> TuiHook<&'g Graph<WS>, State<WS>>,
 ) -> Result<Option<Program<WT>>, Cancelled>
 where
@@ -91,7 +91,7 @@ where
         oracle_reduced,
         reducer,
         program.len(),
-        should_cancel,
+        &should_cancel,
         tui,
     )
 }
@@ -105,7 +105,7 @@ fn synthesize<WT: Word + HasBitWord, W: Word + HasBitWord + serde::de::Deseriali
     // The length of the original program.
     // In the future, this could be max_cost.
     original_length: usize,
-    mut should_cancel: impl FnMut() -> bool,
+    should_cancel: &ShouldCancel,
     tui: &impl for<'a> TuiHook<&'a Graph<W>, State<W>>,
 ) -> Result<Option<Program<WT>>, Cancelled>
 where
@@ -156,7 +156,7 @@ where
             tui.progress(i, globals.total_instructions);
             let res = connect_and_refine::<WT, W>(
                 &mut globals,
-                &mut should_cancel,
+                should_cancel,
                 &mut forward_graph,
                 &mut backward_graph,
                 inst,
@@ -187,7 +187,7 @@ where
                 enumeration_info,
                 globals.tui,
                 globals.total_instructions,
-                &mut should_cancel,
+                should_cancel,
             );
             globals.forward_length += 1;
             tui.report_graph(Direction::Forward, &forward_graph);
@@ -199,7 +199,7 @@ where
                 globals.tui,
                 globals.total_instructions,
                 &globals.backward_map,
-                &mut should_cancel,
+                should_cancel,
             );
             globals.backward_length += 1;
             tui.report_graph(Direction::Backward, &backward_graph);
@@ -258,14 +258,14 @@ fn connect_and_refine<WT: Word + HasBitWord, WS: Word + HasBitWord>(
         impl Oracle<[Inst<WS>], State<WS>>,
         impl for<'a> TuiHook<&'a Graph<WS>, State<WS>>,
     >,
-    should_cancel: &mut impl FnMut() -> bool,
+    should_cancel: &ShouldCancel,
     forward_graph: &mut Graph<WS>,
     backward_graph: &mut Graph<WS>,
     inst: Inst<WS>,
     // This is the index of the input/output pair we are currently trying to connect.
     k: usize,
 ) -> ConnectAndRefineResult<WT> {
-    if should_cancel() {
+    if should_cancel.check() {
         return ConnectAndRefineResult::Cancel;
     }
     let tui = globals.tui;
@@ -400,7 +400,7 @@ fn expand_forward<W: Word + HasBitWord>(
     ei: &EnumerationInfo<W>,
     tui: &impl for<'g> TuiHook<&'g Graph<W>, State<W>>,
     total_inst: usize,
-    should_cancel: &mut impl FnMut() -> bool,
+    should_cancel: &ShouldCancel,
 ) -> ControlFlow<Cancelled> {
     expand_forward_or_backward(
         graph,
@@ -421,7 +421,7 @@ fn expand_backward<W: Word + HasBitWord>(
     tui: &impl for<'g> TuiHook<&'g Graph<W>, State<W>>,
     total_inst: usize,
     bm: &BackwardMap<W>,
-    should_cancel: &mut impl FnMut() -> bool,
+    should_cancel: &ShouldCancel,
 ) -> ControlFlow<Cancelled> {
     expand_forward_or_backward(
         graph,
@@ -439,7 +439,7 @@ fn expand_forward_or_backward<W: Word + HasBitWord, StepRet: IntoIterator<Item =
     tui: &impl for<'g> TuiHook<&'g Graph<W>, State<W>>,
     total_inst: usize,
     step: impl Fn(State<W>, Inst<W>) -> StepRet,
-    should_cancel: &mut impl FnMut() -> bool,
+    should_cancel: &ShouldCancel,
 ) -> ControlFlow<Cancelled> {
     // let old_graph = std::mem::replace(graph, Graph::Nest(Default::default()));
     let old_graph = std::mem::replace(graph, Graph::Leaf(Default::default()));
@@ -471,9 +471,9 @@ fn expand_forward_or_backward<W: Word + HasBitWord, StepRet: IntoIterator<Item =
         inst: Inst<W>,
         out_states: &mut Vec<State<W>>,
         step: &impl Fn(State<W>, Inst<W>) -> StepRet,
-        should_cancel: &mut impl FnMut() -> bool,
+        should_cancel: &ShouldCancel,
     ) -> ControlFlow<Cancelled> {
-        if should_cancel() {
+        if should_cancel.check() {
             return Break(Cancelled);
         }
         match old_graph {

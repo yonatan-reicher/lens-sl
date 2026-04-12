@@ -65,7 +65,7 @@ fn main() {
             &program,
             vec![], // additional_registers
             vec![], // additional_immediates
-            || false,
+            Default::default(),
             &tui, // */ &NoTui,
         );
         tui.close();
@@ -76,7 +76,7 @@ fn main() {
             &program,
             vec![], // additional_registers
             vec![], // additional_immediates
-            || false,
+            Default::default(),
             &tui,
         );
         tui.close();
