@@ -206,8 +206,11 @@ where
         registers,
         immediates,
     };
+    let mut seen = vec![];
+    // Here vector actually refers to mathematical vectors of states.
+    let mut current_state_vectors = vec![];
+    let mut next_state_vectors = vec![];
     loop {
-        // ------------------------------ Search Phase --------------------------------------------
         tui.searching();
         tui.progress(0, globals.total_instructions);
         // Look for a program that can start from all these.
@@ -302,17 +305,13 @@ where
     WT: Word + HasBitWord,
     W: Word + HasBitWord,
 {
+    // Should we stop?
     if should_cancel.check() {
         return Break(ProgramOrRetry::Cancel);
     }
-    // Do we need to add more instructions?
-    if program.len() >= g.forward_length {
-        // Did we succeed?
-        return if input_states == output_states {
-            verify(program, g)
-        } else {
-            Continue(())
-        };
+    // Did we succeed?
+    if input_states == output_states {
+        return verify(program, g)
     }
     // First we need to check that all the states are properly represented in the bank.
     for inp in input_states
@@ -321,6 +320,8 @@ where
         .filter(|s| !bank.contains_key(s))
         .collect::<Vec<_>>()
     {
+        // TODO: call this init_state_in_bank or something like that. Also make it so instructions
+        // are only added when the state is excatly what they read.
         let mut e = FxHashMap::<_, FxHashSet<_>>::default();
         for inst in Inst::enumerate(EnumerationInfo {
             registers: EnumerationInfoOptions::Limited(g.registers),
