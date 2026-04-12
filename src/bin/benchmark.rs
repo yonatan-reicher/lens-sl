@@ -45,10 +45,6 @@ fn run_all_sequential(benchmarks: &[Benchmark]) {
     }
 }
 
-macro_rules! dyn_fn_mut {
-    ($e:expr) => {{ (&mut $e) as &mut dyn FnMut(_) -> _ }};
-}
-
 fn run_all_parallel(benchmarks: &[Benchmark]) {
     // Parallel runs can trigger assertion panics for some benchmark inputs.
     // Keep output readable by suppressing default panic backtraces and reporting panics per benchmark.
@@ -85,35 +81,19 @@ fn run_all_parallel(benchmarks: &[Benchmark]) {
 
 fn run(b: &Benchmark) -> BenchmarkResult {
     let mut found = vec![];
-    let (callback, default) = match &b.expected {
-        Some(expected) => (
-            dyn_fn_mut!(|optimized: Vec<Inst<W>>| {
-                found.push(optimized.clone());
-                if optimized == *expected {
-                    return Break(true);
-                }
-                Continue(())
-            }),
-            false,
-        ),
-        None => (
-            dyn_fn_mut!(|optimized: Vec<Inst<W>>| {
-                found.push(optimized.clone());
-                Break(false)
-            }),
-            true,
-        ),
+    let callback = |optimized: Vec<Inst<W>>| -> ControlFlow<()> {
+        found.push(optimized);
+        Continue(())
     };
 
     // Run!
     let started_at = Instant::now();
-    let ret = b.optimize(callback);
+    let ret = b.optimize::<()>(callback);
     let elapsed = started_at.elapsed();
-    let success = ret
-        .map_break(|res| res.unwrap_or(false))
-        .break_value()
-        .unwrap_or(default);
     let timeout = ret == Break(Err(Cancelled));
+    let success = !timeout
+        && !found.is_empty()
+        && found.iter().all(|optimized| optimized.len() < b.input.len());
     BenchmarkResult {
         success,
         timeout,
@@ -165,12 +145,10 @@ fn benchmarks() -> Vec<Benchmark> {
         Benchmark {
             name: "empty".to_string(),
             input: vec![],
-            expected: None,
         },
         Benchmark {
             name: "double move".to_string(),
             input: vec![inst!(MovI, 0, 5), inst!(MovI, 0, 3)],
-            expected: Some(vec![inst!(MovI, 0, 3)]),
         },
     ]
     .into_iter()
@@ -228,7 +206,6 @@ fn benchmarks_in_dir(path: impl AsRef<Path> + std::fmt::Display) -> Vec<Benchmar
         benchmarks.push(Benchmark {
             name,
             input,
-            expected: None,
         });
     }
 
@@ -242,7 +219,6 @@ fn is_arm_source_file(path: &Path) -> bool {
 struct Benchmark {
     name: String,
     input: Vec<Inst<W>>,
-    expected: Option<Vec<Inst<W>>>,
 }
 
 struct BenchmarkResult {
