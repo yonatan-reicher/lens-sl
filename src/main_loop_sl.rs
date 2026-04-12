@@ -1,7 +1,6 @@
 //! The main loop for synthesis and optimization.
 //! Here we have basically the code that you would see in the actual paper that describes Lens.
 
-use crate::{Cancelled, ShouldCancel};
 use crate::all::All;
 use crate::arm::enumerate::{EnumerationInfo, EnumerationInfoOptions};
 use crate::arm::state::Masked as MaskedState;
@@ -15,6 +14,7 @@ use crate::programs_sl as programs;
 use crate::reduce_bit_width::{ImmediateInfo, Reducer};
 use crate::tui::TuiHook;
 use crate::word::prelude::*;
+use crate::{Cancelled, ShouldCancel};
 
 // std imports
 use std::ops::ControlFlow::{self, Break, Continue};
