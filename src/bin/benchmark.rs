@@ -1,10 +1,11 @@
-use lens_sl::{Inst, Word4, Word64, inst};
+use lens_sl::{Cancelled, Inst, Word4, Word64, inst};
 use std::env;
 use std::fs;
 use std::hint::black_box;
 use std::ops::ControlFlow::{self, Break, Continue};
 use std::panic;
 use std::path::Path;
+use std::process::exit;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -13,6 +14,7 @@ use std::time::Instant;
 struct Options {
     parallel: bool,
     sl: bool,
+    timeout: Option<Duration>,
 }
 
 static O: std::sync::LazyLock<Options> = std::sync::LazyLock::new(parse_options);
@@ -22,7 +24,7 @@ fn main() {
 
     println!("Loaded {} benchmarks.", benchmarks.len());
     for (i, b) in benchmarks.iter().enumerate() {
-        println!("{:<3} {}", format!("{}.", i+1), b.name);
+        println!("{:<3} {}", format!("{}.", i + 1), b.name);
     }
 
     if O.parallel {
@@ -61,6 +63,7 @@ fn run_all_parallel(benchmarks: &[Benchmark]) {
                     Ok(result) => result,
                     Err(payload) => BenchmarkResult {
                         success: false,
+                        timeout: false,
                         elapsed: Duration::ZERO,
                         found: vec![],
                         panic_message: Some(panic_payload_to_string(payload)),
@@ -105,9 +108,14 @@ fn run(b: &Benchmark) -> BenchmarkResult {
     let started_at = Instant::now();
     let ret = b.optimize(callback);
     let elapsed = started_at.elapsed();
-    let success = ret.break_value().unwrap_or(default);
+    let success = ret
+        .map_break(|res| res.unwrap_or(false))
+        .break_value()
+        .unwrap_or(default);
+    let timeout = ret == Break(Err(Cancelled));
     BenchmarkResult {
         success,
+        timeout,
         elapsed,
         found,
         panic_message: None,
@@ -121,7 +129,13 @@ fn print_result(b: &Benchmark, result: &BenchmarkResult) {
         return;
     }
 
-    let mark = if result.success { "✅" } else { "❌" };
+    let mark = if result.timeout {
+        "⌛️ timeout"
+    } else if result.success {
+        "✅"
+    } else {
+        "❌"
+    };
     println!(
         "{} - {mark} {}",
         b.name,
@@ -231,6 +245,7 @@ struct Benchmark {
 
 struct BenchmarkResult {
     success: bool,
+    timeout: bool,
     elapsed: Duration,
     found: Vec<Vec<Inst<W>>>,
     panic_message: Option<String>,
@@ -239,15 +254,21 @@ struct BenchmarkResult {
 type W = Word64;
 
 impl Benchmark {
-    pub fn optimize<T>(&self, mut f: impl FnMut(Vec<Inst<W>>) -> ControlFlow<T>) -> ControlFlow<T> {
+    pub fn optimize<T>(
+        &self,
+        mut f: impl FnMut(Vec<Inst<W>>) -> ControlFlow<T>,
+    ) -> ControlFlow<Result<T, Cancelled>> {
         let optimize = if O.sl {
             lens_sl::optimize_sl::<W, Word4>
         } else {
             lens_sl::optimize::<W, Word4>
         };
-        let x = optimize(&self.input, vec![], vec![], &lens_sl::NoTui);
-        if let Some(x) = x {
-            f(x)?;
+        let end_instant = O.timeout.map(|t| Instant::now() + t);
+        let should_cancel = || end_instant.is_some_and(|i| Instant::now() > i);
+        match optimize(&self.input, vec![], vec![], should_cancel, &lens_sl::NoTui) {
+            Ok(None) => (),
+            Ok(Some(p)) => f(p).map_break(Ok)?,
+            Err(Cancelled) => return Break(Err(Cancelled)),
         }
         Continue(())
     }
@@ -257,17 +278,31 @@ fn parse_options() -> Options {
     let mut ret = Options {
         parallel: false,
         sl: false,
+        timeout: None,
     };
     let mut args = env::args();
     let command = args.next().unwrap_or_else(|| "benchmark".to_string());
 
-    for arg in args {
+    while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--parallel" | "-p" => ret.parallel = true,
-            "--sl" => ret.sl = true,
             "--help" | "-h" => {
                 print_usage(&command);
                 std::process::exit(0);
+            }
+            "--parallel" | "-p" => ret.parallel = true,
+            "--sl" => ret.sl = true,
+            "--timeout" => {
+                let Some(t) = args.next() else {
+                    eprintln!("error: timeout option needs a time argument, but had no argument");
+                    print_usage(&command);
+                    exit(1);
+                };
+                let Ok(t) = t.parse() else {
+                    eprintln!("error: timeout option argument must be a number, but was '{t}'");
+                    print_usage(&command);
+                    exit(1);
+                };
+                ret.timeout = Some(Duration::from_secs(t));
             }
             _ => {
                 eprintln!("error: unknown argument '{arg}'");
@@ -281,7 +316,7 @@ fn parse_options() -> Options {
 }
 
 fn print_usage(command: &str) {
-    eprintln!("Usage: {command} [--sl] [--parallel]");
+    eprintln!("Usage: {command} [--sl] [--parallel] [--timeout <seconds>]");
 }
 
 fn panic_payload_to_string(payload: Box<dyn std::any::Any + Send>) -> String {

@@ -1,7 +1,7 @@
 #[allow(unused_imports)]
-use lens_sl::{LiveValue, Register, Word4, Word8, Word64, inst, optimize, optimize_sl};
-#[allow(unused_imports)]
-use lens_sl::{NoTui, Tui};
+use lens_sl::{
+    Cancelled, LiveValue, NoTui, Register, Tui, Word4, Word8, Word64, inst, optimize, optimize_sl,
+};
 
 fn main() {
     let args: &mut Vec<String> = &mut std::env::args().collect();
@@ -65,7 +65,8 @@ fn main() {
             &program,
             vec![], // additional_registers
             vec![], // additional_immediates
-            &tui,   // */ &NoTui,
+            || false,
+            &tui, // */ &NoTui,
         );
         tui.close();
         ret
@@ -75,18 +76,25 @@ fn main() {
             &program,
             vec![], // additional_registers
             vec![], // additional_immediates
+            || false,
             &tui,
         );
         tui.close();
         ret
     };
-    let Some(p) = p else {
-        println!("No equivalent program found");
-        return;
-    };
-    println!("Optimized program:");
-    for inst in p {
-        println!("{inst}");
+    match p {
+        Err(Cancelled) => {
+            println!("Cancelled!");
+        }
+        Ok(None) => {
+            println!("No equivalent program found");
+        }
+        Ok(Some(p)) => {
+            println!("Optimized program:");
+            for inst in p {
+                println!("{inst}");
+            }
+        }
     }
 }
 

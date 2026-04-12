@@ -14,8 +14,9 @@ fn bad_case() {
         ],
         vec![Register(0), Register(3)], // additional_registers
         vec![],                         // additional_immediates
+        || false,
         &NoTui,
-    );
+    ).unwrap();
     assert_eq!(p, None);
 }
 
@@ -32,8 +33,9 @@ fn bad_case_2() {
         ],
         vec![Register(0), Register(1)], // additional_registers
         vec![],                         // additional_immediates
+        || false,
         &NoTui,
-    );
+    ).unwrap();
     assert_eq!(
         p,
         Some(vec![

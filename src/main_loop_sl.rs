@@ -1,6 +1,7 @@
 //! The main loop for synthesis and optimization.
 //! Here we have basically the code that you would see in the actual paper that describes Lens.
 
+use crate::Cancelled;
 use crate::all::All;
 use crate::arm::enumerate::{EnumerationInfo, EnumerationInfoOptions};
 use crate::arm::state::Masked as MaskedState;
@@ -111,14 +112,15 @@ pub fn optimize<WT: Word + HasBitWord, WS: Word + HasBitWord + serde::de::Deseri
     program: &[Inst<WT>],
     additional_registers: impl IntoIterator<Item = Register>,
     additional_immediates: impl IntoIterator<Item = WT>,
+    should_cancel: impl FnMut() -> bool,
     tui: &impl for<'g> TuiHook<&'g Graph<WS>, MaskedState<WS>>,
-) -> Option<Program<WT>>
+) -> Result<Option<Program<WT>>, Cancelled>
 where
     BitWord<WS>: DeserializeOwned,
     <WS as All>::Iter: Clone,
 {
     if program.is_empty() {
-        return None;
+        return Ok(None);
     }
 
     let mut reducer = Reducer::<WT, WS>::default();
@@ -157,6 +159,7 @@ where
         reducer,
         program.len(),
         reduced_program,
+        should_cancel,
         tui,
     )
 }
@@ -174,8 +177,9 @@ fn synthesize<WT, W>(
     // In the future, this could be max_cost.
     original_length: usize,
     original_reduced: Program<W>,
+    mut should_cancel: impl FnMut() -> bool,
     tui: &impl for<'a> TuiHook<&'a Graph<W>, MaskedState<W>>,
-) -> Option<Program<WT>>
+) -> Result<Option<Program<WT>>, Cancelled>
 where
     WT: Word + HasBitWord,
     W: Word + HasBitWord + DeserializeOwned,
@@ -209,22 +213,30 @@ where
         // Look for a program that can start from all these.
         let res = loop {
             let (inputs, outputs) = (globals.inputs.clone(), globals.outputs.clone());
-            break match connect(&mut globals, &mut bank, &mut vec![], &inputs, &outputs) {
+            break match connect(
+                &mut globals,
+                &mut bank,
+                &mut vec![],
+                &inputs,
+                &outputs,
+                &mut should_cancel,
+            ) {
                 Continue(()) => ConnectAndRefineResult::Continue,
                 Break(ProgramOrRetry::Program(p)) => ConnectAndRefineResult::Found(p),
                 Break(ProgramOrRetry::Retry) => continue,
+                Break(ProgramOrRetry::Cancel) => return Err(Cancelled),
             };
         };
         match res {
             ConnectAndRefineResult::Found(prog) => {
                 println!("Found program of length {}", prog.len());
-                return Some(prog);
+                return Ok(Some(prog));
             }
             ConnectAndRefineResult::Continue => {}
         }
         tui.progress(globals.total_instructions, globals.total_instructions);
         if globals.forward_length == original_length - 1 {
-            return None;
+            return Ok(None);
         }
         // ------------------------------ Expand Phase --------------------------------------------
         let direction = Direction::Forward;
@@ -264,9 +276,11 @@ struct Globals<
     immediates: &'tui [WS],
 }
 
+// TODO: OrCancel...
 enum ProgramOrRetry<W: Word + HasBitWord> {
     Program(Program<W>),
     Retry,
+    Cancel,
 }
 
 fn connect<WT, W>(
@@ -282,11 +296,15 @@ fn connect<WT, W>(
     program: &mut Vec<Inst<W>>,
     input_states: &[MaskedState<W>],
     output_states: &[MaskedState<W>],
+    should_cancel: &mut impl FnMut() -> bool,
 ) -> ControlFlow<ProgramOrRetry<WT>>
 where
     WT: Word + HasBitWord,
     W: Word + HasBitWord,
 {
+    if should_cancel() {
+        return Break(ProgramOrRetry::Cancel);
+    }
     // Do we need to add more instructions?
     if program.len() >= g.forward_length {
         // Did we succeed?
@@ -320,37 +338,22 @@ where
     // Find all instructions (and their effects!) that can run from the current states.
     // Instead of doing this by iterating all instructions, do this by intersection of equivalence
     // classes that can run from the states.
-    let empty = Default::default();
-    let empty1 = Default::default();
-    let insts = input_states
-        .iter()
-        .map(|state| {
-            // For this state, return the equivalence classes that can run from it.
-            state
-                .sub_states()
-                .flat_map(|sub_state| {
-                    bank.get(&sub_state)
-                        .unwrap_or(&empty)
-                        .iter()
-                        .flat_map(|(_, set)| set.iter().copied())
-                })
-                .collect::<FxHashSet<_>>()
-        })
-        .collect::<Vec<_>>()
-        // Intersect!
-        .pipe(|sets| {
-            let smallest = sets.iter().min_by_key(|s| s.len()).unwrap_or(&empty1);
-            smallest
-                .iter()
-                .cloned()
-                .filter(|x| sets.iter().all(|s| s.contains(x)))
-                .collect::<FxHashSet<_>>()
-        });
-    for inst in insts {
+    for inst in Inst::enumerate(EnumerationInfo {
+        registers: EnumerationInfoOptions::Limited(g.registers),
+        immediates: EnumerationInfoOptions::Limited(g.immediates),
+        include_nop: false,
+        skip_cond_code: false,
+    }) {
         // Recurse motha fucka!
         program.push(inst);
-        let next_states = &input_states.iter().map(|s| inst.run_masked(*s).unwrap()).collect::<Vec<_>>();
-        connect(g, bank, program, next_states, output_states)?;
+        let Some(next_states) = &input_states
+            .iter()
+            .map(|s| inst.run_masked(*s))
+            .collect::<Option<Vec<_>>>()
+        else {
+            continue;
+        };
+        connect(g, bank, program, next_states, output_states, should_cancel)?;
         program.pop();
     }
     Continue(())

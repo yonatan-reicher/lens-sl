@@ -1,6 +1,7 @@
 //! The main loop for synthesis and optimization.
 //! Here we have basically the code that you would see in the actual paper that describes Lens.
 
+use crate::Cancelled;
 use crate::all::All;
 use crate::arm::enumerate::{EnumerationInfo, EnumerationInfoOptions};
 use crate::arm::{BackwardMap, Inst, Register, State};
@@ -16,7 +17,7 @@ use crate::verify::{self, verify};
 use crate::word::prelude::*;
 
 // std imports
-use std::ops::ControlFlow::{Break, Continue};
+use std::ops::ControlFlow::{self, Break, Continue};
 
 use serde::de::DeserializeOwned;
 
@@ -39,12 +40,17 @@ pub fn optimize<WT: Word + HasBitWord, WS: Word + HasBitWord + serde::de::Deseri
     program: &[Inst<WT>],
     additional_registers: impl IntoIterator<Item = Register>,
     additional_immediates: impl IntoIterator<Item = WT>,
+    should_cancel: impl FnMut() -> bool,
     tui: &impl for<'g> TuiHook<&'g Graph<WS>, State<WS>>,
-) -> Option<Program<WT>>
+) -> Result<Option<Program<WT>>, Cancelled>
 where
     BitWord<WS>: DeserializeOwned,
     <WS as All>::Iter: Clone,
 {
+    if program.is_empty() {
+        return Ok(None);
+    }
+
     let mut reducer = Reducer::<WT, WS>::default();
     let mut reduced_program = Vec::with_capacity(program.len());
     for inst in program {
@@ -85,6 +91,7 @@ where
         oracle_reduced,
         reducer,
         program.len(),
+        should_cancel,
         tui,
     )
 }
@@ -98,8 +105,9 @@ fn synthesize<WT: Word + HasBitWord, W: Word + HasBitWord + serde::de::Deseriali
     // The length of the original program.
     // In the future, this could be max_cost.
     original_length: usize,
+    mut should_cancel: impl FnMut() -> bool,
     tui: &impl for<'a> TuiHook<&'a Graph<W>, State<W>>,
-) -> Option<Program<WT>>
+) -> Result<Option<Program<WT>>, Cancelled>
 where
     BitWord<W>: DeserializeOwned,
     <W as All>::Iter: Clone,
@@ -130,7 +138,7 @@ where
     println!("Checking empty program");
     match globals.oracle_reduced.check_program(&[]) {
         // TODO: What if the reduced program is equivalent but not the unreduced?
-        Ok(()) => return Some(vec![]), // Turns out it's actually the empty program 🤷
+        Ok(()) => return Ok(Some(vec![])), // Turns out it's actually the empty program 🤷
         Err((inp, out)) => {
             tui.found_counter_example(inp, out);
             globals.inputs.push(inp);
@@ -148,6 +156,7 @@ where
             tui.progress(i, globals.total_instructions);
             let res = connect_and_refine::<WT, W>(
                 &mut globals,
+                &mut should_cancel,
                 &mut forward_graph,
                 &mut backward_graph,
                 inst,
@@ -156,9 +165,10 @@ where
             match res {
                 ConnectAndRefineResult::Found(prog) => {
                     println!("Found program of length {}", prog.len());
-                    return Some(prog);
+                    return Ok(Some(prog));
                 }
                 ConnectAndRefineResult::Continue => {}
+                ConnectAndRefineResult::Cancel => return Err(Cancelled),
             }
         }
         // ------------------------------ Expand Phase --------------------------------------------
@@ -166,30 +176,38 @@ where
         tui.report_graph(Direction::Forward, &forward_graph);
         tui.report_graph(Direction::Backward, &backward_graph);
         if globals.forward_length + globals.backward_length + 1 == original_length - 1 {
-            return None;
+            return Ok(None);
         }
         let should_expand_forward = 2 * globals.backward_length >= globals.forward_length;
         let direction = Direction::from_is_forward(should_expand_forward);
         tui.expanding(direction);
-        if should_expand_forward {
-            expand_forward(
+        let ret = if should_expand_forward {
+            let ret = expand_forward(
                 &mut forward_graph,
                 enumeration_info,
                 globals.tui,
                 globals.total_instructions,
+                &mut should_cancel,
             );
             globals.forward_length += 1;
             tui.report_graph(Direction::Forward, &forward_graph);
+            ret
         } else {
-            expand_backward(
+            let ret = expand_backward(
                 &mut backward_graph,
                 enumeration_info,
                 globals.tui,
                 globals.total_instructions,
                 &globals.backward_map,
+                &mut should_cancel,
             );
             globals.backward_length += 1;
             tui.report_graph(Direction::Backward, &backward_graph);
+            ret
+        };
+        match ret {
+            Break(Cancelled) => return Err(Cancelled),
+            Continue(()) => (),
         }
         // print_stats(&forward_graph, &backward_graph);
     }
@@ -198,6 +216,7 @@ where
 enum ConnectAndRefineResult<W: Word + HasBitWord> {
     Found(Program<W>),
     Continue,
+    Cancel,
 }
 
 /// WT - word for the target program. WS - word for the synthesis process.
@@ -239,12 +258,16 @@ fn connect_and_refine<WT: Word + HasBitWord, WS: Word + HasBitWord>(
         impl Oracle<[Inst<WS>], State<WS>>,
         impl for<'a> TuiHook<&'a Graph<WS>, State<WS>>,
     >,
+    should_cancel: &mut impl FnMut() -> bool,
     forward_graph: &mut Graph<WS>,
     backward_graph: &mut Graph<WS>,
     inst: Inst<WS>,
     // This is the index of the input/output pair we are currently trying to connect.
     k: usize,
 ) -> ConnectAndRefineResult<WT> {
+    if should_cancel() {
+        return ConnectAndRefineResult::Cancel;
+    }
     let tui = globals.tui;
     if k > globals.inputs.len() {
         let mut counter_example_added = false;
@@ -298,7 +321,14 @@ fn connect_and_refine<WT: Word + HasBitWord, WS: Word + HasBitWord>(
                         return ConnectAndRefineResult::Found(prog);
                     }
                     Break(ProgramOrRetry::Retry) => {
-                        return connect_and_refine(globals, forward_graph, backward_graph, inst, k);
+                        return connect_and_refine(
+                            globals,
+                            should_cancel,
+                            forward_graph,
+                            backward_graph,
+                            inst,
+                            k,
+                        );
                     }
                     Continue(()) => (),
                 }
@@ -344,12 +374,18 @@ fn connect_and_refine<WT: Word + HasBitWord, WS: Word + HasBitWord>(
         forward_output.clone_to(&mut next);
         inst.run(&mut next);
         if let Some(backward_subgraph) = backward_outputs.get_mut(&next) {
-            let res = connect_and_refine(globals, forward_subgraph, backward_subgraph, inst, k + 1);
+            let res = connect_and_refine(
+                globals,
+                should_cancel,
+                forward_subgraph,
+                backward_subgraph,
+                inst,
+                k + 1,
+            );
             match res {
-                ConnectAndRefineResult::Found(prog) => {
-                    return ConnectAndRefineResult::Found(prog);
-                }
+                ConnectAndRefineResult::Found(p) => return ConnectAndRefineResult::Found(p),
                 ConnectAndRefineResult::Continue => {}
+                ConnectAndRefineResult::Cancel => return ConnectAndRefineResult::Cancel,
             }
         }
     }
@@ -364,11 +400,19 @@ fn expand_forward<W: Word + HasBitWord>(
     ei: &EnumerationInfo<W>,
     tui: &impl for<'g> TuiHook<&'g Graph<W>, State<W>>,
     total_inst: usize,
-) {
-    expand_forward_or_backward(graph, ei, tui, total_inst, |mut state, inst| {
-        inst.run(&mut state);
-        [state]
-    })
+    should_cancel: &mut impl FnMut() -> bool,
+) -> ControlFlow<Cancelled> {
+    expand_forward_or_backward(
+        graph,
+        ei,
+        tui,
+        total_inst,
+        |mut state, inst| {
+            inst.run(&mut state);
+            [state]
+        },
+        should_cancel,
+    )
 }
 
 fn expand_backward<W: Word + HasBitWord>(
@@ -377,10 +421,16 @@ fn expand_backward<W: Word + HasBitWord>(
     tui: &impl for<'g> TuiHook<&'g Graph<W>, State<W>>,
     total_inst: usize,
     bm: &BackwardMap<W>,
-) {
-    expand_forward_or_backward(graph, ei, tui, total_inst, |state, inst| {
-        inst.run_backward(state, bm).into_iter()
-    });
+    should_cancel: &mut impl FnMut() -> bool,
+) -> ControlFlow<Cancelled> {
+    expand_forward_or_backward(
+        graph,
+        ei,
+        tui,
+        total_inst,
+        |state, inst| inst.run_backward(state, bm).into_iter(),
+        should_cancel,
+    )
 }
 
 fn expand_forward_or_backward<W: Word + HasBitWord, StepRet: IntoIterator<Item = State<W>>>(
@@ -389,7 +439,8 @@ fn expand_forward_or_backward<W: Word + HasBitWord, StepRet: IntoIterator<Item =
     tui: &impl for<'g> TuiHook<&'g Graph<W>, State<W>>,
     total_inst: usize,
     step: impl Fn(State<W>, Inst<W>) -> StepRet,
-) {
+    should_cancel: &mut impl FnMut() -> bool,
+) -> ControlFlow<Cancelled> {
     // let old_graph = std::mem::replace(graph, Graph::Nest(Default::default()));
     let old_graph = std::mem::replace(graph, Graph::Leaf(Default::default()));
     debug_assert_ne!(old_graph.n_programs(), 0);
@@ -401,10 +452,18 @@ fn expand_forward_or_backward<W: Word + HasBitWord, StepRet: IntoIterator<Item =
     {
         tui.progress(i, total_inst);
         out_states.clear();
-        recurse(&old_graph, graph, inst, &mut out_states, &step);
+        recurse(
+            &old_graph,
+            graph,
+            inst,
+            &mut out_states,
+            &step,
+            should_cancel,
+        )?;
     }
     tui.progress(total_inst, total_inst);
     debug_assert_ne!(graph.n_programs(), 0);
+    return Continue(());
 
     fn recurse<W: Word + HasBitWord, StepRet: IntoIterator<Item = State<W>>>(
         old_graph: &Graph<W>,
@@ -412,7 +471,11 @@ fn expand_forward_or_backward<W: Word + HasBitWord, StepRet: IntoIterator<Item =
         inst: Inst<W>,
         out_states: &mut Vec<State<W>>,
         step: &impl Fn(State<W>, Inst<W>) -> StepRet,
-    ) {
+        should_cancel: &mut impl FnMut() -> bool,
+    ) -> ControlFlow<Cancelled> {
+        if should_cancel() {
+            return Break(Cancelled);
+        }
         match old_graph {
             Graph::Leaf(programs) if programs.is_empty() => (),
             Graph::Leaf(programs) => {
@@ -423,12 +486,13 @@ fn expand_forward_or_backward<W: Word + HasBitWord, StepRet: IntoIterator<Item =
                 for (state, sub_graph) in hash_map.iter() {
                     for out_state in step(*state, inst) {
                         out_states.push(out_state);
-                        recurse(sub_graph, new_graph, inst, out_states, step);
+                        recurse(sub_graph, new_graph, inst, out_states, step, should_cancel)?;
                         out_states.pop();
                     }
                 }
             }
         }
+        Continue(())
     }
 }
 

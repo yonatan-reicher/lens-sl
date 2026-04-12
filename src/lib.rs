@@ -41,6 +41,9 @@ mod all;
 mod word;
 mod direction;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Cancelled;
+
 // Let's expose just the necessary items.
 
 pub use arm::parse;
