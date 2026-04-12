@@ -179,8 +179,8 @@ fn benchmarks() -> Vec<Benchmark> {
 
 fn benchmarks_in_programs_dir() -> Vec<Benchmark> {
     let mut benchmarks = Vec::new();
-    let Ok(entries) = fs::read_dir("./programs") else {
-        eprintln!("warning: could not read ./programs directory");
+    let Ok(entries) = fs::read_dir("./lens-benchmarks") else {
+        eprintln!("warning: could not read ./lens-benchmarks directory");
         return benchmarks;
     };
 
