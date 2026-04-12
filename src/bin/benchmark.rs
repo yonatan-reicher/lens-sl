@@ -173,15 +173,16 @@ fn benchmarks() -> Vec<Benchmark> {
         },
     ]
     .into_iter()
-    .chain(benchmarks_in_programs_dir())
+    .chain(benchmarks_in_dir("./our-benchmarks"))
+    .chain(benchmarks_in_dir("./lens-benchmarks"))
     .collect()
 }
 
-fn benchmarks_in_programs_dir() -> Vec<Benchmark> {
+fn benchmarks_in_dir(path: impl AsRef<Path> + std::fmt::Display) -> Vec<Benchmark> {
     let mut benchmarks = Vec::new();
-    let Ok(entries) = fs::read_dir("./lens-benchmarks") else {
-        eprintln!("warning: could not read ./lens-benchmarks directory");
-        return benchmarks;
+    let Ok(entries) = fs::read_dir(&path) else {
+        eprintln!("error: could not read '{path}'");
+        exit(1);
     };
 
     for entry_result in entries {

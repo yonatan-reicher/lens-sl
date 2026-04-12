@@ -1,0 +1,6 @@
+mov r0, r0, asr #31
+add r0, r0, #0
+add r0, r0, #5
+add r0, r0, #0
+mov r0, r0, asr #31
+mov r0, r0, asr #31
