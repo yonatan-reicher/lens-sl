@@ -153,20 +153,10 @@ fn print_result(b: &Benchmark, result: &BenchmarkResult) {
 }
 
 fn benchmarks() -> Vec<Benchmark> {
-    [
-        Benchmark {
-            name: "empty".to_string(),
-            input: vec![],
-        },
-        Benchmark {
-            name: "double move".to_string(),
-            input: vec![inst!(MovI, 0, 5), inst!(MovI, 0, 3)],
-        },
-    ]
-    .into_iter()
-    .chain(benchmarks_in_dir("./our-benchmarks"))
-    .chain(benchmarks_in_dir("./lens-benchmarks"))
-    .collect()
+    [].into_iter()
+        .chain(benchmarks_in_dir("./our-benchmarks"))
+        .chain(benchmarks_in_dir("./lens-benchmarks"))
+        .collect()
 }
 
 fn benchmarks_in_dir(path: impl AsRef<Path> + std::fmt::Display) -> Vec<Benchmark> {
@@ -285,7 +275,9 @@ fn parse_options() -> Options {
                         exit(1);
                     }
                     Some(s) => {
-                        eprintln!("error: filter argument must be either 'ours' or 'lens', but was '{s}'");
+                        eprintln!(
+                            "error: filter argument must be either 'ours' or 'lens', but was '{s}'"
+                        );
                         exit(1);
                     }
                 };
@@ -315,7 +307,9 @@ fn parse_options() -> Options {
 }
 
 fn print_usage(command: &str) {
-    eprintln!("Usage: {command} [--sl] [--parallel] [--timeout <seconds>] [--filter [ours | lens]]");
+    eprintln!(
+        "Usage: {command} [--sl] [--parallel] [--timeout <seconds>] [--filter [ours | lens]]"
+    );
 }
 
 fn panic_payload_to_string(payload: Box<dyn std::any::Any + Send>) -> String {
