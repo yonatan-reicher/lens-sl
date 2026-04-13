@@ -298,11 +298,6 @@ where
     }
 }
 
-enum ConnectAndRefineResult<W: Word + HasBitWord> {
-    Found(Program<W>),
-    Continue,
-}
-
 /// WT - word for the target program. WS - word for the synthesis process.
 struct Globals<
     'tui,
