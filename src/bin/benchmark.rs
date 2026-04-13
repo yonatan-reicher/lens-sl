@@ -153,10 +153,14 @@ fn print_result(b: &Benchmark, result: &BenchmarkResult) {
 }
 
 fn benchmarks() -> Vec<Benchmark> {
-    [].into_iter()
-        .chain(benchmarks_in_dir("./our-benchmarks"))
-        .chain(benchmarks_in_dir("./lens-benchmarks"))
-        .collect()
+    let mut ret = vec![];
+    if !matches!(O.filter, Filter::Ours) {
+        ret.extend(benchmarks_in_dir("./lens-benchmarks"))
+    }
+    if !matches!(O.filter, Filter::Lens) {
+        ret.extend(benchmarks_in_dir("./our-benchmarks"))
+    }
+    ret
 }
 
 fn benchmarks_in_dir(path: impl AsRef<Path> + std::fmt::Display) -> Vec<Benchmark> {
