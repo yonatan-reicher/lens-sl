@@ -12,10 +12,20 @@ use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
+#[derive(Default)]
 struct Options {
     parallel: bool,
     sl: bool,
     timeout: Option<Duration>,
+    filter: Filter,
+}
+
+#[derive(Clone, Default)]
+enum Filter {
+    #[default]
+    None,
+    Ours,
+    Lens,
 }
 
 static O: std::sync::LazyLock<Options> = std::sync::LazyLock::new(parse_options);
@@ -93,7 +103,9 @@ fn run(b: &Benchmark) -> BenchmarkResult {
     let timeout = ret == Break(Err(Cancelled));
     let success = !timeout
         && !found.is_empty()
-        && found.iter().all(|optimized| optimized.len() < b.input.len());
+        && found
+            .iter()
+            .all(|optimized| optimized.len() < b.input.len());
     BenchmarkResult {
         success,
         timeout,
@@ -203,10 +215,7 @@ fn benchmarks_in_dir(path: impl AsRef<Path> + std::fmt::Display) -> Vec<Benchmar
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| path.display().to_string());
 
-        benchmarks.push(Benchmark {
-            name,
-            input,
-        });
+        benchmarks.push(Benchmark { name, input });
     }
 
     benchmarks
@@ -255,11 +264,7 @@ impl Benchmark {
 }
 
 fn parse_options() -> Options {
-    let mut ret = Options {
-        parallel: false,
-        sl: false,
-        timeout: None,
-    };
+    let mut ret = Options::default();
     let mut args = env::args();
     let command = args.next().unwrap_or_else(|| "benchmark".to_string());
 
@@ -271,6 +276,20 @@ fn parse_options() -> Options {
             }
             "--parallel" | "-p" => ret.parallel = true,
             "--sl" => ret.sl = true,
+            "--filter" => {
+                ret.filter = match args.next().as_deref() {
+                    Some("ours") => Filter::Ours,
+                    Some("lens") => Filter::Lens,
+                    None => {
+                        eprintln!("error: filter option requires an argument");
+                        exit(1);
+                    }
+                    Some(s) => {
+                        eprintln!("error: filter argument must be either 'ours' or 'lens', but was '{s}'");
+                        exit(1);
+                    }
+                };
+            }
             "--timeout" => {
                 let Some(t) = args.next() else {
                     eprintln!("error: timeout option needs a time argument, but had no argument");
@@ -296,7 +315,7 @@ fn parse_options() -> Options {
 }
 
 fn print_usage(command: &str) {
-    eprintln!("Usage: {command} [--sl] [--parallel] [--timeout <seconds>]");
+    eprintln!("Usage: {command} [--sl] [--parallel] [--timeout <seconds>] [--filter [ours | lens]]");
 }
 
 fn panic_payload_to_string(payload: Box<dyn std::any::Any + Send>) -> String {
