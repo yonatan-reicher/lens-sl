@@ -17,6 +17,7 @@ use crate::word::prelude::*;
 use crate::{Cancelled, ShouldCancel};
 
 // std imports
+use std::cell::{Ref, RefCell};
 use std::ops::ControlFlow::{self, Break, Continue};
 
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -103,8 +104,8 @@ type Bank<W> = FxHashMap<MaskedState<W>, FxHashMap<MaskedState<W>, FxHashSet<Ins
 fn synthesize<WT, W>(
     registers: &[Register],
     immediates: &[W],
-    oracle: impl Oracle<[Inst<WT>], State<WT>>,
-    oracle_reduced: impl Oracle<[Inst<W>], State<W>>,
+    mut oracle: impl Oracle<[Inst<WT>], State<WT>>,
+    mut oracle_reduced: impl Oracle<[Inst<W>], State<W>>,
     reducer: Reducer<WT, W>,
     // The length of the original program.
     // In the future, this could be max_cost.
@@ -126,41 +127,39 @@ where
         include_nop: false,
         skip_cond_code: false,
     };
-    let mut g = Globals {
-        oracle,
-        oracle_reduced,
-        inputs: vec![],
-        outputs: vec![],
-        forward_length: 0,
-        extender: reducer,
+    let mut forward_length = 0;
+    let total_instructions = Inst::enumerate(*enumeration_info).count();
+    let mut seen = FxHashSet::default();
+    let mut current_states = vec![]; // TODO: rename to frontier.
+    let mut next_states = vec![];
+    let mut bank = Bank::default();
+    let inputs_outputs = InputsOutputsCell::default();
+    let mut oracle = ReducedProgramOracle {
+        oracle: &mut oracle,
+        oracle_reduced: &mut oracle_reduced,
+        original_reduced: &original_reduced,
+        reducer: &reducer,
         tui,
-        total_instructions: Inst::enumerate(*enumeration_info).count(),
-        original_reduced,
-        registers,
-        immediates,
-        seen: Default::default(),
-        current_states: Default::default(),
-        next_states: Default::default(),
-        bank: Default::default(),
+        inputs_outputs: &inputs_outputs,
     };
     // ----- The Actual Loop -----------------------------------------------------------------------
     'restart: loop {
-        g.current_states.clear();
-        g.current_states.push((g.inputs.clone(), vec![]));
-        // ----- Reachability - Bfs loop to reach g.outputs ----------------------------------------
-        for _length in 0..g.original_reduced.len() {
+        current_states.clear();
+        current_states.push((inputs_outputs.inputs().to_vec(), vec![]));
+        // ----- Reachability - Bfs loop to reach outputs ----------------------------------------
+        for _length in 0..original_reduced.len() {
             tui.searching();
-            tui.progress(0, g.total_instructions);
-            let len = g.current_states.len();
-            for (i, (inputs, prog)) in g.current_states.iter().cloned().enumerate() {
+            tui.progress(0, total_instructions);
+            let len = current_states.len();
+            for (i, (inputs, prog)) in current_states.iter().cloned().enumerate() {
                 tui.progress(i, len);
                 // Should we stop?
                 if should_cancel.check() {
                     return Err(Cancelled);
                 }
                 // Did we succeed?
-                if inputs == g.outputs {
-                    match verify(&prog, &mut g) {
+                if inputs == *inputs_outputs.outputs() {
+                    match oracle.verify(&prog) {
                         Continue(()) => todo!("what do we do here? '{prog:?}'"),
                         Break(ProgramOrRetry::Program(p)) => return Ok(Some(p)),
                         Break(ProgramOrRetry::Retry) => continue 'restart,
@@ -168,8 +167,8 @@ where
                 }
                 // First we need to check that all the states are properly represented in the bank.
                 for inp in inputs.iter().cloned() {
-                    if !g.bank.contains_key(&inp) {
-                        init_bank(&mut g.bank, inp, g.registers, g.immediates);
+                    if !bank.contains_key(&inp) {
+                        init_bank(&mut bank, inp, registers, immediates);
                     }
                 }
                 // The red code.
@@ -187,8 +186,7 @@ where
                         .iter()
                         .map(|sub_input| {
                             // For this state, return set of commands that can run from it.
-                            g.bank
-                                .get(sub_input)
+                            bank.get(sub_input)
                                 .unwrap_or(&empty)
                                 .iter()
                                 .flat_map(|(_, set)| set.iter().copied())
@@ -211,10 +209,10 @@ where
                             .map(|s| inst.run_masked(*s))
                             .collect::<Option<Vec<_>>>()
                             .unwrap();
-                        if g.seen.contains(&outputs) {
+                        if seen.contains(&outputs) {
                             continue;
                         }
-                        g.seen.insert(outputs.clone());
+                        seen.insert(outputs.clone());
                         // Extend Hila's discard set. Extend it by all the instructions which do the
                         // exact same thing as this instruction on the current inputs.
                         for sub_inputs in inputs
@@ -232,8 +230,7 @@ where
                             {
                                 if !sub_inputs.iter().zip(sub_outputs.iter()).all(
                                     |(sub_input, sub_output)| {
-                                        g.bank
-                                            .get(sub_input)
+                                        bank.get(sub_input)
                                             .expect("we have initialized this at the start")
                                             .contains_key(sub_output)
                                     },
@@ -241,13 +238,12 @@ where
                                     continue;
                                 }
                                 discarded.extend(intersect_all(
-                                    //&inputs
+                                    // &inputs
                                     &sub_inputs
                                         .iter()
                                         .zip(sub_outputs.iter())
                                         .map(|(input, sub_output)| {
-                                            g.bank
-                                                .get(input)
+                                            bank.get(input)
                                                 .expect("we have initialized this at the start")
                                                 .get(sub_output)
                                                 .unwrap()
@@ -258,52 +254,22 @@ where
                             }
                         }
                         // TODO: you know how to solve this memory allocation...
-                        g.next_states
-                            .push((outputs, prog.clone().mutate(|p| p.push(inst))));
+                        next_states.push((outputs, prog.clone().mutate(|p| p.push(inst))));
                     }
                 }
             }
             tui.progress(len, len);
-            if g.forward_length == original_length - 1 {
+            if forward_length == original_length - 1 {
                 return Ok(None);
             }
             // ------------------------------ Expand Phase --------------------------------------------
             let direction = Direction::Forward;
             tui.expanding(direction);
             //expand(&mut todo!(), g.tui);
-            g.forward_length += 1;
-            std::mem::swap(&mut g.next_states, &mut g.current_states);
+            forward_length += 1;
+            std::mem::swap(&mut next_states, &mut current_states);
         }
     }
-}
-
-/// WT - word for the target program. WS - word for the synthesis process.
-struct Globals<
-    'tui,
-    WT: Word + HasBitWord,
-    WS: Word + HasBitWord,
-    OT: Oracle<[Inst<WT>], State<WT>>,
-    OS: Oracle<[Inst<WS>], State<WS>>,
-    TUI: for<'g> TuiHook<&'g Graph<WS>, MaskedState<WS>>,
-> {
-    oracle: OT,
-    /// The oracle that checks program in the reduced word size.
-    oracle_reduced: OS,
-    inputs: Vec<MaskedState<WS>>,
-    outputs: Vec<MaskedState<WS>>,
-    seen: FxHashSet<Vec<MaskedState<WS>>>,
-    current_states: Vec<(Vec<MaskedState<WS>>, Program<WS>)>,
-    next_states: Vec<(Vec<MaskedState<WS>>, Program<WS>)>,
-    bank: Bank<WS>,
-    /// The length of the prefixes of the program being built.
-    forward_length: usize,
-    extender: Reducer<WT, WS>,
-    tui: &'tui TUI,
-    /// The total instructions we are enumerating
-    total_instructions: usize,
-    original_reduced: Program<WS>,
-    registers: &'tui [Register],
-    immediates: &'tui [WS],
 }
 
 enum ProgramOrRetry<W: Word + HasBitWord> {
@@ -340,64 +306,69 @@ fn init_bank<W: Word + HasBitWord>(
     }
 }
 
-/// Checks if the given counter-example has already been seen, by searching the input-output pairs
-/// in the global context.
-fn has_counter_example_been_seen<WT: Word + HasBitWord, WS: Word + HasBitWord>(
-    globals: &mut Globals<
-        '_,
-        WT,
-        WS,
-        impl Oracle<[Inst<WT>], State<WT>>,
-        impl Oracle<[Inst<WS>], State<WS>>,
-        impl for<'g> TuiHook<&'g Graph<WS>, MaskedState<WS>>,
-    >,
-    inp: &MaskedState<WS>,
-    out: &MaskedState<WS>,
-) -> bool {
-    globals
-        .inputs
-        .iter()
-        .zip(&globals.outputs)
-        .any(|(i, o)| i == inp && o == out)
+#[derive(Debug, Default)]
+#[allow(clippy::type_complexity)]
+struct InputsOutputsCell<W>(RefCell<(Vec<MaskedState<W>>, Vec<MaskedState<W>>)>);
+
+impl<W: Word> InputsOutputsCell<W> {
+    pub fn inputs(&self) -> Ref<'_, [MaskedState<W>]> {
+        Ref::map(self.0.borrow(), |(inps, _)| inps.as_slice())
+    }
+    pub fn outputs(&self) -> Ref<'_, [MaskedState<W>]> {
+        Ref::map(self.0.borrow(), |(_, outs)| outs.as_slice())
+    }
+    pub fn push(&self, inp: MaskedState<W>, out: MaskedState<W>) {
+        let (inps, outs) = &mut *self.0.borrow_mut();
+        inps.push(inp);
+        outs.push(out);
+    }
+    pub fn contains(&self, inp: &MaskedState<W>, out: &MaskedState<W>) -> bool {
+        let (inps, outs) = &*self.0.borrow();
+        inps.iter().zip(outs).contains(&(inp, out))
+    }
 }
 
-fn verify<WT, WS>(
-    prog: &[Inst<WS>],
-    g: &mut Globals<
-        '_,
-        WT,
-        WS,
-        impl Oracle<[Inst<WT>], State<WT>>,
-        impl Oracle<[Inst<WS>], State<WS>>,
-        impl for<'g> TuiHook<&'g Graph<WS>, MaskedState<WS>>,
-    >,
-) -> ControlFlow<ProgramOrRetry<WT>>
+struct ReducedProgramOracle<'a, WBig: HasBitWord, W: HasBitWord> {
+    inputs_outputs: &'a InputsOutputsCell<W>,
+    oracle: &'a mut dyn Oracle<[Inst<WBig>], State<WBig>>,
+    oracle_reduced: &'a mut dyn Oracle<[Inst<W>], State<W>>,
+    original_reduced: &'a [Inst<W>],
+    reducer: &'a Reducer<WBig, W>,
+    tui: &'a dyn TuiHook<&'a Graph<W>, MaskedState<W>>,
+}
+
+impl<'a, WBig, W> ReducedProgramOracle<'a, WBig, W>
 where
-    WT: Word + HasBitWord,
-    WS: Word + HasBitWord,
+    WBig: Word + HasBitWord,
+    W: Word + HasBitWord,
 {
-    use crate::verify;
-    match verify::verify(
-        prog,
-        &g.extender,
-        &mut g.oracle_reduced,
-        &mut g.oracle,
-        |equivalent_prog| Break(ProgramOrRetry::Program(equivalent_prog.to_vec())),
-    ) {
-        verify::Result::CounterExample(inp, _out) => {
-            let read_mask = what_program_reads(g.original_reduced.iter().cloned(), &inp);
-            let inp = inp.masked(read_mask.into());
-            let out = run_program_masked(g.original_reduced.iter().cloned(), inp).expect("the counter example found by the oracle must be runnable and the input mask for the program must be enough for it to run");
-            g.tui.found_counter_example(inp, out);
-            assert!(
-                !has_counter_example_been_seen(g, &inp, &out),
-                "Counter-example from reduced oracle should not have been seen before."
-            );
-            g.inputs.push(inp);
-            g.outputs.push(out);
-            Break(ProgramOrRetry::Retry)
+    fn verify(&mut self, prog: &[Inst<W>]) -> ControlFlow<ProgramOrRetry<WBig>>
+    where
+        WBig: Word + HasBitWord,
+        W: Word + HasBitWord,
+    {
+        use crate::verify;
+        match verify::verify(
+            prog,
+            self.reducer,
+            self.oracle_reduced,
+            self.oracle,
+            |equivalent_prog| Break(ProgramOrRetry::Program(equivalent_prog.to_vec())),
+        ) {
+            verify::Result::CounterExample(inp, _out) => {
+                let read_mask = what_program_reads(self.original_reduced.iter().cloned(), &inp);
+                let inp = inp.masked(read_mask.into());
+                let out = run_program_masked(self.original_reduced.iter().cloned(), inp).expect("the counter example found by the oracle must be runnable and the input mask for the program must be enough for it to run");
+                self.tui.found_counter_example(inp, out);
+                assert!(
+                    !self.inputs_outputs.contains(&inp, &out),
+                    "Counter-example from reduced oracle should not have been seen before."
+                );
+                self.inputs_outputs.push(inp, out);
+                Break(ProgramOrRetry::Retry)
+            }
+            verify::Result::Break(prog) => Break(prog),
+            verify::Result::Continue => Continue(()),
         }
-        verify::Result::Break(prog) => Break(prog),
-        verify::Result::Continue => Continue(()),
     }
 }
