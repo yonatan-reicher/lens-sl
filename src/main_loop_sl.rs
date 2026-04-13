@@ -227,7 +227,7 @@ where
                 // Did we succeed?
                 if inputs == g.outputs {
                     match verify(&prog, &mut g) {
-                        Continue(()) => todo!(),
+                        Continue(()) => todo!("what do we do here? '{prog:?}'"),
                         Break(ProgramOrRetry::Program(p)) => return Ok(Some(p)),
                         Break(ProgramOrRetry::Retry) => continue 'restart,
                     }
