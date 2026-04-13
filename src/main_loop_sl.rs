@@ -8,6 +8,7 @@ use crate::arm::{Register, State, run_program_masked, what_program_reads};
 use crate::collect_registers::Collector;
 use crate::direction::Direction;
 use crate::graph;
+use crate::intersect_all::intersect_all;
 use crate::oracle::{Oracle, SmtOracle};
 use crate::programs_sl as programs;
 use crate::reduce_bit_width::{ImmediateInfo, Reducer};
@@ -22,6 +23,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use serde::de::DeserializeOwned;
 
 use functionality::prelude::*;
+
+use itertools::Itertools;
 
 // =========================================== Graph ==============================================
 
@@ -238,50 +241,92 @@ where
                         init_bank(&mut g.bank, inp, g.registers, g.immediates);
                     }
                 }
-                // Find all instructions (and their effects!) that can run from the current states.
-                // Instead of doing this by iterating all instructions, do this by intersection of equivalence
-                // classes that can run from the states.
-                let empty = Default::default();
-                let empty1 = Default::default();
-                let insts = inputs
+                // The red code.
+                let mut discarded = FxHashSet::<Inst<W>>::default();
+                for sub_inputs in inputs
                     .iter()
-                    .map(|state| {
-                        // For this state, return set of commands that can run from it.
-                        state
-                            .sub_states()
-                            .flat_map(|sub_state| {
-                                g.bank
-                                    .get(&sub_state)
-                                    .unwrap_or(&empty)
-                                    .iter()
-                                    .flat_map(|(_, set)| set.iter().copied())
-                            })
-                            .collect::<FxHashSet<_>>()
-                    })
-                    .collect::<Vec<_>>()
-                    // Intersect!
-                    .pipe(|sets| {
-                        let smallest = sets.iter().min_by_key(|s| s.len()).unwrap_or(&empty1);
-                        smallest
-                            .iter()
-                            .cloned()
-                            .filter(|x| sets.iter().all(|s| s.contains(x)))
-                            .collect::<FxHashSet<_>>()
-                    });
-                for inst in insts {
-                    let next_states = inputs
+                    .map(|s| s.sub_states())
+                    .multi_cartesian_product()
+                {
+                    // Find all instructions (and their effects!) that can run from the current states.
+                    // Instead of doing this by iterating all instructions, do this by intersection of equivalence
+                    // classes that can run from the states.
+                    let empty = Default::default();
+                    let insts = sub_inputs
                         .iter()
-                        .map(|s| inst.run_masked(*s))
-                        .collect::<Option<Vec<_>>>()
-                        .unwrap();
-                    if g.seen.contains(&next_states) {
-                        continue;
+                        .map(|sub_input| {
+                            // For this state, return set of commands that can run from it.
+                            g.bank
+                                .get(sub_input)
+                                .unwrap_or(&empty)
+                                .iter()
+                                .flat_map(|(_, set)| set.iter().copied())
+                                .collect::<FxHashSet<_>>()
+                        })
+                        .collect::<Vec<_>>()
+                        // Intersect!
+                        .as_slice()
+                        .pipe(intersect_all)
+                        .cloned()
+                        .collect::<FxHashSet<_>>();
+                    for inst in insts {
+                        // We can't do this filtering as part of the intersection above because the
+                        // discard set changes through the loop.
+                        if discarded.contains(&inst) {
+                            continue;
+                        }
+                        let outputs = inputs
+                            .iter()
+                            .map(|s| inst.run_masked(*s))
+                            .collect::<Option<Vec<_>>>()
+                            .unwrap();
+                        if g.seen.contains(&outputs) {
+                            continue;
+                        }
+                        g.seen.insert(outputs.clone());
+                        // Extend Hila's discard set. Extend it by all the instructions which do the
+                        // exact same thing as this instruction on the current inputs.
+                        for sub_inputs in inputs
+                            .iter()
+                            .map(|s| s.sub_states())
+                            .multi_cartesian_product()
+                        {
+                            for sub_outputs in outputs
+                                .iter()
+                                .map(|s| s.sub_states())
+                                .multi_cartesian_product()
+                            {
+                                if !sub_inputs.iter().zip(sub_outputs.iter()).all(
+                                    |(sub_input, sub_output)| {
+                                        g.bank
+                                            .get(sub_input)
+                                            .expect("we have initialized this at the start")
+                                            .contains_key(sub_output)
+                                    },
+                                ) {
+                                    continue;
+                                }
+                                discarded.extend(intersect_all(
+                                    //&inputs
+                                    &sub_inputs
+                                        .iter()
+                                        .zip(sub_outputs.iter())
+                                        .map(|(input, sub_output)| {
+                                            g.bank
+                                                .get(input)
+                                                .expect("we have initialized this at the start")
+                                                .get(sub_output)
+                                                .unwrap()
+                                                .clone()
+                                        })
+                                        .collect::<Vec<_>>(),
+                                ));
+                            }
+                        }
+                        // TODO: you know how to solve this memory allocation...
+                        g.next_states
+                            .push((outputs, prog.clone().mutate(|p| p.push(inst))));
                     }
-                    // TODO: Add Hila's full seen set.
-                    g.seen.insert(next_states.clone());
-                    // TODO: you know how to solve this memory allocation...
-                    g.next_states
-                        .push((next_states, prog.clone().mutate(|p| p.push(inst))));
                 }
             }
             tui.progress(len, len);
