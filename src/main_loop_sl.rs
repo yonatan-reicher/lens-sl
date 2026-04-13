@@ -288,7 +288,10 @@ where
                         // exact same thing as this instruction on the current inputs.
                         for sub_inputs in inputs
                             .iter()
-                            .map(|s| s.sub_states())
+                            .zip(&sub_inputs)
+                            .map(|(s, sub_input)| {
+                                s.sub_states().filter(|s| sub_input.is_sub_state(s))
+                            })
                             .multi_cartesian_product()
                         {
                             for sub_outputs in outputs
