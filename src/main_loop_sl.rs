@@ -4,7 +4,7 @@
 use crate::all::All;
 use crate::arm::enumerate::{EnumerationInfo, EnumerationInfoOptions};
 use crate::arm::state::Masked as MaskedState;
-use crate::arm::{Register, State, run_program_masked, what_program_reads};
+use crate::arm::{self, Register, State, run_program_masked, what_program_reads};
 use crate::collect_registers::Collector;
 use crate::direction::Direction;
 use crate::graph;
@@ -28,7 +28,7 @@ use itertools::Itertools;
 
 // =========================================== Graph ==============================================
 
-type Inst<W> = crate::arm::Inst<W, BitWord<W>>;
+type Inst<W> = arm::Inst<W, BitWord<W>>;
 
 type Program<W> = programs::Program<Inst<W>>;
 
