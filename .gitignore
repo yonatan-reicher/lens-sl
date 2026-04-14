@@ -7,3 +7,4 @@ perf.data.old
 *.postcard
 # Neo/Vim swap files
 *~
+/references
