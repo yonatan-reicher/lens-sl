@@ -36,7 +36,7 @@ let supported_opcodes = [
 ];
 
 def main [--only-unsupported (-u)] {
-  ls programs/
+  ls lens-benchmarks/
   | where ($it.name | str ends-with ".s")
   | each {
     let name = $in.name;
