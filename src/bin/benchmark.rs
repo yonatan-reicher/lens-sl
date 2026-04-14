@@ -190,7 +190,7 @@ fn benchmarks_in_dir(path: impl AsRef<Path> + std::fmt::Display) -> Vec<Benchmar
         let entry = match entry_result {
             Ok(entry) => entry,
             Err(err) => {
-                eprintln!("warning: skipping unreadable entry in ./programs: {err}");
+                eprintln!("warning: skipping unreadable entry in '{path}': {err}");
                 continue;
             }
         };
