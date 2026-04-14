@@ -1,3 +1,4 @@
+use functionality::Pipe;
 use lens_sl::{Algorithm, Cancelled, Config, Inst, ShouldCancel, Word4, Word32, optimize};
 use std::env;
 use std::fs::{self, File};
@@ -21,6 +22,7 @@ struct Options {
     filter: Filter,
     csv: Option<Mutex<File>>,
     forward_only: bool,
+    average_over: Option<u32>,
 }
 
 #[derive(Clone, Default)]
@@ -75,6 +77,7 @@ fn run_all_parallel(benchmarks: &[Benchmark]) {
                         success: false,
                         timeout: false,
                         elapsed: Duration::ZERO,
+                        std: Duration::ZERO,
                         found: vec![],
                         panic_message: Some(panic_payload_to_string(payload)),
                     },
@@ -93,29 +96,57 @@ fn run_all_parallel(benchmarks: &[Benchmark]) {
 }
 
 fn run(b: &Benchmark) -> BenchmarkResult {
-    let mut found = vec![];
-    let callback = |optimized: Vec<Inst<W>>| -> ControlFlow<()> {
-        found.push(optimized);
-        Continue(())
-    };
-
     // Run!
-    let started_at = Instant::now();
-    let ret = b.optimize::<()>(callback);
-    let elapsed = started_at.elapsed();
-    let timeout = ret == Break(Err(Cancelled));
-    let success = !timeout
-        && !found.is_empty()
-        && found
-            .iter()
-            .all(|optimized| optimized.len() < b.input.len());
-    BenchmarkResult {
-        success,
-        timeout,
-        elapsed,
-        found,
-        panic_message: None,
-    }
+    (0..O.average_over.unwrap_or(1))
+        .map(|_| {
+            let mut found = vec![];
+            let callback = |optimized: Vec<Inst<W>>| -> ControlFlow<()> {
+                found.push(optimized);
+                Continue(())
+            };
+
+            let started_at = Instant::now();
+            let ret = b.optimize::<()>(callback);
+            let elapsed = started_at.elapsed();
+            let timeout = ret == Break(Err(Cancelled));
+            let success = !timeout
+                && !found.is_empty()
+                && found
+                    .iter()
+                    .all(|optimized| optimized.len() < b.input.len());
+            BenchmarkResult {
+                success,
+                timeout,
+                elapsed,
+                std: Duration::ZERO,
+                found,
+                panic_message: None,
+            }
+        })
+        .collect::<Vec<_>>()
+        .pipe(|v| {
+            let all_success = v.iter().all(|b| b.success);
+            let none_success = v.iter().all(|b| !b.success);
+            #[rustfmt::skip]
+            let success = if all_success { true } else if none_success { false } else { todo!() };
+            let all_timeout = v.iter().all(|b| b.timeout);
+            let none_timeout = v.iter().all(|b| !b.timeout);
+            #[rustfmt::skip]
+            let timeout = if all_timeout { true } else if none_timeout { false } else { todo!() };
+            #[rustfmt::skip]
+            let elapsed = v.iter().map(|b| b.elapsed).sum::<Duration>().mul_f64(1.0 / v.len() as f64);
+            let found = v[0].found.clone();
+            if !v.iter().all(|b| b.found == found) { todo!() }
+            let std = std(v.iter().map(|b| &b.elapsed));
+            BenchmarkResult {
+                success,
+                timeout,
+                elapsed,
+                found,
+                std,
+                panic_message: None,
+            }
+        })
 }
 
 fn print_result(b: &Benchmark, result: &BenchmarkResult) {
@@ -139,7 +170,7 @@ fn print_result(b: &Benchmark, result: &BenchmarkResult) {
     );
     if let Some(csv) = &O.csv {
         let csv = &mut csv.lock().unwrap();
-        let (name, success, time) = (
+        let (name, success, time, std) = (
             b.name.as_str(),
             result.success,
             if result.timeout {
@@ -147,8 +178,9 @@ fn print_result(b: &Benchmark, result: &BenchmarkResult) {
             } else {
                 result.elapsed.as_secs_f64().to_string()
             },
+            result.std.as_secs_f64(),
         );
-        let _ = writeln!(csv, "{name},{success},{time}");
+        let _ = writeln!(csv, "{name},{success},{time},{std}");
     }
     if !result.success {
         if result.found.is_empty() {
@@ -244,6 +276,7 @@ struct BenchmarkResult {
     success: bool,
     timeout: bool,
     elapsed: Duration,
+    std: Duration,
     found: Vec<Vec<Inst<W>>>,
     panic_message: Option<String>,
 }
@@ -320,7 +353,7 @@ fn parse_options() -> Options {
                     }
                     Some(path) => match File::create(path) {
                         Ok(mut f) => {
-                            let _ = writeln!(f, "name,success,time(seconds/timeout)");
+                            let _ = writeln!(f, "name,success,time(seconds/timeout),std");
                             f
                         }
                         Err(e) => {
@@ -332,6 +365,25 @@ fn parse_options() -> Options {
             }
             "--forward-only" | "-f" => {
                 ret.forward_only = true;
+            }
+            "--average-over" | "-a" => {
+                ret.average_over = Some(match args.next() {
+                    None => {
+                        eprintln!(
+                            "error: average-over option needs a number argument, but had no argument"
+                        );
+                        exit(1);
+                    }
+                    Some(n) => match n.parse() {
+                        Err(_) => {
+                            eprintln!(
+                                "error: average-over option needs a number argument, but got '{n}'"
+                            );
+                            exit(1);
+                        }
+                        Ok(n) => n,
+                    },
+                })
             }
             "--timeout" => {
                 let Some(t) = args.next() else {
@@ -359,7 +411,7 @@ fn parse_options() -> Options {
 
 fn print_usage(command: &str) {
     eprintln!(
-        "Usage: {command} [--sl] [--parallel] [--timeout <seconds>] [--filter [ours | lens]] [--csv <filename>] [--forward-only | -f]"
+        "Usage: {command} [--sl] [--parallel] [--timeout <seconds>] [--filter [ours | lens]] [--csv <filename>] [--forward-only | -f] [(--average-over | -a) <n>]"
     );
 }
 
@@ -371,4 +423,14 @@ fn panic_payload_to_string(payload: Box<dyn std::any::Any + Send>) -> String {
     } else {
         "non-string panic payload".to_string()
     }
+}
+
+fn std<'a>(i: impl Iterator<Item = &'a Duration> + Clone) -> Duration {
+    let n = i.clone().count();
+    let avg = i.clone().sum::<Duration>().mul_f64(1.0 / n as f64);
+    let sqr_dists = i
+        .clone()
+        .map(|d| d.abs_diff(avg).as_secs_f64() * d.abs_diff(avg).as_secs_f64());
+    let sqr_dists_avg = sqr_dists.sum::<f64>() / n as f64;
+    Duration::from_secs_f64(sqr_dists_avg.sqrt())
 }
