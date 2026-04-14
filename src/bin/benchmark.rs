@@ -1,21 +1,34 @@
 use lens_sl::ShouldCancel;
-use lens_sl::{Cancelled, Inst, Word4, Word64, inst};
+use lens_sl::{Cancelled, Inst, Word4, Word64};
 use std::env;
-use std::fs;
+use std::fs::{self, File};
 use std::hint::black_box;
+use std::io::Write;
 use std::ops::ControlFlow::{self, Break, Continue};
 use std::panic;
 use std::path::Path;
 use std::process::exit;
+use std::sync::Mutex;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
+#[derive(Default)]
 struct Options {
     parallel: bool,
     sl: bool,
     timeout: Option<Duration>,
+    filter: Filter,
+    csv: Option<Mutex<File>>,
+}
+
+#[derive(Clone, Default)]
+enum Filter {
+    #[default]
+    None,
+    Ours,
+    Lens,
 }
 
 static O: std::sync::LazyLock<Options> = std::sync::LazyLock::new(parse_options);
@@ -43,10 +56,6 @@ fn run_all_sequential(benchmarks: &[Benchmark]) {
         let result = run(b);
         print_result(b, &result);
     }
-}
-
-macro_rules! dyn_fn_mut {
-    ($e:expr) => {{ (&mut $e) as &mut dyn FnMut(_) -> _ }};
 }
 
 fn run_all_parallel(benchmarks: &[Benchmark]) {
@@ -85,35 +94,21 @@ fn run_all_parallel(benchmarks: &[Benchmark]) {
 
 fn run(b: &Benchmark) -> BenchmarkResult {
     let mut found = vec![];
-    let (callback, default) = match &b.expected {
-        Some(expected) => (
-            dyn_fn_mut!(|optimized: Vec<Inst<W>>| {
-                found.push(optimized.clone());
-                if optimized == *expected {
-                    return Break(true);
-                }
-                Continue(())
-            }),
-            false,
-        ),
-        None => (
-            dyn_fn_mut!(|optimized: Vec<Inst<W>>| {
-                found.push(optimized.clone());
-                Break(false)
-            }),
-            true,
-        ),
+    let callback = |optimized: Vec<Inst<W>>| -> ControlFlow<()> {
+        found.push(optimized);
+        Continue(())
     };
 
     // Run!
     let started_at = Instant::now();
-    let ret = b.optimize(callback);
+    let ret = b.optimize::<()>(callback);
     let elapsed = started_at.elapsed();
-    let success = ret
-        .map_break(|res| res.unwrap_or(false))
-        .break_value()
-        .unwrap_or(default);
     let timeout = ret == Break(Err(Cancelled));
+    let success = !timeout
+        && !found.is_empty()
+        && found
+            .iter()
+            .all(|optimized| optimized.len() < b.input.len());
     BenchmarkResult {
         success,
         timeout,
@@ -142,6 +137,19 @@ fn print_result(b: &Benchmark, result: &BenchmarkResult) {
         b.name,
         humantime::Duration::from(result.elapsed)
     );
+    if let Some(csv) = &O.csv {
+        let csv = &mut csv.lock().unwrap();
+        let (name, success, time) = (
+            b.name.as_str(),
+            result.success,
+            if result.timeout {
+                "timeout".to_string()
+            } else {
+                result.elapsed.as_secs_f64().to_string()
+            },
+        );
+        let _ = writeln!(csv, "{name},{success},{time}");
+    }
     if !result.success {
         if result.found.is_empty() {
             println!("  Found nothing.");
@@ -161,22 +169,14 @@ fn print_result(b: &Benchmark, result: &BenchmarkResult) {
 }
 
 fn benchmarks() -> Vec<Benchmark> {
-    [
-        Benchmark {
-            name: "empty".to_string(),
-            input: vec![],
-            expected: None,
-        },
-        Benchmark {
-            name: "double move".to_string(),
-            input: vec![inst!(MovI, 0, 5), inst!(MovI, 0, 3)],
-            expected: Some(vec![inst!(MovI, 0, 3)]),
-        },
-    ]
-    .into_iter()
-    .chain(benchmarks_in_dir("./our-benchmarks"))
-    .chain(benchmarks_in_dir("./lens-benchmarks"))
-    .collect()
+    let mut ret = vec![];
+    if !matches!(O.filter, Filter::Ours) {
+        ret.extend(benchmarks_in_dir("./lens-benchmarks"))
+    }
+    if !matches!(O.filter, Filter::Lens) {
+        ret.extend(benchmarks_in_dir("./our-benchmarks"))
+    }
+    ret
 }
 
 fn benchmarks_in_dir(path: impl AsRef<Path> + std::fmt::Display) -> Vec<Benchmark> {
@@ -190,7 +190,7 @@ fn benchmarks_in_dir(path: impl AsRef<Path> + std::fmt::Display) -> Vec<Benchmar
         let entry = match entry_result {
             Ok(entry) => entry,
             Err(err) => {
-                eprintln!("warning: skipping unreadable entry in ./programs: {err}");
+                eprintln!("warning: skipping unreadable entry in '{path}': {err}");
                 continue;
             }
         };
@@ -225,11 +225,7 @@ fn benchmarks_in_dir(path: impl AsRef<Path> + std::fmt::Display) -> Vec<Benchmar
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| path.display().to_string());
 
-        benchmarks.push(Benchmark {
-            name,
-            input,
-            expected: None,
-        });
+        benchmarks.push(Benchmark { name, input });
     }
 
     benchmarks
@@ -242,7 +238,6 @@ fn is_arm_source_file(path: &Path) -> bool {
 struct Benchmark {
     name: String,
     input: Vec<Inst<W>>,
-    expected: Option<Vec<Inst<W>>>,
 }
 
 struct BenchmarkResult {
@@ -279,11 +274,7 @@ impl Benchmark {
 }
 
 fn parse_options() -> Options {
-    let mut ret = Options {
-        parallel: false,
-        sl: false,
-        timeout: None,
-    };
+    let mut ret = Options::default();
     let mut args = env::args();
     let command = args.next().unwrap_or_else(|| "benchmark".to_string());
 
@@ -295,6 +286,40 @@ fn parse_options() -> Options {
             }
             "--parallel" | "-p" => ret.parallel = true,
             "--sl" => ret.sl = true,
+            "--filter" => {
+                ret.filter = match args.next().as_deref() {
+                    Some("ours") => Filter::Ours,
+                    Some("lens") => Filter::Lens,
+                    None => {
+                        eprintln!("error: filter option requires an argument");
+                        exit(1);
+                    }
+                    Some(s) => {
+                        eprintln!(
+                            "error: filter argument must be either 'ours' or 'lens', but was '{s}'"
+                        );
+                        exit(1);
+                    }
+                };
+            }
+            "--csv" => {
+                ret.csv = Some(Mutex::new(match args.next().as_deref() {
+                    None => {
+                        eprintln!("error: csv option requires an argument");
+                        exit(1);
+                    }
+                    Some(path) => match File::create(path) {
+                        Ok(mut f) => {
+                            let _ = writeln!(f, "name,success,time(seconds/timeout)");
+                            f
+                        }
+                        Err(e) => {
+                            eprintln!("error: {e}");
+                            exit(1);
+                        }
+                    },
+                }))
+            }
             "--timeout" => {
                 let Some(t) = args.next() else {
                     eprintln!("error: timeout option needs a time argument, but had no argument");
@@ -320,7 +345,9 @@ fn parse_options() -> Options {
 }
 
 fn print_usage(command: &str) {
-    eprintln!("Usage: {command} [--sl] [--parallel] [--timeout <seconds>]");
+    eprintln!(
+        "Usage: {command} [--sl] [--parallel] [--timeout <seconds>] [--filter [ours | lens]] [--csv <filename>]"
+    );
 }
 
 fn panic_payload_to_string(payload: Box<dyn std::any::Any + Send>) -> String {

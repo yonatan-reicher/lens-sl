@@ -698,6 +698,10 @@ where
     WBig: Word + HasBitWord,
     WSmall: Word + HasBitWord,
 {
+    if program.is_empty() {
+        f(&[])?;
+        return ControlFlow::Continue(());
+    }
     let mut ret = vec![];
     let iters: Vec<_> = program.iter().map(|inst| inst.extend(reducer)).collect();
     let mut iter = PermutationIter::new(iters.as_slice());

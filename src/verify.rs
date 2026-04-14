@@ -7,8 +7,8 @@ use std::ops::ControlFlow;
 pub fn verify<T, WBig, WSmall>(
     program: &[Inst<WSmall>],
     reducer: &Reducer<WBig, WSmall>,
-    oracle_reduced: &mut impl Oracle<[Inst<WSmall>], State<WSmall>>,
-    oracle: &mut impl Oracle<[Inst<WBig>], State<WBig>>,
+    oracle_reduced: &mut (impl Oracle<[Inst<WSmall>], State<WSmall>> + ?Sized),
+    oracle: &mut (impl Oracle<[Inst<WBig>], State<WBig>> + ?Sized),
     mut on_found_program: impl FnMut(&[Inst<WBig>]) -> ControlFlow<T>,
 ) -> Result<WSmall, T>
 where

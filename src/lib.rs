@@ -40,6 +40,7 @@ mod all;
 /// Definitions of different word sizes, for example 4-bit, 8-bit, 64-bit.
 mod word;
 mod direction;
+mod intersect_all;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Cancelled;

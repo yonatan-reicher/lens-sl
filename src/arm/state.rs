@@ -587,6 +587,11 @@ impl Mask {
                 .unwrap_or_default()
         })
     }
+
+    pub fn len(&self) -> usize {
+        let bits = self.into_bit_mask();
+        bits.0.count_ones() as usize
+    }
 }
 
 impl<B> Mask<B> {
@@ -927,5 +932,12 @@ mod tests {
         let mask = mask.into_mask();
         let count = (if mask.flags { 1 } else { 0 }) + mask.registers().count();
         prop_assert_eq!(mask.sub_masks().count(), 2usize.pow(count as _));
+    }
+
+    #[property_test]
+    fn sub_masks_acsending_order(mask: BitMask) {
+        let sub_masks = mask.into_mask().sub_masks();
+        let lengths = sub_masks.map(|m| m.len());
+        prop_assert!(lengths.is_sorted() /* Ascending order */);
     }
 }
