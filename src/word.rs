@@ -7,7 +7,7 @@ use crate::smtlib_utils::{BitVecExt, bit_vec_term_to_i128};
 use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
 use smtlib::terms::{IntoWithStorage, StaticSorted};
-use smtlib::{BitVec, Storage};
+use smtlib::{BitVec, Sorted, Storage};
 use std::fmt::{Debug, Display};
 use std::hash::Hash;
 use std::ops::*;
@@ -92,6 +92,7 @@ pub trait AbstractWord
     type FromParam;
     fn from_word<W: Word>(w: W, arg: Self::FromParam) -> Self;
     fn get_from_param(&self) -> Self::FromParam;
+    fn bottom_half(self) -> Self;
 }
 
 // ========== The Implementation ==================================================================
@@ -166,6 +167,10 @@ macro_rules! impl_word {
             }
 
             fn get_from_param(&self) -> () { }
+
+            fn bottom_half(self) -> Self {
+                self & ($mask >> ($bits / 2)).into()
+            }
         }
 
         // Arithmetic
@@ -243,6 +248,10 @@ macro_rules! impl_word {
 
             fn get_from_param(&self) -> Self::FromParam {
                 smtlib::Sorted::st(self)
+            }
+
+            fn bottom_half(self) -> Self {
+                self & Self::from_word(Self::Word::from($mask >> ($bits / 2)), self.st())
             }
         }
     };
