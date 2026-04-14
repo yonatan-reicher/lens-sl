@@ -254,10 +254,7 @@ fn unnormalize_input_state<W: Word, WShift>(
     inst: &Inst<W, WShift>,
     original_output: &State<W>,
     inp: State<W>,
-) -> impl Iterator<Item = State<W>>
-where
-    <W as All>::Iter: Clone,
-{
+) -> impl Iterator<Item = State<W>> {
     use itertools::Itertools;
     let out_mask = output_state_mask(inst);
     let inp_mask = input_state_mask(inst, original_output);
