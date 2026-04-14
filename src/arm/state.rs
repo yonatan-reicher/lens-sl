@@ -434,6 +434,17 @@ impl<B: Bool> Flags<B> {
             | (op1_negative & op2_positive & diff.signed_positive());
         Flags { z, n, c, v }
     }
+
+    pub fn from_and<W: AbstractWord<Bool = B>>(a: W, b: W) -> Self {
+        let z = (a & b).is_zero();
+        let n = (a & b).signed_negative();
+        Flags {
+            z,
+            n,
+            c: B::r#false(),
+            v: B::r#false(),
+        }
+    }
 }
 
 impl Flags {
