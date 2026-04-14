@@ -1,7 +1,7 @@
 //! The main loop for synthesis and optimization.
 //! Here we have basically the code that you would see in the actual paper that describes Lens.
 
-use crate::{Cancelled, ShouldCancel};
+use crate::{Cancelled, Config, ShouldCancel};
 use crate::all::All;
 use crate::arm::enumerate::{EnumerationInfo, EnumerationInfoOptions};
 use crate::arm::{BackwardMap, Inst, Register, State};
@@ -37,36 +37,33 @@ type Graph<W> = graph::Graph<State<W>, Programs<W>>;
 /// `WT` for word size of the target program.
 /// `WS` for word size of the synthesis process.
 pub fn optimize<WT: Word + HasBitWord, WS: Word + HasBitWord + serde::de::DeserializeOwned>(
-    program: &[Inst<WT>],
-    additional_registers: impl IntoIterator<Item = Register>,
-    additional_immediates: impl IntoIterator<Item = WT>,
-    should_cancel: ShouldCancel,
+    c: Config<WT>,
     tui: &impl for<'g> TuiHook<&'g Graph<WS>, State<WS>>,
 ) -> Result<Option<Program<WT>>, Cancelled>
 where
     BitWord<WS>: DeserializeOwned,
     <WS as All>::Iter: Clone,
 {
-    if program.is_empty() {
+    if c.program.is_empty() {
         return Ok(None);
     }
 
     let mut reducer = Reducer::<WT, WS>::default();
-    let mut reduced_program = Vec::with_capacity(program.len());
-    for inst in program {
+    let mut reduced_program = Vec::with_capacity(c.program.len());
+    for inst in c.program {
         // This puts the original unreduced constants into the reducer.
         reduced_program.push(inst.reduce(&mut reducer));
     }
-    let additional_immediates_reduced: Vec<WS> = additional_immediates
-        .into_iter()
-        .map(|i| reducer.reduce(i, &ImmediateInfo { is_shift: false }))
+    let additional_immediates_reduced: Vec<WS> = c.additional_immediates
+        .iter()
+        .map(|i| reducer.reduce(*i, &ImmediateInfo { is_shift: false }))
         .collect();
 
     // Collect all the registers and immediates that might be useful for synthesis.
     let registers = Collector::new()
-        .mutate(|c| c.program(program))
-        .pipe(|c| c.registers)
-        .mutate(|r| r.extend(additional_registers))
+        .mutate(|col| col.program(c.program))
+        .pipe(|col| col.registers)
+        .mutate(|r| r.extend(c.additional_registers))
         .mutate(|r| r.sort())
         .mutate(|r| r.dedup());
     let immediates: Vec<WS> = reducer
@@ -81,7 +78,7 @@ where
     //     test_cases: test_cases_reduced,
     // };
 
-    let oracle = SmtOracle::new(program.to_vec());
+    let oracle = SmtOracle::new(c.program.to_vec());
     let oracle_reduced = SmtOracle::new(reduced_program);
 
     synthesize::<WT, WS>(
@@ -90,8 +87,8 @@ where
         oracle,
         oracle_reduced,
         reducer,
-        program.len(),
-        &should_cancel,
+        c.program.len(),
+        &c.should_cancel,
         tui,
     )
 }

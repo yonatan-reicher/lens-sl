@@ -9,7 +9,7 @@ use crate::collect_registers::Collector;
 use crate::direction::Direction;
 use crate::intersect_all::intersect_all;
 use crate::oracle::{Oracle, SmtOracle};
-use crate::programs_sl as programs;
+use crate::{Config, programs};
 use crate::reduce_bit_width::{ImmediateInfo, Reducer};
 use crate::tui::TuiHook;
 use crate::word::prelude::*;
@@ -34,7 +34,7 @@ type Program<W> = programs::Program<Inst<W>>;
 
 type Programs<W> = programs::Programs<Inst<W>>;
 
-type Graph<W> = graph::Graph<(MaskedState<W>, MaskedState<W>), Programs<W>>;
+type Graph<W> = graph::Graph<State<W>, Programs<W>>;
 
 // ====================================== Implementation ==========================================
 
@@ -42,36 +42,33 @@ type Graph<W> = graph::Graph<(MaskedState<W>, MaskedState<W>), Programs<W>>;
 /// `WT` for word size of the target program.
 /// `WS` for word size of the synthesis process.
 pub fn optimize<WT: Word + HasBitWord, WS: Word + HasBitWord + serde::de::DeserializeOwned>(
-    program: &[Inst<WT>],
-    additional_registers: impl IntoIterator<Item = Register>,
-    additional_immediates: impl IntoIterator<Item = WT>,
-    should_cancel: ShouldCancel,
-    tui: &impl for<'g> TuiHook<&'g Graph<WS>, MaskedState<WS>>,
+    c: Config<WT>,
+    tui: &impl for<'g> TuiHook<&'g Graph<WS>, State<WS>>,
 ) -> Result<Option<Program<WT>>, Cancelled>
 where
     BitWord<WS>: DeserializeOwned,
     <WS as All>::Iter: Clone,
 {
-    if program.is_empty() {
+    if c.program.is_empty() {
         return Ok(None);
     }
 
     let mut reducer = Reducer::<WT, WS>::default();
-    let mut reduced_program = Vec::with_capacity(program.len());
-    for inst in program {
+    let mut reduced_program = Vec::with_capacity(c.program.len());
+    for inst in c.program {
         // This puts the original unreduced constants into the reducer.
         reduced_program.push(inst.reduce(&mut reducer));
     }
-    let additional_immediates_reduced: Vec<WS> = additional_immediates
-        .into_iter()
-        .map(|i| reducer.reduce(i, &ImmediateInfo { is_shift: false }))
+    let additional_immediates_reduced: Vec<WS> = c.additional_immediates
+        .iter()
+        .map(|i| reducer.reduce(*i, &ImmediateInfo { is_shift: false }))
         .collect();
 
     // Collect all the registers and immediates that might be useful for synthesis.
     let registers = Collector::new()
-        .mutate(|c| c.program(program))
+        .mutate(|col| col.program(c.program))
         .pipe(|c| c.registers)
-        .mutate(|r| r.extend(additional_registers))
+        .mutate(|r| r.extend(c.additional_registers))
         .mutate(|r| r.sort())
         .mutate(|r| r.dedup());
     let immediates: Vec<WS> = reducer
@@ -81,7 +78,7 @@ where
         .mutate(|r| r.sort())
         .mutate(|r| r.dedup());
 
-    let oracle = SmtOracle::new(program.to_vec());
+    let oracle = SmtOracle::new(c.program.to_vec());
     let oracle_reduced = SmtOracle::new(reduced_program.clone());
 
     synthesize::<WT, WS>(
@@ -91,7 +88,7 @@ where
         oracle_reduced,
         reducer,
         reduced_program,
-        should_cancel,
+        c.should_cancel,
         tui,
     )
 }
@@ -107,7 +104,7 @@ fn synthesize<WT, W>(
     reducer: Reducer<WT, W>,
     original_reduced: Program<W>,
     should_cancel: ShouldCancel,
-    tui: &impl for<'a> TuiHook<&'a Graph<W>, MaskedState<W>>,
+    tui: &impl for<'g> TuiHook<&'g Graph<W>, State<W>>,
 ) -> Result<Option<Program<WT>>, Cancelled>
 where
     WT: Word + HasBitWord,
@@ -344,7 +341,7 @@ struct ReducedProgramOracle<'a, WBig: HasBitWord, W: HasBitWord> {
     oracle_reduced: &'a mut dyn Oracle<[Inst<W>], State<W>>,
     original_reduced: &'a [Inst<W>],
     reducer: &'a Reducer<WBig, W>,
-    tui: &'a dyn TuiHook<&'a Graph<W>, MaskedState<W>>,
+    tui: &'a dyn TuiHook<&'a Graph<W>, State<W>>,
 }
 
 impl<'a, WBig, W> ReducedProgramOracle<'a, WBig, W>
@@ -369,7 +366,7 @@ where
                 let read_mask = what_program_reads(self.original_reduced.iter().cloned(), &inp);
                 let inp = inp.masked(read_mask.into());
                 let out = run_program_masked(self.original_reduced.iter().cloned(), inp).expect("the counter example found by the oracle must be runnable and the input mask for the program must be enough for it to run");
-                self.tui.found_counter_example(inp, out);
+                self.tui.found_counter_example(*inp.state(), *out.state());
                 assert!(
                     !self.inputs_outputs.contains(&inp, &out),
                     "Counter-example from reduced oracle should not have been seen before."
