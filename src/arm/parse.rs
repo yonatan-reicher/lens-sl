@@ -886,11 +886,36 @@ fn map_opcode(op: &str, args: &[ParsedArg]) -> Result<OpCode, ParseError> {
                 col: 0,
             }),
         },
+        "movt" => match args {
+            [ParsedArg::Reg(_), ParsedArg::Imm(_)] => Ok(OpCode::Movt),
+            _ => Err(ParseError {
+                message: "unsupported movt operands".into(),
+                line: 0,
+                col: 0,
+            }),
+        },
+        "movw" => match args {
+            [ParsedArg::Reg(_), ParsedArg::Imm(_)] => Ok(OpCode::Movw),
+            _ => Err(ParseError {
+                message: "unsupported movw operands".into(),
+                line: 0,
+                col: 0,
+            }),
+        },
         "add" => match args {
             [ParsedArg::Reg(_), ParsedArg::Reg(_), ParsedArg::Reg(_)] => Ok(OpCode::Add),
             [ParsedArg::Reg(_), ParsedArg::Reg(_), ParsedArg::Imm(_)] => Ok(OpCode::AddI),
             _ => Err(ParseError {
                 message: "unsupported add operands".into(),
+                line: 0,
+                col: 0,
+            }),
+        },
+        "rsb" => match args {
+            [ParsedArg::Reg(_), ParsedArg::Reg(_), ParsedArg::Reg(_)] => Ok(OpCode::Rsb),
+            [ParsedArg::Reg(_), ParsedArg::Reg(_), ParsedArg::Imm(_)] => Ok(OpCode::RsbI),
+            _ => Err(ParseError {
+                message: "unsupported rsb operands".into(),
                 line: 0,
                 col: 0,
             }),
@@ -908,6 +933,14 @@ fn map_opcode(op: &str, args: &[ParsedArg]) -> Result<OpCode, ParseError> {
             [ParsedArg::Reg(_), ParsedArg::Reg(_), ParsedArg::Reg(_)] => Ok(OpCode::And),
             _ => Err(ParseError {
                 message: "unsupported and operands".into(),
+                line: 0,
+                col: 0,
+            }),
+        },
+        "bic" => match args {
+            [ParsedArg::Reg(_), ParsedArg::Reg(_), ParsedArg::Reg(_)] => Ok(OpCode::Bic),
+            _ => Err(ParseError {
+                message: "unsupported bic operands".into(),
                 line: 0,
                 col: 0,
             }),
@@ -1230,6 +1263,59 @@ mod tests {
         assert_eq!(insts.len(), 1);
         assert_eq!(insts[0].op_code, OpCode::Add);
         assert_eq!(insts[0].shift, ShiftCode::Rrx);
+    }
+
+    #[test]
+    fn test_parse_movt() {
+        let insts = parse::<Word4, Word2>("movt r0, #1").unwrap();
+        assert_eq!(insts.len(), 1);
+        assert_eq!(insts[0].op_code, OpCode::Movt);
+        assert_eq!(insts[0].cond_code, CondCode::Al);
+    }
+
+    #[test]
+    fn test_parse_movt_with_condition() {
+        let insts = parse::<Word4, Word2>("movteq r0, #1").unwrap();
+        assert_eq!(insts.len(), 1);
+        assert_eq!(insts[0].op_code, OpCode::Movt);
+        assert_eq!(insts[0].cond_code, CondCode::Eq);
+    }
+
+    #[test]
+    fn test_parse_movw() {
+        let insts = parse::<Word4, Word2>("movw r0, #1").unwrap();
+        assert_eq!(insts.len(), 1);
+        assert_eq!(insts[0].op_code, OpCode::Movw);
+        assert_eq!(insts[0].cond_code, CondCode::Al);
+    }
+
+    #[test]
+    fn test_parse_movw_with_condition() {
+        let insts = parse::<Word4, Word2>("movweq r0, #1").unwrap();
+        assert_eq!(insts.len(), 1);
+        assert_eq!(insts[0].op_code, OpCode::Movw);
+        assert_eq!(insts[0].cond_code, CondCode::Eq);
+    }
+
+    #[test]
+    fn test_parse_rsb() {
+        let insts = parse::<Word4, Word2>("rsb r0, r1, r2").unwrap();
+        assert_eq!(insts.len(), 1);
+        assert_eq!(insts[0].op_code, OpCode::Rsb);
+    }
+
+    #[test]
+    fn test_parse_rsbi() {
+        let insts = parse::<Word4, Word2>("rsb r0, r1, #3").unwrap();
+        assert_eq!(insts.len(), 1);
+        assert_eq!(insts[0].op_code, OpCode::RsbI);
+    }
+
+    #[test]
+    fn test_parse_bic() {
+        let insts = parse::<Word4, Word2>("bic r0, r1, r2").unwrap();
+        assert_eq!(insts.len(), 1);
+        assert_eq!(insts[0].op_code, OpCode::Bic);
     }
 
     #[test]

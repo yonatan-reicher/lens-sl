@@ -89,10 +89,23 @@ where
         Eor => set_reg!(regs[0], r![1] ^ shift(r![2])),
         Mov => set_reg!(regs[0], shift(r![1])),
         MovI => set_reg!(regs[0], shift(imm![1])),
+        Movt => set_reg!(
+            regs[0],
+            r![0].bottom_half()
+                | (shift(imm![1])
+                    << W::Word::from(W::BITS / 2).into_abstract_word(from_param.clone()))
+        ),
+        Movw => set_reg!(
+            regs[0],
+            (r![0] << W::Word::from(W::BITS / 2).into_abstract_word(from_param.clone()))
+                | shift(imm![1]).bottom_half()
+        ),
         Mul => set_reg!(regs[0], r![1] * shift(r![2])),
         Orr => set_reg!(regs[0], r![1] | shift(r![2])),
         Cmp => set_flags!(Flags::from_sub(r![0], shift(r![1]))),
         CmpI => set_flags!(Flags::from_sub(r![0], shift(imm![1]))),
+        Tst => set_flags!(Flags::from_and(r![0], shift(r![1]))),
+        TstI => set_flags!(Flags::from_and(r![0], shift(imm![1]))),
     }
 
     // The shift could change the carry value (rrx). Let's update it.

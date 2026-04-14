@@ -38,6 +38,7 @@ pub enum RegArgType {
     // I like using 'Inp' instead of 'In' because it aligns with 'Out'
     Inp,
     Out,
+    InpOut,
 }
 
 impl ArgType {
@@ -206,24 +207,28 @@ macro_rules! define_instructions {
 }
 
 define_instructions! {
-    | OpCode  | Arg 1    | Arg 2    | Arg 3    | String | Commutative | Affects Flags |
-    -----------------------------------------------------------------------------------
-    | Nop     | Unused   | Unused   | Unused   | "nop"  |    true     |     false     |
-    | Add     | Reg(Out) | Reg(Inp) | Reg(Inp) | "add"  |    true     |     false     |
-    | AddI    | Reg(Out) | Reg(Inp) | Imm      | "add"  |    false    |     false     |
-    | Sub     | Reg(Out) | Reg(Inp) | Reg(Inp) | "sub"  |    false    |     false     |
-    | SubI    | Reg(Out) | Reg(Inp) | Imm      | "sub"  |    false    |     false     |
-    | Rsb     | Reg(Out) | Reg(Inp) | Reg(Inp) | "rsb"  |    false    |     false     |
-    | RsbI    | Reg(Out) | Reg(Inp) | Imm      | "rsb"  |    false    |     false     |
-    | And     | Reg(Out) | Reg(Inp) | Reg(Inp) | "and"  |    true     |     false     |
-    | Bic     | Reg(Out) | Reg(Inp) | Reg(Inp) | "bic"  |    false    |     false     |
-    | Eor     | Reg(Out) | Reg(Inp) | Reg(Inp) | "eor"  |    true     |     false     |
-    | Mov     | Reg(Out) | Reg(Inp) | Unused   | "mov"  |    false    |     false     |
-    | MovI    | Reg(Inp) | Imm      | Unused   | "mov"  |    false    |     false     |
-    | Mul     | Reg(Out) | Reg(Inp) | Reg(Inp) | "mul"  |    true     |     false     |
-    | Orr     | Reg(Out) | Reg(Inp) | Reg(Inp) | "orr"  |    true     |     false     |
-    | Cmp     | Reg(Inp) | Reg(Inp) | Unused   | "cmp"  |    false    |     true      |
-    | CmpI    | Reg(Inp) | Imm      | Unused   | "cmp"  |    false    |     true      |
+    | OpCode  | Arg 1       | Arg 2    | Arg 3    | String | Commutative | Affects Flags |
+    -----------------------------------------------------------------------------------------
+    | Nop     | Unused      | Unused   | Unused   | "nop"  |    true     |     false     |
+    | Add     | Reg(Out)    | Reg(Inp) | Reg(Inp) | "add"  |    true     |     false     |
+    | AddI    | Reg(Out)    | Reg(Inp) | Imm      | "add"  |    false    |     false     |
+    | Sub     | Reg(Out)    | Reg(Inp) | Reg(Inp) | "sub"  |    false    |     false     |
+    | SubI    | Reg(Out)    | Reg(Inp) | Imm      | "sub"  |    false    |     false     |
+    | Rsb     | Reg(Out)    | Reg(Inp) | Reg(Inp) | "rsb"  |    false    |     false     |
+    | RsbI    | Reg(Out)    | Reg(Inp) | Imm      | "rsb"  |    false    |     false     |
+    | And     | Reg(Out)    | Reg(Inp) | Reg(Inp) | "and"  |    true     |     false     |
+    | Bic     | Reg(Out)    | Reg(Inp) | Reg(Inp) | "bic"  |    false    |     false     |
+    | Eor     | Reg(Out)    | Reg(Inp) | Reg(Inp) | "eor"  |    true     |     false     |
+    | Mov     | Reg(Out)    | Reg(Inp) | Unused   | "mov"  |    false    |     false     |
+    | MovI    | Reg(Inp)    | Imm      | Unused   | "mov"  |    false    |     false     |
+    | Movt    | Reg(InpOut) | Imm      | Unused   | "movt" |    false    |     false     |
+    | Movw    | Reg(InpOut) | Imm      | Unused   | "movw" |    false    |     false     |
+    | Mul     | Reg(Out)    | Reg(Inp) | Reg(Inp) | "mul"  |    true     |     false     |
+    | Orr     | Reg(Out)    | Reg(Inp) | Reg(Inp) | "orr"  |    true     |     false     |
+    | Cmp     | Reg(Inp)    | Reg(Inp) | Unused   | "cmp"  |    false    |     true      |
+    | CmpI    | Reg(Inp)    | Imm      | Unused   | "cmp"  |    false    |     true      |
+    | Tst     | Reg(Inp)    | Reg(Inp) | Unused   | "tst"  |    true     |     true      |
+    | TstI    | Reg(Inp)    | Imm      | Unused   | "tst"  |    false    |     true      |
 }
 
 /// A number representing a register.
