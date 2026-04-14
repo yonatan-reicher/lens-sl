@@ -85,7 +85,20 @@ pub use arm::parse::{LiveValue, info_from_file, liveness_from_file};
 pub use arm::{
     BackwardMap, CondCode, Flags, FlagsBitField, Inst, OpCode, Register, ShiftCode, State,
 };
-pub use main_loop::optimize;
-pub use main_loop_sl::optimize as optimize_sl;
 pub use tui::{NoTui, Tui, TuiHook};
-pub use word::{Word, Word4, Word8, Word64};
+pub use word::prelude::*;
+
+pub fn optimize<WT, WS>(
+    c: Config<WT>,
+    tui: &impl for<'g> TuiHook<&'g crate::graph::Graph<State<WS>, crate::programs::Programs<Inst<WS>>>, State<WS>>,
+) -> Result<Option<Vec<Inst<WT>>>, Cancelled>
+where
+    WT: Word + HasBitWord,
+    WS: Word + HasBitWord + serde::de::DeserializeOwned,
+    BitWord<WS>: serde::de::DeserializeOwned,
+{
+    match c.algorithm {
+        Algorithm::Lens => main_loop::optimize(c, tui),
+        Algorithm::LensSl => main_loop_sl::optimize(c, tui),
+    }
+}

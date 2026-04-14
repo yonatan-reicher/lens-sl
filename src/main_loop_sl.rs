@@ -9,7 +9,7 @@ use crate::collect_registers::Collector;
 use crate::direction::Direction;
 use crate::intersect_all::intersect_all;
 use crate::oracle::{Oracle, SmtOracle};
-use crate::{Config, programs_sl as programs};
+use crate::{Config, programs};
 use crate::reduce_bit_width::{ImmediateInfo, Reducer};
 use crate::tui::TuiHook;
 use crate::word::prelude::*;
@@ -34,7 +34,7 @@ type Program<W> = programs::Program<Inst<W>>;
 
 type Programs<W> = programs::Programs<Inst<W>>;
 
-type Graph<W> = graph::Graph<(MaskedState<W>, MaskedState<W>), Programs<W>>;
+type Graph<W> = graph::Graph<State<W>, Programs<W>>;
 
 // ====================================== Implementation ==========================================
 
@@ -43,7 +43,7 @@ type Graph<W> = graph::Graph<(MaskedState<W>, MaskedState<W>), Programs<W>>;
 /// `WS` for word size of the synthesis process.
 pub fn optimize<WT: Word + HasBitWord, WS: Word + HasBitWord + serde::de::DeserializeOwned>(
     c: Config<WT>,
-    tui: &impl for<'g> TuiHook<&'g Graph<WS>, MaskedState<WS>>,
+    tui: &impl for<'g> TuiHook<&'g Graph<WS>, State<WS>>,
 ) -> Result<Option<Program<WT>>, Cancelled>
 where
     BitWord<WS>: DeserializeOwned,
@@ -104,7 +104,7 @@ fn synthesize<WT, W>(
     reducer: Reducer<WT, W>,
     original_reduced: Program<W>,
     should_cancel: ShouldCancel,
-    tui: &impl for<'a> TuiHook<&'a Graph<W>, MaskedState<W>>,
+    tui: &impl for<'g> TuiHook<&'g Graph<W>, State<W>>,
 ) -> Result<Option<Program<WT>>, Cancelled>
 where
     WT: Word + HasBitWord,
@@ -341,7 +341,7 @@ struct ReducedProgramOracle<'a, WBig: HasBitWord, W: HasBitWord> {
     oracle_reduced: &'a mut dyn Oracle<[Inst<W>], State<W>>,
     original_reduced: &'a [Inst<W>],
     reducer: &'a Reducer<WBig, W>,
-    tui: &'a dyn TuiHook<&'a Graph<W>, MaskedState<W>>,
+    tui: &'a dyn TuiHook<&'a Graph<W>, State<W>>,
 }
 
 impl<'a, WBig, W> ReducedProgramOracle<'a, WBig, W>
@@ -366,7 +366,7 @@ where
                 let read_mask = what_program_reads(self.original_reduced.iter().cloned(), &inp);
                 let inp = inp.masked(read_mask.into());
                 let out = run_program_masked(self.original_reduced.iter().cloned(), inp).expect("the counter example found by the oracle must be runnable and the input mask for the program must be enough for it to run");
-                self.tui.found_counter_example(inp, out);
+                self.tui.found_counter_example(*inp.state(), *out.state());
                 assert!(
                     !self.inputs_outputs.contains(&inp, &out),
                     "Counter-example from reduced oracle should not have been seen before."

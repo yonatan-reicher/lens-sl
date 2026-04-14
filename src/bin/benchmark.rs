@@ -1,4 +1,4 @@
-use lens_sl::{ShouldCancel, Algorithm, Config, Cancelled, Inst, Word4, Word64};
+use lens_sl::{Algorithm, Cancelled, Config, Inst, ShouldCancel, Word4, Word32, optimize};
 use std::env;
 use std::fs::{self, File};
 use std::hint::black_box;
@@ -247,29 +247,32 @@ struct BenchmarkResult {
     panic_message: Option<String>,
 }
 
-type W = Word64;
+type W = Word32;
 
 impl Benchmark {
     pub fn optimize<T>(
         &self,
         mut f: impl FnMut(Vec<Inst<W>>) -> ControlFlow<T>,
     ) -> ControlFlow<Result<T, Cancelled>> {
-        let optimize = if O.sl {
-            lens_sl::optimize_sl::<W, Word4>
+        let algorithm = if O.sl {
+            Algorithm::LensSl
         } else {
-            lens_sl::optimize::<W, Word4>
+            Algorithm::Lens
         };
         let should_cancel = match O.timeout {
             None => ShouldCancel::Never,
             Some(d) => ShouldCancel::At(Instant::now() + d),
         };
-        match optimize(Config {
-            algorithm: Algorithm::Lens,
-            program: &self.input,
-            additional_registers: &[],
-            additional_immediates: &[], should_cancel,
-        },
-            &lens_sl::NoTui) {
+        match optimize::<W, Word4>(
+            Config {
+                algorithm,
+                program: &self.input,
+                additional_registers: &[],
+                additional_immediates: &[],
+                should_cancel,
+            },
+            &lens_sl::NoTui,
+        ) {
             Ok(None) => (),
             Ok(Some(p)) => f(p).map_break(Ok)?,
             Err(Cancelled) => return Break(Err(Cancelled)),

@@ -1,7 +1,7 @@
 #[allow(unused_imports)]
 use lens_sl::{
     Algorithm, Cancelled, Config, LiveValue, NoTui, Register, ShouldCancel, Tui, Word4, Word8,
-    Word64, inst, optimize, optimize_sl,
+    Word64, inst, optimize,
 };
 
 fn main() {
@@ -61,30 +61,22 @@ fn main() {
     let _live_out = live_out;
 
     let config = Config {
-        algorithm: Algorithm::Lens,
+        algorithm: if sl {
+            Algorithm::LensSl
+        } else {
+            Algorithm::Lens
+        },
         program: &program,
         additional_registers: &[],
         additional_immediates: &[],
         should_cancel: ShouldCancel::Never,
     };
 
-    let p = if sl {
-        let tui = Tui::default();
-        let ret = optimize_sl::<Word64, Word4>(
-            config,
-            &tui, // */ &NoTui,
-        );
-        tui.close();
-        ret
-    } else {
-        let tui = Tui::default();
-        let ret = optimize::<Word64, Word4>(
-            config,
-            &tui,
-        );
-        tui.close();
-        ret
-    };
+    let tui = Tui::default();
+    let p = optimize::<Word64, Word4>(
+        config, &tui, // */ &NoTui,
+    );
+    tui.close();
     match p {
         Err(Cancelled) => {
             println!("Cancelled!");
