@@ -1,12 +1,14 @@
 use lens_sl::ShouldCancel;
 use lens_sl::{Cancelled, Inst, Word4, Word64};
 use std::env;
-use std::fs;
+use std::fs::{self, File};
 use std::hint::black_box;
+use std::io::Write;
 use std::ops::ControlFlow::{self, Break, Continue};
 use std::panic;
 use std::path::Path;
 use std::process::exit;
+use std::sync::Mutex;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -18,6 +20,7 @@ struct Options {
     sl: bool,
     timeout: Option<Duration>,
     filter: Filter,
+    csv: Option<Mutex<File>>,
 }
 
 #[derive(Clone, Default)]
@@ -134,6 +137,19 @@ fn print_result(b: &Benchmark, result: &BenchmarkResult) {
         b.name,
         humantime::Duration::from(result.elapsed)
     );
+    if let Some(csv) = &O.csv {
+        let csv = &mut csv.lock().unwrap();
+        let (name, success, time) = (
+            b.name.as_str(),
+            result.success,
+            if result.timeout {
+                "timeout".to_string()
+            } else {
+                result.elapsed.as_secs_f64().to_string()
+            },
+        );
+        let _ = writeln!(csv, "{name},{success},{time}");
+    }
     if !result.success {
         if result.found.is_empty() {
             println!("  Found nothing.");
@@ -286,6 +302,24 @@ fn parse_options() -> Options {
                     }
                 };
             }
+            "--csv" => {
+                ret.csv = Some(Mutex::new(match args.next().as_deref() {
+                    None => {
+                        eprintln!("error: csv option requires an argument");
+                        exit(1);
+                    }
+                    Some(path) => match File::create(path) {
+                        Ok(mut f) => {
+                            let _ = writeln!(f, "name,success,time(seconds/timeout)");
+                            f
+                        }
+                        Err(e) => {
+                            eprintln!("error: {e}");
+                            exit(1);
+                        }
+                    },
+                }))
+            }
             "--timeout" => {
                 let Some(t) = args.next() else {
                     eprintln!("error: timeout option needs a time argument, but had no argument");
@@ -312,7 +346,7 @@ fn parse_options() -> Options {
 
 fn print_usage(command: &str) {
     eprintln!(
-        "Usage: {command} [--sl] [--parallel] [--timeout <seconds>] [--filter [ours | lens]]"
+        "Usage: {command} [--sl] [--parallel] [--timeout <seconds>] [--filter [ours | lens]] [--csv <filename>]"
     );
 }
 
