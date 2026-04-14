@@ -1,5 +1,5 @@
 use lens_sl::ShouldCancel;
-use lens_sl::{Cancelled, Inst, Word4, Word64, inst};
+use lens_sl::{Cancelled, Inst, Word4, Word64};
 use std::env;
 use std::fs;
 use std::hint::black_box;
