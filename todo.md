@@ -1,9 +1,11 @@
 - [ ] ISA shift with registers
 - [ ] Algorithm enum
 - [ ] Algorithm Config struct
-- [ ] Initializing all sub-states in optimize_sl
-- [ ] Look what needs to be done for optimize_sl to support many registers
-- [ ] If the above aren't enough, why is optimize_sl exploding?
+- [ ] Backwards flag
+- [ ] Backwards in optimize_sl
+- [x] Initializing all sub-states in optimize_sl
+- [x] Look what needs to be done for optimize_sl to support many registers
+- [x] If the above aren't enough, why is optimize_sl exploding?
 
 Old algorithm
 - [ ] Implement the real backward search graph data structure - a vector of size
