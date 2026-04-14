@@ -7,14 +7,13 @@ use crate::arm::state::Masked as MaskedState;
 use crate::arm::{self, Register, State, run_program_masked, what_program_reads};
 use crate::collect_registers::Collector;
 use crate::direction::Direction;
-use crate::graph;
 use crate::intersect_all::intersect_all;
 use crate::oracle::{Oracle, SmtOracle};
 use crate::programs_sl as programs;
 use crate::reduce_bit_width::{ImmediateInfo, Reducer};
 use crate::tui::TuiHook;
 use crate::word::prelude::*;
-use crate::{Cancelled, ShouldCancel};
+use crate::{Cancelled, ShouldCancel, graph, inst};
 
 // std imports
 use std::cell::{Ref, RefCell};
@@ -91,7 +90,6 @@ where
         oracle,
         oracle_reduced,
         reducer,
-        program.len(),
         reduced_program,
         should_cancel,
         tui,
@@ -107,9 +105,6 @@ fn synthesize<WT, W>(
     mut oracle: impl Oracle<[Inst<WT>], State<WT>>,
     mut oracle_reduced: impl Oracle<[Inst<W>], State<W>>,
     reducer: Reducer<WT, W>,
-    // The length of the original program.
-    // In the future, this could be max_cost.
-    original_length: usize,
     original_reduced: Program<W>,
     should_cancel: ShouldCancel,
     tui: &impl for<'a> TuiHook<&'a Graph<W>, MaskedState<W>>,
@@ -127,7 +122,6 @@ where
         include_nop: false,
         skip_cond_code: false,
     };
-    let mut forward_length = 0;
     let total_instructions = Inst::enumerate(*enumeration_info).count();
     let mut seen = FxHashSet::default();
     let mut current_states = vec![]; // TODO: rename to frontier.
@@ -143,9 +137,17 @@ where
         inputs_outputs: &inputs_outputs,
     };
     // ----- The Actual Loop -----------------------------------------------------------------------
+    // We must start with at least one input...
+    match oracle.verify(&[]) {
+        Continue(()) => todo!(""),
+        Break(ProgramOrRetry::Program(p)) => return Ok(Some(p)),
+        Break(ProgramOrRetry::Retry) => (),
+    }
     'restart: loop {
         current_states.clear();
         current_states.push((inputs_outputs.inputs().to_vec(), vec![]));
+        next_states.clear();
+        seen.clear();
         // ----- Reachability - Bfs loop to reach outputs ----------------------------------------
         for _length in 0..original_reduced.len() {
             tui.searching();
@@ -156,14 +158,6 @@ where
                 // Should we stop?
                 if should_cancel.check() {
                     return Err(Cancelled);
-                }
-                // Did we succeed?
-                if inputs == *inputs_outputs.outputs() {
-                    match oracle.verify(&prog) {
-                        Continue(()) => todo!("what do we do here? '{prog:?}'"),
-                        Break(ProgramOrRetry::Program(p)) => return Ok(Some(p)),
-                        Break(ProgramOrRetry::Retry) => continue 'restart,
-                    }
                 }
                 // First we need to check that all the states are properly represented in the bank.
                 for inp in inputs.iter().cloned() {
@@ -209,6 +203,15 @@ where
                             .map(|s| inst.run_masked(*s))
                             .collect::<Option<Vec<_>>>()
                             .unwrap();
+                        // Did we succeed?
+                        if outputs == *inputs_outputs.outputs() {
+                            let prog = prog.clone().mutate(|p| p.push(inst));
+                            match oracle.verify(&prog) {
+                                Continue(()) => todo!("what do we do here? '{prog:?}'"),
+                                Break(ProgramOrRetry::Program(p)) => return Ok(Some(p)),
+                                Break(ProgramOrRetry::Retry) => continue 'restart,
+                            }
+                        }
                         if seen.contains(&outputs) {
                             continue;
                         }
@@ -259,16 +262,23 @@ where
                 }
             }
             tui.progress(len, len);
-            if forward_length == original_length - 1 {
-                return Ok(None);
-            }
             // ------------------------------ Expand Phase --------------------------------------------
             let direction = Direction::Forward;
             tui.expanding(direction);
             //expand(&mut todo!(), g.tui);
-            forward_length += 1;
+            current_states.clear();
             std::mem::swap(&mut next_states, &mut current_states);
-        }
+        } // end of length loop
+        let lengths = next_states
+            .iter()
+            .map(|(_, p)| p)
+            .chunk_by(|p| p.len())
+            .into_iter()
+            .map(|(len, progs)| format!("{len}: {}", progs.count()))
+            .join("\n");
+        println!("Progs");
+        println!("{}", lengths);
+        return Ok(None);
     }
 }
 
