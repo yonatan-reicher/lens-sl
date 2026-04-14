@@ -155,7 +155,7 @@ macro_rules! define_instructions {
         /// The operation codes supported by our ISA.
         #[derive(Copy, Clone, Debug, derive_more::Display, PartialEq, Eq, Hash, Serialize, Deserialize)]
         #[cfg_attr(test, derive(proptest_derive::Arbitrary))]
-        #[display("{}", self.to_string())]
+        #[display("{}", self.as_str())]
         pub enum OpCode {
             $( $op_code, )+
         }
@@ -171,10 +171,14 @@ macro_rules! define_instructions {
                 }
             }
 
-            pub fn to_string(&self) -> String {
+            pub const fn as_str(&self) -> &'static str {
                 match self {
-                    $( OpCode::$op_code => $str.to_string(), )+
+                    $( OpCode::$op_code => $str, )+
                 }
+            }
+
+            pub fn to_string(&self) -> String {
+                self.as_str().to_owned()
             }
 
             /// An array of all op-codes.

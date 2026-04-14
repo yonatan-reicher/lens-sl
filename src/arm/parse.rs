@@ -874,112 +874,57 @@ fn parse_old_arg(s: &str) -> Option<ParsedArg> {
         .or_else(|| s.parse::<i64>().ok().map(ParsedArg::Imm))
 }
 
+fn opcode_matches_args(op_code: OpCode, args: &[ParsedArg]) -> bool {
+    let mut arg_i = 0usize;
+    for arg_type in op_code.arg_types() {
+        match arg_type {
+            ArgType::Unused => {}
+            ArgType::Reg(_) => {
+                if !matches!(args.get(arg_i), Some(ParsedArg::Reg(_))) {
+                    return false;
+                }
+                arg_i += 1;
+            }
+            ArgType::Imm => {
+                if !matches!(args.get(arg_i), Some(ParsedArg::Imm(_))) {
+                    return false;
+                }
+                arg_i += 1;
+            }
+        }
+    }
+    arg_i == args.len()
+}
+
 fn map_opcode(op: &str, args: &[ParsedArg]) -> Result<OpCode, ParseError> {
-    match op {
-        "nop" if args.is_empty() => Ok(OpCode::Nop),
-        "mov" => match args {
-            [ParsedArg::Reg(_), ParsedArg::Reg(_)] => Ok(OpCode::Mov),
-            [ParsedArg::Reg(_), ParsedArg::Imm(_)] => Ok(OpCode::MovI),
-            _ => Err(ParseError {
-                message: "unsupported mov operands".into(),
-                line: 0,
-                col: 0,
-            }),
-        },
-        "movt" => match args {
-            [ParsedArg::Reg(_), ParsedArg::Imm(_)] => Ok(OpCode::Movt),
-            _ => Err(ParseError {
-                message: "unsupported movt operands".into(),
-                line: 0,
-                col: 0,
-            }),
-        },
-        "movw" => match args {
-            [ParsedArg::Reg(_), ParsedArg::Imm(_)] => Ok(OpCode::Movw),
-            _ => Err(ParseError {
-                message: "unsupported movw operands".into(),
-                line: 0,
-                col: 0,
-            }),
-        },
-        "add" => match args {
-            [ParsedArg::Reg(_), ParsedArg::Reg(_), ParsedArg::Reg(_)] => Ok(OpCode::Add),
-            [ParsedArg::Reg(_), ParsedArg::Reg(_), ParsedArg::Imm(_)] => Ok(OpCode::AddI),
-            _ => Err(ParseError {
-                message: "unsupported add operands".into(),
-                line: 0,
-                col: 0,
-            }),
-        },
-        "rsb" => match args {
-            [ParsedArg::Reg(_), ParsedArg::Reg(_), ParsedArg::Reg(_)] => Ok(OpCode::Rsb),
-            [ParsedArg::Reg(_), ParsedArg::Reg(_), ParsedArg::Imm(_)] => Ok(OpCode::RsbI),
-            _ => Err(ParseError {
-                message: "unsupported rsb operands".into(),
-                line: 0,
-                col: 0,
-            }),
-        },
-        "sub" => match args {
-            [ParsedArg::Reg(_), ParsedArg::Reg(_), ParsedArg::Reg(_)] => Ok(OpCode::Sub),
-            [ParsedArg::Reg(_), ParsedArg::Reg(_), ParsedArg::Imm(_)] => Ok(OpCode::SubI),
-            _ => Err(ParseError {
-                message: "unsupported sub operands".into(),
-                line: 0,
-                col: 0,
-            }),
-        },
-        "and" => match args {
-            [ParsedArg::Reg(_), ParsedArg::Reg(_), ParsedArg::Reg(_)] => Ok(OpCode::And),
-            _ => Err(ParseError {
-                message: "unsupported and operands".into(),
-                line: 0,
-                col: 0,
-            }),
-        },
-        "bic" => match args {
-            [ParsedArg::Reg(_), ParsedArg::Reg(_), ParsedArg::Reg(_)] => Ok(OpCode::Bic),
-            _ => Err(ParseError {
-                message: "unsupported bic operands".into(),
-                line: 0,
-                col: 0,
-            }),
-        },
-        "eor" => match args {
-            [ParsedArg::Reg(_), ParsedArg::Reg(_), ParsedArg::Reg(_)] => Ok(OpCode::Eor),
-            _ => Err(ParseError {
-                message: "unsupported eor operands".into(),
-                line: 0,
-                col: 0,
-            }),
-        },
-        "mul" => match args {
-            [ParsedArg::Reg(_), ParsedArg::Reg(_), ParsedArg::Reg(_)] => Ok(OpCode::Mul),
-            _ => Err(ParseError {
-                message: "unsupported mul operands".into(),
-                line: 0,
-                col: 0,
-            }),
-        },
-        "orr" => match args {
-            [ParsedArg::Reg(_), ParsedArg::Reg(_), ParsedArg::Reg(_)] => Ok(OpCode::Orr),
-            _ => Err(ParseError {
-                message: "unsupported orr operands".into(),
-                line: 0,
-                col: 0,
-            }),
-        },
-        "cmp" => match args {
-            [ParsedArg::Reg(_), ParsedArg::Reg(_)] => Ok(OpCode::Cmp),
-            [ParsedArg::Reg(_), ParsedArg::Imm(_)] => Ok(OpCode::CmpI),
-            _ => Err(ParseError {
-                message: "unsupported cmp operands".into(),
-                line: 0,
-                col: 0,
-            }),
-        },
-        _ => Err(ParseError {
+    let candidates: Vec<OpCode> = OpCode::ALL
+        .iter()
+        .copied()
+        .filter(|candidate| candidate.as_str() == op)
+        .collect();
+
+    if candidates.is_empty() {
+        return Err(ParseError {
             message: format!("unsupported opcode '{op}'"),
+            line: 0,
+            col: 0,
+        });
+    }
+
+    let matches: Vec<OpCode> = candidates
+        .into_iter()
+        .filter(|candidate| opcode_matches_args(*candidate, args))
+        .collect();
+
+    match matches.as_slice() {
+        [op_code] => Ok(*op_code),
+        [] => Err(ParseError {
+            message: format!("unsupported operands for opcode '{op}'"),
+            line: 0,
+            col: 0,
+        }),
+        _ => Err(ParseError {
+            message: format!("ambiguous opcode '{op}' for provided operands"),
             line: 0,
             col: 0,
         }),
@@ -1316,6 +1261,17 @@ mod tests {
         let insts = parse::<Word4, Word2>("bic r0, r1, r2").unwrap();
         assert_eq!(insts.len(), 1);
         assert_eq!(insts[0].op_code, OpCode::Bic);
+    }
+
+    #[test]
+    fn test_parse_tst_and_tsti_from_opcode_table() {
+        let reg = parse::<Word4, Word2>("tst r0, r1").unwrap();
+        assert_eq!(reg.len(), 1);
+        assert_eq!(reg[0].op_code, OpCode::Tst);
+
+        let imm = parse::<Word4, Word2>("tst r0, #1").unwrap();
+        assert_eq!(imm.len(), 1);
+        assert_eq!(imm[0].op_code, OpCode::TstI);
     }
 
     #[test]
