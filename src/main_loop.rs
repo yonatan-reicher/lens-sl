@@ -1,7 +1,6 @@
 //! The main loop for synthesis and optimization.
 //! Here we have basically the code that you would see in the actual paper that describes Lens.
 
-use crate::{Cancelled, Config, ShouldCancel};
 use crate::all::All;
 use crate::arm::enumerate::{EnumerationInfo, EnumerationInfoOptions};
 use crate::arm::{BackwardMap, Inst, Register, State};
@@ -15,6 +14,7 @@ use crate::reduce_bit_width::{ImmediateInfo, Reducer};
 use crate::tui::TuiHook;
 use crate::verify::{self, verify};
 use crate::word::prelude::*;
+use crate::{Cancelled, Config, ShouldCancel};
 
 // std imports
 use std::ops::ControlFlow::{self, Break, Continue};
@@ -54,7 +54,8 @@ where
         // This puts the original unreduced constants into the reducer.
         reduced_program.push(inst.reduce(&mut reducer));
     }
-    let additional_immediates_reduced: Vec<WS> = c.additional_immediates
+    let additional_immediates_reduced: Vec<WS> = c
+        .additional_immediates
         .iter()
         .map(|i| reducer.reduce(*i, &ImmediateInfo { is_shift: false }))
         .collect();
@@ -82,6 +83,7 @@ where
     let oracle_reduced = SmtOracle::new(reduced_program);
 
     synthesize::<WT, WS>(
+        c,
         &registers,
         &immediates,
         oracle,
@@ -94,6 +96,7 @@ where
 }
 
 fn synthesize<WT: Word + HasBitWord, W: Word + HasBitWord + serde::de::DeserializeOwned>(
+    c: Config<WT>,
     registers: &[Register],
     immediates: &[W],
     oracle: impl Oracle<[Inst<WT>], State<WT>>,
@@ -175,7 +178,8 @@ where
         if globals.forward_length + globals.backward_length + 1 == original_length - 1 {
             return Ok(None);
         }
-        let should_expand_forward = 2 * globals.backward_length >= globals.forward_length;
+        let should_expand_forward =
+            c.forward_only || 2 * globals.backward_length >= globals.forward_length;
         let direction = Direction::from_is_forward(should_expand_forward);
         tui.expanding(direction);
         let ret = if should_expand_forward {

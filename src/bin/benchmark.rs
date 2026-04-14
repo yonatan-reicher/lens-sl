@@ -20,6 +20,7 @@ struct Options {
     timeout: Option<Duration>,
     filter: Filter,
     csv: Option<Mutex<File>>,
+    forward_only: bool,
 }
 
 #[derive(Clone, Default)]
@@ -270,6 +271,7 @@ impl Benchmark {
                 additional_registers: &[],
                 additional_immediates: &[],
                 should_cancel,
+                forward_only: O.forward_only,
             },
             &lens_sl::NoTui,
         ) {
@@ -328,6 +330,9 @@ fn parse_options() -> Options {
                     },
                 }))
             }
+            "--forward-only" | "-f" => {
+                ret.forward_only = true;
+            }
             "--timeout" => {
                 let Some(t) = args.next() else {
                     eprintln!("error: timeout option needs a time argument, but had no argument");
@@ -354,7 +359,7 @@ fn parse_options() -> Options {
 
 fn print_usage(command: &str) {
     eprintln!(
-        "Usage: {command} [--sl] [--parallel] [--timeout <seconds>] [--filter [ours | lens]] [--csv <filename>]"
+        "Usage: {command} [--sl] [--parallel] [--timeout <seconds>] [--filter [ours | lens]] [--csv <filename>] [--forward-only | -f]"
     );
 }
 

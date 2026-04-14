@@ -59,6 +59,7 @@ pub struct Config<'a, WBig, WShiftBig = crate::word::BitWord<WBig>> {
     pub additional_registers: &'a [Register],
     pub additional_immediates: &'a [WBig],
     pub should_cancel: ShouldCancel,
+    pub forward_only: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]

@@ -1,4 +1,4 @@
-use lens_sl::{Algorithm, Config, NoTui, Register, ShouldCancel, Word4, Word64, inst, optimize};
+use lens_sl::{Algorithm, Config, NoTui, Word4, Word64, inst, optimize};
 
 // These are ignored because they take a long time.
 
@@ -14,9 +14,7 @@ fn bad_case() {
                 inst!(AddI, 3, 3, 1),
                 inst!(And, 0, 3, 0),
             ],
-            additional_registers: &[Register(0), Register(3)], // additional_registers
-            additional_immediates: &[],                        // additional_immediates
-            should_cancel: ShouldCancel::Never,
+            ..Config::default()
         },
         &NoTui,
     )
@@ -37,9 +35,7 @@ fn bad_case_2() {
                 inst!(Orr, 0, 0, 1),
                 inst!(AddI Eq, 1, 0, 1),
             ],
-            additional_registers: &[Register(0), Register(1)], // additional_registers
-            additional_immediates: &[],                        // additional_immediates
-            should_cancel: ShouldCancel::Never,
+            ..Config::default()
         },
         &NoTui,
     )

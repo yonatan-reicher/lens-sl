@@ -70,6 +70,7 @@ fn main() {
         additional_registers: &[],
         additional_immediates: &[],
         should_cancel: ShouldCancel::Never,
+        forward_only: false,
     };
 
     let tui = Tui::default();
