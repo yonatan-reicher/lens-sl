@@ -54,11 +54,11 @@ pub enum Algorithm {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Config<'a, WBig, WShiftBig = crate::word::BitWord<WBig>> {
-    algorithm: Algorithm,
-    program: &'a [Inst<WBig, WShiftBig>],
-    additional_registers: &'a [Register],
-    additional_immediates: &'a [WBig],
-    should_cancel: ShouldCancel,
+    pub algorithm: Algorithm,
+    pub program: &'a [Inst<WBig, WShiftBig>],
+    pub additional_registers: &'a [Register],
+    pub additional_immediates: &'a [WBig],
+    pub should_cancel: ShouldCancel,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
