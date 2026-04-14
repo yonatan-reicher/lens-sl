@@ -213,7 +213,10 @@ define_instructions! {
     | AddI    | Reg(Out) | Reg(Inp) | Imm      | "add"  |    false    |     false     |
     | Sub     | Reg(Out) | Reg(Inp) | Reg(Inp) | "sub"  |    false    |     false     |
     | SubI    | Reg(Out) | Reg(Inp) | Imm      | "sub"  |    false    |     false     |
+    | Rsb     | Reg(Out) | Reg(Inp) | Reg(Inp) | "rsb"  |    false    |     false     |
+    | RsbI    | Reg(Out) | Reg(Inp) | Imm      | "rsb"  |    false    |     false     |
     | And     | Reg(Out) | Reg(Inp) | Reg(Inp) | "and"  |    true     |     false     |
+    | Bic     | Reg(Out) | Reg(Inp) | Reg(Inp) | "bic"  |    false    |     false     |
     | Eor     | Reg(Out) | Reg(Inp) | Reg(Inp) | "eor"  |    true     |     false     |
     | Mov     | Reg(Out) | Reg(Inp) | Unused   | "mov"  |    false    |     false     |
     | MovI    | Reg(Inp) | Imm      | Unused   | "mov"  |    false    |     false     |
