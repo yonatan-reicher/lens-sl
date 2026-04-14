@@ -1,6 +1,7 @@
 #[allow(unused_imports)]
 use lens_sl::{
-    Cancelled, LiveValue, NoTui, Register, Tui, Word4, Word8, Word64, inst, optimize, optimize_sl,
+    Algorithm, Cancelled, Config, LiveValue, NoTui, Register, ShouldCancel, Tui, Word4, Word8,
+    Word64, inst, optimize, optimize_sl,
 };
 
 fn main() {
@@ -59,13 +60,18 @@ fn main() {
     // Keep parsed live-out info available until `optimize` accepts it directly.
     let _live_out = live_out;
 
+    let config = Config {
+        algorithm: Algorithm::Lens,
+        program: &program,
+        additional_registers: &[],
+        additional_immediates: &[],
+        should_cancel: ShouldCancel::Never,
+    };
+
     let p = if sl {
         let tui = Tui::default();
         let ret = optimize_sl::<Word64, Word4>(
-            &program,
-            vec![], // additional_registers
-            vec![], // additional_immediates
-            Default::default(),
+            config,
             &tui, // */ &NoTui,
         );
         tui.close();
@@ -73,10 +79,7 @@ fn main() {
     } else {
         let tui = Tui::default();
         let ret = optimize::<Word64, Word4>(
-            &program,
-            vec![], // additional_registers
-            vec![], // additional_immediates
-            Default::default(),
+            config,
             &tui,
         );
         tui.close();

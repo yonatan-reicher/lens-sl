@@ -1,5 +1,4 @@
-use lens_sl::ShouldCancel;
-use lens_sl::{Cancelled, Inst, Word4, Word64};
+use lens_sl::{ShouldCancel, Algorithm, Config, Cancelled, Inst, Word4, Word64};
 use std::env;
 use std::fs::{self, File};
 use std::hint::black_box;
@@ -264,7 +263,13 @@ impl Benchmark {
             None => ShouldCancel::Never,
             Some(d) => ShouldCancel::At(Instant::now() + d),
         };
-        match optimize(&self.input, vec![], vec![], should_cancel, &lens_sl::NoTui) {
+        match optimize(Config {
+            algorithm: Algorithm::Lens,
+            program: &self.input,
+            additional_registers: &[],
+            additional_immediates: &[], should_cancel,
+        },
+            &lens_sl::NoTui) {
             Ok(None) => (),
             Ok(Some(p)) => f(p).map_break(Ok)?,
             Err(Cancelled) => return Break(Err(Cancelled)),
