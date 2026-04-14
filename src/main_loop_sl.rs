@@ -13,7 +13,7 @@ use crate::programs_sl as programs;
 use crate::reduce_bit_width::{ImmediateInfo, Reducer};
 use crate::tui::TuiHook;
 use crate::word::prelude::*;
-use crate::{Cancelled, ShouldCancel, graph, inst};
+use crate::{Cancelled, ShouldCancel, graph};
 
 // std imports
 use std::cell::{Ref, RefCell};
