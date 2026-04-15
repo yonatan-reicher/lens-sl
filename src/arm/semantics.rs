@@ -233,56 +233,64 @@ impl<'a, W: AbstractWord, State: StateTrait<W>> ReadWriteTracker<'a, W::Bool, W,
 // =================================================================================================
 
 impl<WShift> ShiftCode<WShift> {
-    fn apply<W: AbstractWord>(&self, x: W, carry_in: W::Bool) -> (W, Option<W::Bool>)
+    fn apply<W>(&self, x: W, read_reg: impl FnOnce(Register) -> W) -> W
     where
+        W: AbstractWord,
         WShift: Word,
     {
         let from_param = || x.get_from_param();
+        // Convert WShift to W
         let convert = |i: WShift| i.into_abstract_word::<W>(from_param());
         let make_msb = |on| on << W::Word::from(W::BITS - 1).into_abstract_word::<W>(from_param());
         let msb = |x| x >> convert(31.into());
         let lsb = |x| x & convert(1.into());
-        let mut carry = Option::None;
+        let read_reg = |r| read_reg(r).into_smt_word::<WShift::SmtWord>(from_param()).into_abstract_word::<W>(from_param());
         use ShiftCode::*;
         let out = match *self {
             None => x,
-            Asr(i) => (x >> convert(i)) | make_msb(msb(x)),
-            Lsl(i) => x << convert(i),
-            Lsr(i) => x >> convert(i),
-            Ror(i) => (x >> convert(i)) | (x << convert(WShift::from(W::BITS) - i)),
-            Rrx => {
-                // GODAMNIT!!! This was hard to implement and will majorly slow us down, and
-                // orginal Lens doesn't even f-ing implement it.
-                // TODO: How much faster are we without this?
-                carry = Some(lsb(x).is_zero());
-                (x >> convert(1.into()))
-                    | make_msb(carry_in.if_then_else(convert(1.into()), convert(0.into())))
-            }
+            AsrI(i) => (x >> convert(i)) | make_msb(msb(x)),
+            LslI(i) => x << convert(i),
+            LsrI(i) => x >> convert(i),
+            RorI(i) => (x >> convert(i)) | (x << convert(WShift::from(W::BITS) - i)),
+            // Rrx => {
+            //     // GODAMNIT!!! This was hard to implement and will majorly slow us down, and
+            //     // orginal Lens doesn't even f-ing implement it.
+            //     // TODO: How much faster are we without this?
+            //     carry = Some(lsb(x).is_zero());
+            //     (x >> convert(1.into()))
+            //         | make_msb(carry_in.if_then_else(convert(1.into()), convert(0.into())))
+            // }
+            // Yeah this was removed
+            Asr(r) |Lsl(r) |Lsr(r) |Ror(r) => self.register_to_immediate(read_reg).apply(x, |r| unreachable!()),
         };
-        (out, carry)
-    }
+        return out;
 
-    pub fn affects_flags(&self) -> bool {
-        match self {
-            ShiftCode::None
-            | ShiftCode::Asr(_)
-            | ShiftCode::Lsl(_)
-            | ShiftCode::Lsr(_)
-            | ShiftCode::Ror(_) => false,
-            ShiftCode::Rrx => true,
+        fn asr<W: AbstractWord, WShift>(i: WShift) {
+            (x >> convert(i)) | make_msb(msb(x))
         }
     }
 
-    pub fn reads_flags(&self) -> bool {
-        match self {
-            ShiftCode::None
-            | ShiftCode::Asr(_)
-            | ShiftCode::Lsl(_)
-            | ShiftCode::Lsr(_)
-            | ShiftCode::Ror(_) => false,
-            ShiftCode::Rrx => true,
-        }
-    }
+    // pub fn affects_flags(&self) -> bool {
+    //     match self {
+    //         ShiftCode::None
+    //         | ShiftCode::Asr(_)
+    //         | ShiftCode::Lsl(_)
+    //         | ShiftCode::Lsr(_)
+    //         | ShiftCode::Ror(_) => false,
+    //         ShiftCode::Rrx => true,
+    //     }
+    // }
+    // 
+    // pub fn reads_flags(&self) -> bool {
+    //     match self {
+    //         ShiftCode::None
+    //         | ShiftCode::Asr(_)
+    //         | ShiftCode::Lsl(_)
+    //         | ShiftCode::Lsr(_)
+    //         | ShiftCode::Ror(_) => false,
+    //         ShiftCode::Rrx => true,
+    //     }
+    // }
 }
 
 // =================================================================================================
