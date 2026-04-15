@@ -250,6 +250,7 @@ fn input_state_mask<W: Copy + Into<Register>, WShift>(
     }
 }
 
+// Should this be unnormalize, or unormalize?
 fn unnormalize_input_state<W: Word, WShift>(
     inst: &Inst<W, WShift>,
     original_output: &State<W>,
