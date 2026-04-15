@@ -8,10 +8,14 @@ type W = Word4;
 // type U = <W as Word>::Unsigned;
 
 fn main() {
-    let program: &[Inst<W>] = &[inst!(AddI, 0, 0, 5), inst!(Orr, 0, 1, 0)];
+    let program: &[Inst<W>] = &[
+        inst!(And, 0, 0, 1; shift Ror(1.into())),
+        inst!(Add, 0, 0, 0),
+        inst!(Add, 1, 1, 1),
+    ];
     let mut initial_state = State::default();
-    initial_state.set_register(Register(0), 6.into());
-    initial_state.set_register(Register(1), 13.into());
+    initial_state[Register(0)] = 9.into();
+    initial_state[Register(1)] = 0.into();
     println!("Initial state: {initial_state}");
     let mut state = initial_state;
     let mut i = 0;
