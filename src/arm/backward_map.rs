@@ -478,4 +478,32 @@ mod tests {
         }
         panic!("No instruction produced non-empty input states for the given output state!");
     }
+
+    #[test]
+    #[ignore]
+    fn no_missing() {
+        type W = Word4;
+        let bm = BackwardMap::<W>::new(&[Register(0), Register(1)]).unwrap();
+        let flush = || {
+            let _ = std::io::Write::flush(&mut std::io::stdout());
+        };
+
+        let ei = EnumerationInfo {
+            registers: EnumerationInfoOptions::Limited(&[Register(0), Register(1)]),
+            immediates: EnumerationInfoOptions::Unlimited,
+            ..EnumerationInfo::default()
+        };
+        for inst in Inst::enumerate(ei) {
+            println!("inst {inst}:");
+            State::all_each(&ei.registers, |inp| {
+                print!("  inp {inp}");
+                let out = (*inp).mutate(|i| inst.run(i));
+                print!("  out {out}:");
+                bm.get(inst, out).iter().for_each(|s| print!("  {s}"));
+                flush();
+                assert!(bm.get(inst, out).contains(inp));
+                println!("  good!");
+            });
+        }
+    }
 }
