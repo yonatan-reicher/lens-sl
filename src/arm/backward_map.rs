@@ -241,8 +241,9 @@ fn input_state_mask<W: Copy + Into<Register>, WShift>(
     _out: &State<W>,
 ) -> state::Mask {
     let registers = Register::ALL.map(|r| {
-        inst.args_with_types()
-            .any(|(a, t)| matches!(t, ArgType::Reg(RegArgType::Inp | RegArgType::InpOut)) && r == a.into())
+        inst.args_with_types().any(|(a, t)| {
+            matches!(t, ArgType::Reg(RegArgType::Inp | RegArgType::InpOut)) && r == a.into()
+        })
     });
     state::Mask {
         flags: inst.reads_flags(),
