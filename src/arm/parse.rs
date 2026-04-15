@@ -1136,6 +1136,13 @@ mod tests {
     }
 
     #[test]
+    fn test_special_inst_udiv() {
+        let insts = parse_raw("bl __aeabi_uidiv").unwrap();
+        assert_eq!(op(&insts[0]), ("udiv", "", ""));
+        assert_eq!(insts[0].args, vec!["r0", "r0", "r1"]);
+    }
+
+    #[test]
     fn test_label_and_block_comment_skipped() {
         let src = "main:\n; BB0_1:\nmov r0, r1\n";
         let insts = parse_raw(src).unwrap();
@@ -1166,6 +1173,38 @@ mod tests {
         assert_eq!(insts[0].shift, ShiftCode::None);
         assert_eq!(usize::from(insts[0].args[0]), 0);
         assert_eq!(usize::from(insts[0].args[1]), 1);
+    }
+
+    #[test]
+    fn test_parse_sdiv() {
+        let insts = parse::<Word4, Word2>("sdiv r0, r1, r2").unwrap();
+        assert_eq!(insts.len(), 1);
+        assert_eq!(insts[0].op_code, OpCode::Sdiv);
+        assert_eq!(insts[0].cond_code, CondCode::Al);
+    }
+
+    #[test]
+    fn test_parse_special_sdiv_call() {
+        let insts = parse::<Word4, Word2>("bl __aeabi_idiv").unwrap();
+        assert_eq!(insts.len(), 1);
+        assert_eq!(insts[0].op_code, OpCode::Sdiv);
+        assert_eq!(insts[0].cond_code, CondCode::Al);
+    }
+
+    #[test]
+    fn test_parse_udiv() {
+        let insts = parse::<Word4, Word2>("udiv r0, r1, r2").unwrap();
+        assert_eq!(insts.len(), 1);
+        assert_eq!(insts[0].op_code, OpCode::Udiv);
+        assert_eq!(insts[0].cond_code, CondCode::Al);
+    }
+
+    #[test]
+    fn test_parse_special_udiv_call() {
+        let insts = parse::<Word4, Word2>("bl __aeabi_uidiv").unwrap();
+        assert_eq!(insts.len(), 1);
+        assert_eq!(insts[0].op_code, OpCode::Udiv);
+        assert_eq!(insts[0].cond_code, CondCode::Al);
     }
 
     #[test]
@@ -1243,6 +1282,36 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_mvn() {
+        let insts = parse::<Word4, Word2>("mvn r3, r3").unwrap();
+        assert_eq!(insts.len(), 1);
+        assert_eq!(insts[0].op_code, OpCode::Mvn);
+        assert_eq!(insts[0].cond_code, CondCode::Al);
+    }
+
+    #[test]
+    fn test_parse_mvni() {
+        let insts = parse::<Word4, Word2>("mvn r0, 0").unwrap();
+        assert_eq!(insts.len(), 1);
+        assert_eq!(insts[0].op_code, OpCode::MvnI);
+        assert_eq!(insts[0].cond_code, CondCode::Al);
+    }
+
+    #[test]
+    fn test_parse_uxth() {
+        let insts = parse::<Word4, Word2>("uxth r5, r0").unwrap();
+        assert_eq!(insts.len(), 1);
+        assert_eq!(insts[0].op_code, OpCode::Uxth);
+    }
+
+    #[test]
+    fn test_parse_uxtah() {
+        let insts = parse::<Word4, Word2>("uxtah r2, r5, r2").unwrap();
+        assert_eq!(insts.len(), 1);
+        assert_eq!(insts[0].op_code, OpCode::Uxtah);
+    }
+
+    #[test]
     fn test_parse_rsb() {
         let insts = parse::<Word4, Word2>("rsb r0, r1, r2").unwrap();
         assert_eq!(insts.len(), 1);
@@ -1261,6 +1330,28 @@ mod tests {
         let insts = parse::<Word4, Word2>("bic r0, r1, r2").unwrap();
         assert_eq!(insts.len(), 1);
         assert_eq!(insts[0].op_code, OpCode::Bic);
+    }
+
+    #[test]
+    fn test_parse_andi() {
+        let insts = parse::<Word4, Word2>("and r1, r3, #1").unwrap();
+        assert_eq!(insts.len(), 1);
+        assert_eq!(insts[0].op_code, OpCode::AndI);
+    }
+
+    #[test]
+    fn test_parse_orri_with_condition() {
+        let insts = parse::<Word4, Word2>("orrls r0, r2, #1").unwrap();
+        assert_eq!(insts.len(), 1);
+        assert_eq!(insts[0].op_code, OpCode::OrrI);
+        assert_eq!(insts[0].cond_code, CondCode::Ls);
+    }
+
+    #[test]
+    fn test_parse_bici() {
+        let insts = parse::<Word4, Word2>("bic r1, r3, #7").unwrap();
+        assert_eq!(insts.len(), 1);
+        assert_eq!(insts[0].op_code, OpCode::BicI);
     }
 
     #[test]

@@ -221,14 +221,23 @@ define_instructions! {
     | Rsb     | Reg(Out)    | Reg(Inp) | Reg(Inp) | "rsb"  |    false    |     false     |
     | RsbI    | Reg(Out)    | Reg(Inp) | Imm      | "rsb"  |    false    |     false     |
     | And     | Reg(Out)    | Reg(Inp) | Reg(Inp) | "and"  |    true     |     false     |
+    | AndI    | Reg(Out)    | Reg(Inp) | Imm      | "and"  |    false    |     false     |
     | Bic     | Reg(Out)    | Reg(Inp) | Reg(Inp) | "bic"  |    false    |     false     |
+    | BicI    | Reg(Out)    | Reg(Inp) | Imm      | "bic"  |    false    |     false     |
     | Eor     | Reg(Out)    | Reg(Inp) | Reg(Inp) | "eor"  |    true     |     false     |
     | Mov     | Reg(Out)    | Reg(Inp) | Unused   | "mov"  |    false    |     false     |
     | MovI    | Reg(Inp)    | Imm      | Unused   | "mov"  |    false    |     false     |
+    | Mvn     | Reg(Out)    | Reg(Inp) | Unused   | "mvn"  |    false    |     false     |
+    | MvnI    | Reg(Out)    | Imm      | Unused   | "mvn"  |    false    |     false     |
+    | Uxth    | Reg(Out)    | Reg(Inp) | Unused   | "uxth" |    false    |     false     |
+    | Uxtah   | Reg(Out)    | Reg(Inp) | Reg(Inp) | "uxtah"|    false    |     false     |
     | Movt    | Reg(InpOut) | Imm      | Unused   | "movt" |    false    |     false     |
     | Movw    | Reg(InpOut) | Imm      | Unused   | "movw" |    false    |     false     |
     | Mul     | Reg(Out)    | Reg(Inp) | Reg(Inp) | "mul"  |    true     |     false     |
+    | Sdiv    | Reg(Out)    | Reg(Inp) | Reg(Inp) | "sdiv" |    false    |     false     |
+    | Udiv    | Reg(Out)    | Reg(Inp) | Reg(Inp) | "udiv" |    false    |     false     |
     | Orr     | Reg(Out)    | Reg(Inp) | Reg(Inp) | "orr"  |    true     |     false     |
+    | OrrI    | Reg(Out)    | Reg(Inp) | Imm      | "orr"  |    false    |     false     |
     | Cmp     | Reg(Inp)    | Reg(Inp) | Unused   | "cmp"  |    false    |     true      |
     | CmpI    | Reg(Inp)    | Imm      | Unused   | "cmp"  |    false    |     true      |
     | Tst     | Reg(Inp)    | Reg(Inp) | Unused   | "tst"  |    true     |     true      |
