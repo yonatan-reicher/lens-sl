@@ -1,6 +1,6 @@
+use super::state::{self, Flags, State};
 use super::{
     ArgType, CondCode, EnumerationInfo, EnumerationInfoOptions, Inst, OpCode, RegArgType, Register,
-    State, state,
 };
 use crate::all::All;
 use crate::word::prelude::*;
@@ -257,7 +257,7 @@ fn unnormalize_input_state<W: Word, WShift>(
     original_output: &State<W>,
     inp: State<W>,
 ) -> impl Iterator<Item = State<W>> {
-    use itertools::Itertools;
+    use itertools::{Either, Itertools};
     let out_mask = output_state_mask(inst);
     let inp_mask = input_state_mask(inst, original_output);
     // We have three kinds of interesting things. We have the inputs that appear in the input mask.
@@ -272,12 +272,20 @@ fn unnormalize_input_state<W: Word, WShift>(
         .registers()
         .map(|r| W::all().map(move |w| (r, w)))
         .multi_cartesian_product()
-        .map(move |to_set| {
+        .flat_map(move |to_set| {
             let mut ret = ret;
             for (r, w) in to_set {
                 ret[r] = w;
             }
-            ret
+            if only_in_output.flags {
+                Either::Left(
+                    Flags::ALL
+                        .into_iter()
+                        .map(move |f| ret.mutate(move |r| r.flags = f.into())),
+                )
+            } else {
+                Either::Right(std::iter::once(ret))
+            }
         })
 }
 
