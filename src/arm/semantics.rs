@@ -123,8 +123,9 @@ where
             let dividend_abs = dividend_neg.if_then_else(-dividend, dividend);
             let divisor_abs = divisor_neg.if_then_else(-safe_divisor, safe_divisor);
             let quotient_abs = dividend_abs / divisor_abs;
-            let quotient =
-                dividend_neg.neq(&divisor_neg).if_then_else(-quotient_abs, quotient_abs);
+            let quotient = dividend_neg
+                .neq(&divisor_neg)
+                .if_then_else(-quotient_abs, quotient_abs);
             set_reg!(regs[0], divisor.is_zero().if_then_else(zero, quotient));
         }
         Udiv => {
