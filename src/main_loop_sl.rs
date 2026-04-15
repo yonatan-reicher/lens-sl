@@ -3,17 +3,17 @@
 
 use crate::all::All;
 use crate::arm::enumerate::{EnumerationInfo, EnumerationInfoOptions};
-use crate::arm::state::Masked as MaskedState;
-use crate::arm::{self, Register, State, run_program_masked, what_program_reads};
+use crate::arm::state::{Mask, Masked as MaskedState, State};
+use crate::arm::{self, Register};
 use crate::collect_registers::Collector;
 use crate::direction::Direction;
 use crate::intersect_all::intersect_all;
 use crate::oracle::{Oracle, SmtOracle};
-use crate::{Config, programs};
 use crate::reduce_bit_width::{ImmediateInfo, Reducer};
 use crate::tui::TuiHook;
 use crate::word::prelude::*;
 use crate::{Cancelled, ShouldCancel, graph};
+use crate::{Config, programs};
 
 // std imports
 use std::cell::{Ref, RefCell};
@@ -59,7 +59,8 @@ where
         // This puts the original unreduced constants into the reducer.
         reduced_program.push(inst.reduce(&mut reducer));
     }
-    let additional_immediates_reduced: Vec<WS> = c.additional_immediates
+    let additional_immediates_reduced: Vec<WS> = c
+        .additional_immediates
         .iter()
         .map(|i| reducer.reduce(*i, &ImmediateInfo { is_shift: false }))
         .collect();
@@ -128,11 +129,14 @@ where
     let mut oracle = ReducedProgramOracle {
         oracle: &mut oracle,
         oracle_reduced: &mut oracle_reduced,
-        original_reduced: &original_reduced,
         reducer: &reducer,
         tui,
         inputs_outputs: &inputs_outputs,
     };
+    let biggest_mask = registers
+        .iter()
+        .cloned()
+        .fold(Mask::JUST_FLAGS, |m, r| m | Mask::just_register(r));
     // ----- The Actual Loop -----------------------------------------------------------------------
     // We must start with at least one input...
     match oracle.verify(&[]) {
@@ -158,17 +162,17 @@ where
                 }
                 // First we need to check that all the states are properly represented in the bank.
                 for inp in inputs.iter().cloned() {
-                    if !bank.contains_key(&inp) {
-                        init_bank(&mut bank, inp, registers, immediates);
+                    if !bank.contains_key(&inp.masked(biggest_mask)) {
+                        init_bank(&mut bank, inp.masked(biggest_mask), registers, immediates);
                     }
                 }
                 // The red code.
                 let mut discarded = FxHashSet::<Inst<W>>::default();
-                for sub_inputs in inputs
-                    .iter()
-                    .map(|s| s.sub_states())
-                    .multi_cartesian_product()
-                {
+                for sub_input_mask in biggest_mask.sub_masks() {
+                    let sub_inputs = inputs
+                        .iter()
+                        .map(|s| s.masked(sub_input_mask))
+                        .collect::<Vec<_>>();
                     // Find all instructions (and their effects!) that can run from the current states.
                     // Instead of doing this by iterating all instructions, do this by intersection of equivalence
                     // classes that can run from the states.
@@ -197,14 +201,14 @@ where
                         }
                         let outputs = inputs
                             .iter()
-                            .map(|s| inst.run_masked(*s))
-                            .collect::<Option<Vec<_>>>()
-                            .unwrap();
+                            .map(|s| (*s).mutate(|s| inst.run(s)))
+                            .collect::<Vec<_>>();
                         // Did we succeed?
                         if outputs == *inputs_outputs.outputs() {
                             let prog = prog.clone().mutate(|p| p.push(inst));
                             match oracle.verify(&prog) {
-                                Continue(()) => todo!("what do we do here? '{prog:?}'"),
+                                // Continue(()) => todo!("what do we do here? '{prog:?}'"),
+                                Continue(()) => (),
                                 Break(ProgramOrRetry::Program(p)) => return Ok(Some(p)),
                                 Break(ProgramOrRetry::Retry) => continue 'restart,
                             }
@@ -215,24 +219,24 @@ where
                         seen.insert(outputs.clone());
                         // Extend Hila's discard set. Extend it by all the instructions which do the
                         // exact same thing as this instruction on the current inputs.
-                        for sub_inputs in inputs
-                            .iter()
-                            .zip(&sub_inputs)
-                            .map(|(s, sub_input)| {
-                                s.sub_states().filter(|s| sub_input.is_sub_state(s))
-                            })
-                            .multi_cartesian_product()
-                        {
-                            for sub_outputs in outputs
+                        for sub_input_mask in biggest_mask.sub_masks().filter(|m| {
+                            sub_input_mask
+                                .into_bit_mask()
+                                .is_sub_mask(&m.into_bit_mask())
+                        }) {
+                            let sub_inputs = inputs
                                 .iter()
-                                .map(|s| s.sub_states())
-                                .multi_cartesian_product()
-                            {
-                                if !sub_inputs.iter().zip(sub_outputs.iter()).all(
+                                .map(|s| s.masked(sub_input_mask))
+                                .collect::<Vec<_>>();
+                            for sub_output_mask in biggest_mask.sub_masks() {
+                                let sub_outputs = outputs
+                                    .iter()
+                                    .map(|s| s.masked(sub_output_mask));
+                                if !sub_inputs.iter().zip(sub_outputs.clone()).all(
                                     |(sub_input, sub_output)| {
                                         bank.get(sub_input)
                                             .expect("we have initialized this at the start")
-                                            .contains_key(sub_output)
+                                            .contains_key(&sub_output)
                                     },
                                 ) {
                                     continue;
@@ -241,11 +245,11 @@ where
                                     // &inputs
                                     &sub_inputs
                                         .iter()
-                                        .zip(sub_outputs.iter())
+                                        .zip(sub_outputs)
                                         .map(|(input, sub_output)| {
                                             bank.get(input)
                                                 .expect("we have initialized this at the start")
-                                                .get(sub_output)
+                                                .get(&sub_output)
                                                 .unwrap()
                                                 .clone()
                                         })
@@ -315,21 +319,21 @@ fn init_bank<W: Word + HasBitWord>(
 
 #[derive(Debug, Default)]
 #[allow(clippy::type_complexity)]
-struct InputsOutputsCell<W>(RefCell<(Vec<MaskedState<W>>, Vec<MaskedState<W>>)>);
+struct InputsOutputsCell<W>(RefCell<(Vec<State<W>>, Vec<State<W>>)>);
 
 impl<W: Word> InputsOutputsCell<W> {
-    pub fn inputs(&self) -> Ref<'_, [MaskedState<W>]> {
+    pub fn inputs(&self) -> Ref<'_, [State<W>]> {
         Ref::map(self.0.borrow(), |(inps, _)| inps.as_slice())
     }
-    pub fn outputs(&self) -> Ref<'_, [MaskedState<W>]> {
+    pub fn outputs(&self) -> Ref<'_, [State<W>]> {
         Ref::map(self.0.borrow(), |(_, outs)| outs.as_slice())
     }
-    pub fn push(&self, inp: MaskedState<W>, out: MaskedState<W>) {
+    pub fn push(&self, inp: State<W>, out: State<W>) {
         let (inps, outs) = &mut *self.0.borrow_mut();
         inps.push(inp);
         outs.push(out);
     }
-    pub fn contains(&self, inp: &MaskedState<W>, out: &MaskedState<W>) -> bool {
+    pub fn contains(&self, inp: &State<W>, out: &State<W>) -> bool {
         let (inps, outs) = &*self.0.borrow();
         inps.iter().zip(outs).contains(&(inp, out))
     }
@@ -339,7 +343,6 @@ struct ReducedProgramOracle<'a, WBig: HasBitWord, W: HasBitWord> {
     inputs_outputs: &'a InputsOutputsCell<W>,
     oracle: &'a mut dyn Oracle<[Inst<WBig>], State<WBig>>,
     oracle_reduced: &'a mut dyn Oracle<[Inst<W>], State<W>>,
-    original_reduced: &'a [Inst<W>],
     reducer: &'a Reducer<WBig, W>,
     tui: &'a dyn TuiHook<&'a Graph<W>, State<W>>,
 }
@@ -362,11 +365,8 @@ where
             self.oracle,
             |equivalent_prog| Break(ProgramOrRetry::Program(equivalent_prog.to_vec())),
         ) {
-            verify::Result::CounterExample(inp, _out) => {
-                let read_mask = what_program_reads(self.original_reduced.iter().cloned(), &inp);
-                let inp = inp.masked(read_mask.into());
-                let out = run_program_masked(self.original_reduced.iter().cloned(), inp).expect("the counter example found by the oracle must be runnable and the input mask for the program must be enough for it to run");
-                self.tui.found_counter_example(*inp.state(), *out.state());
+            verify::Result::CounterExample(inp, out) => {
+                self.tui.found_counter_example(inp, out);
                 assert!(
                     !self.inputs_outputs.contains(&inp, &out),
                     "Counter-example from reduced oracle should not have been seen before."
