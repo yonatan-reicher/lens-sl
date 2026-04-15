@@ -321,23 +321,28 @@ pub enum ShiftCode<W> {
     /// Arithmetic shift right - shift right but keep MSB the same.
     /// Must have 1 <= n <= BITS.
     #[display("asr #{_0}")]
-    Asr(W),
+    AsrI(W),
+    #[display("asr {_0}")]
+    Asr(Register),
     /// Logical shift left.
     /// NOTE: There exists a synonym called `asl`, very confusing. lol.
     /// Must have 1 <= n <= BITS - 1.
     #[display("lsl #{_0}")]
-    Lsl(W),
+    LslI(W),
+    #[display("lsl {_0}")]
+    Lsl(Register),
     /// Logical shift right.
     /// Must have 1 <= n <= BITS.
     #[display("lsr #{_0}")]
-    Lsr(W),
+    LsrI(W),
+    #[display("lsr {_0}")]
+    Lsr(Register),
     /// Rotate right.
     /// Must have 1 <= n <= BITS - 1.
     #[display("ror #{_0}")]
-    Ror(W),
-    /// Rotate right one bit, sign extended.
-    #[display("rrx")]
-    Rrx,
+    RorI(W),
+    #[display("ror {_0}")]
+    Ror(Register),
 }
 
 /// A single instruction.
