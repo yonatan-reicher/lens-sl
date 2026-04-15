@@ -498,13 +498,16 @@ mod tests {
         for inst in Inst::enumerate(ei) {
             println!("inst {inst}:");
             State::all_each(&ei.registers, |inp| {
-                print!("  inp {inp}");
                 let out = (*inp).mutate(|i| inst.run(i));
-                print!("  out {out}:");
-                bm.get(inst, out).iter().for_each(|s| print!("  {s}"));
-                flush();
-                assert!(bm.get(inst, out).contains(inp));
-                println!("  good!");
+                let success = bm.get(inst, out).contains(inp);
+                if !success {
+                    println!("Failed!!");
+                    print!("  inp {inp}");
+                    print!("  out {out}:");
+                    bm.get(inst, out).iter().for_each(|s| print!("  {s}"));
+                    flush();
+                    panic!();
+                }
             });
         }
     }
