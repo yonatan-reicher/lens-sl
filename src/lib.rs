@@ -91,7 +91,10 @@ pub use word::prelude::*;
 
 pub fn optimize<WT, WS>(
     c: Config<WT>,
-    tui: &impl for<'g> TuiHook<&'g crate::graph::Graph<State<WS>, crate::programs::Programs<Inst<WS>>>, State<WS>>,
+    tui: &impl for<'g> TuiHook<
+        &'g crate::graph::Graph<State<WS>, crate::programs::Programs<Inst<WS>>>,
+        State<WS>,
+    >,
 ) -> Result<Option<Vec<Inst<WT>>>, Cancelled>
 where
     WT: Word + HasBitWord,
