@@ -173,33 +173,37 @@ impl<W: Word + HasBitWord> BackwardMap<W, BitWord<W>> {
         vec.push(inp);
     }
 
-    pub fn get(&self, inst: Inst<W>, out_orig: State<W>) -> Vec<State<W>> {
+    pub fn get(&self, inst: Inst<W>, out_orig: State<W>) -> impl Iterator<Item=State<W>> + use<W> {
+        use itertools::Either;
         // Edge cases:
         // 1. Nop!
         if inst.op_code == OpCode::Nop {
-            return vec![out_orig];
+            return Either::Left(vec![out_orig].into_iter());
         }
-        // 2. Condition is false, and flags aren't affected. This can't be, so there is no input.
+        // 2. Condition is false, and flags aren't affected. The instruction was just skipped.
         if !inst.affects_flags() && !inst.cond_code.check(out_orig.flags.into()) {
-            return vec![];
+            return Either::Left(vec![out_orig].into_iter());
         }
         // 3. Condition is false (now), and the flags are affected. It could be both that the
         // condition was false and the instruction didn't run, and it could be that the condition
         // was true and the instruction did run, and the flags were just changed.
         if inst.affects_flags() && !inst.cond_code.check(out_orig.flags.into()) {
-            return self.get(normalize_inst(inst), out_orig).mutate(|v| {
+            return Either::Left(self.get(normalize_inst(inst), out_orig).collect::<Vec<_>>().mutate(|v| {
                 v.push(out_orig);
-            });
+            }).into_iter());
         }
         let inst = normalize_inst(inst);
         let out = normalize_output_state(&inst, out_orig);
-        self.map
+        Either::Right(self.map
             .get(&(inst, out))
             .cloned()
             .unwrap_or_default()
             .into_iter()
-            .flat_map(|inp| unnormalize_input_state(&inst, &out_orig, inp))
-            .collect()
+            .flat_map(move |inp| {
+                let inst = inst;
+                let out_orig = out_orig;
+                unnormalize_input_state(&inst, &out_orig, inp)
+            }))
     }
 }
 
@@ -256,7 +260,7 @@ fn unnormalize_input_state<W: Word, WShift>(
     inst: &Inst<W, WShift>,
     original_output: &State<W>,
     inp: State<W>,
-) -> impl Iterator<Item = State<W>> {
+) -> impl Iterator<Item = State<W>> + use<W, WShift> {
     use itertools::{Either, Itertools};
     let out_mask = output_state_mask(inst);
     let inp_mask = input_state_mask(inst, original_output);
@@ -478,7 +482,7 @@ mod tests {
             ..EnumerationInfo::default()
         };
         for inst in Inst::enumerate(ei) {
-            let x = bm.get(inst, state);
+            let x = bm.get(inst, state).collect::<Vec<_>>();
             println!("Instruction: {inst}, Output State: {state}");
             println!("Input States: {x:?}");
             if !x.is_empty() {
@@ -500,19 +504,31 @@ mod tests {
 
         let ei = EnumerationInfo {
             registers: EnumerationInfoOptions::Limited(&[Register(0), Register(1)]),
-            immediates: EnumerationInfoOptions::Unlimited,
+            immediates: EnumerationInfoOptions::Limited(&[
+                0.into(),
+                1.into(),
+                2.into(),
+                3.into(),
+                14.into(),
+                15.into(),
+            ]),
             ..EnumerationInfo::default()
         };
-        for inst in Inst::enumerate(ei) {
-            println!("inst {inst}:");
+        let total = Inst::enumerate(ei).count();
+        let mut width = 7;
+        for (i, inst) in Inst::enumerate(ei).enumerate() {
+            let inst_str = format!("{inst}");
+            width = width.max(inst_str.len());
+            print!("\rInst {inst_str:width$} [{} / {total}]:", i + 1);
+            flush();
             State::all_each(&ei.registers, |inp| {
                 let out = (*inp).mutate(|i| inst.run(i));
-                let success = bm.get(inst, out).contains(inp);
+                let success = bm.get(inst, out).any(|i| i == *inp);
                 if !success {
                     println!("Failed!!");
                     print!("  inp {inp}");
                     print!("  out {out}:");
-                    bm.get(inst, out).iter().for_each(|s| print!("  {s}"));
+                    bm.get(inst, out).for_each(|s| print!("  {s}"));
                     flush();
                     panic!();
                 }
