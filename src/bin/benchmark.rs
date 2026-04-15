@@ -208,6 +208,7 @@ fn benchmarks() -> Vec<Benchmark> {
     if !matches!(O.filter, Filter::Lens) {
         ret.extend(benchmarks_in_dir("./our-benchmarks"))
     }
+    ret.sort_by_key(|b| b.name.clone());
     ret
 }
 
