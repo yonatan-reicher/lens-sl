@@ -527,11 +527,14 @@ impl<WShift: Word> ShiftCode<WShift> {
         let yes_shift = &ImmediateInfo { is_shift: true };
         match self {
             None => None,
-            Asr(x) => Asr(reducer.reduce(x.into_word(), yes_shift).into_word()),
-            Lsl(x) => Lsl(reducer.reduce(x.into_word(), yes_shift).into_word()),
-            Lsr(x) => Lsr(reducer.reduce(x.into_word(), yes_shift).into_word()),
-            Ror(x) => Ror(reducer.reduce(x.into_word(), yes_shift).into_word()),
-            Rrx => Rrx,
+            AsrI(x) => AsrI(reducer.reduce(x.into_word(), yes_shift).into_word()),
+            LslI(x) => LslI(reducer.reduce(x.into_word(), yes_shift).into_word()),
+            LsrI(x) => LsrI(reducer.reduce(x.into_word(), yes_shift).into_word()),
+            RorI(x) => RorI(reducer.reduce(x.into_word(), yes_shift).into_word()),
+            Asr(r) => Asr(*r),
+            Lsl(r) => Lsl(*r),
+            Lsr(r) => Lsr(*r),
+            Ror(r) => Ror(*r),
         }
     }
 
@@ -542,29 +545,32 @@ impl<WShift: Word> ShiftCode<WShift> {
         use ShiftCode::*;
         use itertools::Either;
         match self {
-            None => Either::Left([None].into_iter()),
+            None => Either::Left(std::iter::once(None)),
             // TODO: Filter to only results that make sense (fit)
-            Asr(x) => Either::Right(
+            AsrI(x) => Either::Right(
                 reducer
                     .extend(x.into_word())
-                    .map((|x: WBig| Asr(x.into_word())) as fn(_) -> _),
+                    .map((|x: WBig| AsrI(x.into_word())) as fn(_) -> _),
             ),
-            Lsl(x) => Either::Right(
+            LslI(x) => Either::Right(
                 reducer
                     .extend(x.into_word())
-                    .map((|x: WBig| Lsl(x.into_word())) as fn(_) -> _),
+                    .map((|x: WBig| LslI(x.into_word())) as fn(_) -> _),
             ),
-            Lsr(x) => Either::Right(
+            LsrI(x) => Either::Right(
                 reducer
                     .extend(x.into_word())
-                    .map((|x: WBig| Lsr(x.into_word())) as fn(_) -> _),
+                    .map((|x: WBig| LsrI(x.into_word())) as fn(_) -> _),
             ),
-            Ror(x) => Either::Right(
+            RorI(x) => Either::Right(
                 reducer
                     .extend(x.into_word())
-                    .map((|x: WBig| Ror(x.into_word())) as fn(_) -> _),
+                    .map((|x: WBig| RorI(x.into_word())) as fn(_) -> _),
             ),
-            Rrx => Either::Left([Rrx].into_iter()),
+            Asr(r) => Either::Left(std::iter::once(Asr(*r))),
+            Lsl(r) => Either::Left(std::iter::once(Lsl(*r))),
+            Lsr(r) => Either::Left(std::iter::once(Lsr(*r))),
+            Ror(r) => Either::Left(std::iter::once(Ror(*r))),
         }
     }
 }
@@ -640,22 +646,28 @@ impl<T> ShiftCode<T> {
     pub fn map<U>(self, f: impl FnOnce(T) -> U) -> ShiftCode<U> {
         match self {
             ShiftCode::None => ShiftCode::None,
-            ShiftCode::Asr(x) => ShiftCode::Asr(f(x)),
-            ShiftCode::Lsl(x) => ShiftCode::Lsl(f(x)),
-            ShiftCode::Lsr(x) => ShiftCode::Lsr(f(x)),
-            ShiftCode::Ror(x) => ShiftCode::Ror(f(x)),
-            ShiftCode::Rrx => ShiftCode::Rrx,
+            ShiftCode::AsrI(x) => ShiftCode::AsrI(f(x)),
+            ShiftCode::LslI(x) => ShiftCode::LslI(f(x)),
+            ShiftCode::LsrI(x) => ShiftCode::LsrI(f(x)),
+            ShiftCode::RorI(x) => ShiftCode::RorI(f(x)),
+            ShiftCode::Asr(r) => ShiftCode::Asr(r),
+            ShiftCode::Lsl(r) => ShiftCode::Lsl(r),
+            ShiftCode::Lsr(r) => ShiftCode::Lsr(r),
+            ShiftCode::Ror(r) => ShiftCode::Ror(r),
         }
     }
 
     pub fn as_ref(&self) -> ShiftCode<&T> {
         match self {
             ShiftCode::None => ShiftCode::None,
-            ShiftCode::Asr(x) => ShiftCode::Asr(x),
-            ShiftCode::Lsl(x) => ShiftCode::Lsl(x),
-            ShiftCode::Lsr(x) => ShiftCode::Lsr(x),
-            ShiftCode::Ror(x) => ShiftCode::Ror(x),
-            ShiftCode::Rrx => ShiftCode::Rrx,
+            ShiftCode::AsrI(x) => ShiftCode::AsrI(x),
+            ShiftCode::LslI(x) => ShiftCode::LslI(x),
+            ShiftCode::LsrI(x) => ShiftCode::LsrI(x),
+            ShiftCode::RorI(x) => ShiftCode::RorI(x),
+            ShiftCode::Asr(r) => ShiftCode::Asr(*r),
+            ShiftCode::Lsl(r) => ShiftCode::Lsl(*r),
+            ShiftCode::Lsr(r) => ShiftCode::Lsr(*r),
+            ShiftCode::Ror(r) => ShiftCode::Ror(*r),
         }
     }
 }
