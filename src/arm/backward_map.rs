@@ -198,7 +198,7 @@ impl<W: Word + HasBitWord> BackwardMap<W, BitWord<W>> {
             .cloned()
             .unwrap_or_default()
             .into_iter()
-            .flat_map(|inp| unnormalize_input_state(&inst, &out, inp))
+            .flat_map(|inp| unnormalize_input_state(&inst, &out_orig, inp))
             .collect()
     }
 }
