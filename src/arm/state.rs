@@ -729,6 +729,23 @@ impl Arbitrary for BitMask {
     }
 }
 
+#[cfg(test)]
+impl Arbitrary for Mask {
+    type Parameters = ();
+    type Strategy = prop::arbitrary::Mapped<[bool; 17], Mask>;
+    #[rustfmt::skip]
+    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+        any::<[bool; _]>().prop_map(
+            |[flags, r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13, r14, r15]| {
+                Mask {
+                    flags,
+                    registers: [r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13, r14, r15],
+                }
+            },
+        )
+    }
+}
+
 // --- Mask operations ---
 use std::ops::{BitAnd, BitOr, BitXor, Index, IndexMut, Not};
 
@@ -950,5 +967,28 @@ mod tests {
         let sub_masks = mask.into_mask().sub_masks();
         let lengths = sub_masks.map(|m| m.len());
         prop_assert!(lengths.is_sorted() /* Ascending order */);
+    }
+
+    #[property_test]
+    fn mask_or_spec(a: Mask, b: Mask) {
+        println!("a {a}  b {b}");
+        let c = a | b;
+        println!("c {c}");
+        prop_assert_eq!(c.flags, a.flags || b.flags);
+        for r in Register::ALL {
+            prop_assert_eq!(c[r], a[r] || b[r]);
+        }
+        let d = (a.into_bit_mask() | b.into_bit_mask()).into_mask();
+        prop_assert_eq!(c, d);
+    }
+
+    #[property_test]
+    fn mask_to_bit_mask(a: Mask) {
+        prop_assert_eq!(a, a.into_bit_mask().into_mask());
+    }
+
+    #[property_test]
+    fn bit_mask_to_mask(a: BitMask) {
+        prop_assert_eq!(a, a.into_mask().into_bit_mask());
     }
 }
