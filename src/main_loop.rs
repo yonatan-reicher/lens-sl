@@ -89,8 +89,6 @@ where
         oracle,
         oracle_reduced,
         reducer,
-        c.program.len(),
-        &c.should_cancel,
         tui,
     )
 }
@@ -102,10 +100,6 @@ fn synthesize<WT: Word + HasBitWord, W: Word + HasBitWord + serde::de::Deseriali
     oracle: impl Oracle<[Inst<WT>], State<WT>>,
     oracle_reduced: impl Oracle<[Inst<W>], State<W>>,
     reducer: Reducer<WT, W>,
-    // The length of the original program.
-    // In the future, this could be max_cost.
-    original_length: usize,
-    should_cancel: &ShouldCancel,
     tui: &impl for<'a> TuiHook<&'a Graph<W>, State<W>>,
 ) -> Result<Option<Program<WT>>, Cancelled>
 where
@@ -156,7 +150,7 @@ where
             tui.progress(i, globals.total_instructions);
             let res = connect_and_refine::<WT, W>(
                 &mut globals,
-                should_cancel,
+                &c.should_cancel,
                 &mut forward_graph,
                 &mut backward_graph,
                 inst,
@@ -175,7 +169,7 @@ where
         tui.progress(globals.total_instructions, globals.total_instructions);
         tui.report_graph(Direction::Forward, &forward_graph);
         tui.report_graph(Direction::Backward, &backward_graph);
-        if globals.forward_length + globals.backward_length + 1 == original_length - 1 {
+        if globals.forward_length + globals.backward_length + 1 == c.program.len() - 1 {
             return Ok(None);
         }
         let should_expand_forward =
@@ -188,7 +182,7 @@ where
                 enumeration_info,
                 globals.tui,
                 globals.total_instructions,
-                should_cancel,
+                &c.should_cancel,
             );
             globals.forward_length += 1;
             tui.report_graph(Direction::Forward, &forward_graph);
@@ -200,7 +194,7 @@ where
                 globals.tui,
                 globals.total_instructions,
                 &globals.backward_map,
-                should_cancel,
+                &c.should_cancel,
             );
             globals.backward_length += 1;
             tui.report_graph(Direction::Backward, &backward_graph);
