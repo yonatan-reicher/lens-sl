@@ -14,6 +14,7 @@ pub trait TuiHook<Graph, State> {
     // Phases
     fn searching(&self);
     fn expanding(&self, direction: Direction);
+    fn reset_lengths(&self);
     fn progress(&self, a: usize, b: usize);
     // Graph
     fn report_graph(&self, which_graph: Direction, graph: Graph);
@@ -31,6 +32,7 @@ impl<G, S> TuiHook<G, S> for NoTui {
     // Phases
     fn searching(&self) {}
     fn expanding(&self, _: Direction) {}
+    fn reset_lengths(&self) {}
     fn progress(&self, _: usize, _: usize) {}
     // Graph
     fn report_graph(&self, _: Direction, _: G) {}
@@ -50,6 +52,7 @@ enum Msg<State> {
     // Phases
     Searching(Instant),
     Expanding(Direction, Instant),
+    ResetLengths,
     Progress(usize, usize),
     // Graph
     GraphState(Direction, GraphState),
@@ -107,6 +110,9 @@ where
     }
     fn expanding(&self, direction: Direction) {
         self.send(Msg::Expanding(direction, Instant::now()));
+    }
+    fn reset_lengths(&self) {
+        self.send(Msg::ResetLengths)
     }
     fn progress(&self, a: usize, b: usize) {
         self.send(Msg::Progress(a, b))
@@ -188,6 +194,7 @@ impl<State> Msg<State> {
         match self {
             Msg::Searching(t) => state.push_phase(Phase::Search, t),
             Msg::Expanding(dir, t) => state.push_phase(Phase::Expand(dir), t),
+            Msg::ResetLengths => state.reset_lengths(),
             Msg::Progress(a, b) => state.progress = (a, b),
             Msg::GraphState(d, graph_state) => state[d] = graph_state,
             Msg::FoundCounterExample(input, output) => {
@@ -212,6 +219,11 @@ impl<State> IoThreadState<State> {
         if p == Phase::Search {
             self.iteration += 1;
         }
+    }
+
+    fn reset_lengths(&mut self) {
+        self.forward_len = 0;
+        self.backward_len = 0;
     }
 }
 

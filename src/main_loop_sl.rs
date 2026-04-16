@@ -18,6 +18,7 @@ use crate::{Config, programs};
 // std imports
 use std::cell::{Ref, RefCell};
 use std::ops::ControlFlow::{self, Break, Continue};
+use std::rc::Rc;
 
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::de::DeserializeOwned;
@@ -95,6 +96,14 @@ where
 }
 
 type Bank<W> = FxHashMap<MaskedState<W>, FxHashMap<MaskedState<W>, FxHashSet<Inst<W>>>>;
+type BackwardBank<W> = FxHashMap<
+    /* output */ MaskedState<W>,
+    /* one input */
+    FxHashMap<
+        MaskedState<W>,
+        FxHashMap</* the command */ Inst<W>, Rc<FxHashSet<MaskedState<W> /* all inputs */>>>,
+    >,
+>;
 
 #[allow(clippy::too_many_arguments)]
 fn synthesize<WT, W>(
@@ -149,6 +158,7 @@ where
         current_states.push((inputs_outputs.inputs().to_vec(), vec![]));
         next_states.clear();
         seen.clear();
+        tui.reset_lengths();
         // ----- Reachability - Bfs loop to reach outputs ----------------------------------------
         for _length in 0..original_reduced.len() {
             tui.searching();
@@ -216,35 +226,13 @@ where
                         seen.insert(outputs.clone());
                         // Extend Hila's discard set. Extend it by all the instructions which do the
                         // exact same thing as this instruction on the current inputs.
-                        for sub_input_mask in biggest_mask.sub_masks().filter(|m| {
-                            sub_input_mask
-                                .into_bit_mask()
-                                .is_sub_mask(&m.into_bit_mask())
-                        }) {
-                            let sub_inputs = inputs.iter().map(|s| s.masked(sub_input_mask));
-                            for sub_output_mask in biggest_mask.sub_masks() {
-                                let sub_outputs = outputs.iter().map(|s| s.masked(sub_output_mask));
-                                if !sub_inputs.clone().zip(sub_outputs.clone()).all(
-                                    |(sub_input, sub_output)| {
-                                        bank.get(&sub_input)
-                                            .expect("we have initialized this at the start")
-                                            .contains_key(&sub_output)
-                                    },
-                                ) {
-                                    continue;
-                                }
-                                discarded.extend(intersect_all(
-                                    sub_inputs.clone().zip(sub_outputs).map(
-                                        |(input, sub_output)| {
-                                            bank.get(&input)
-                                                .expect("we have initialized this at the start")
-                                                .get(&sub_output)
-                                                .unwrap()
-                                        },
-                                    ),
-                                ));
-                            }
-                        }
+                        discarded.extend(insts_with_same_effect(
+                            biggest_mask,
+                            &bank,
+                            sub_input_mask,
+                            inputs.as_slice(),
+                            outputs.as_slice(),
+                        ));
                         // TODO: you know how to solve this memory allocation...
                         next_states.push((outputs, prog.clone().mutate(|p| p.push(inst))));
                     }
@@ -366,4 +354,55 @@ where
             verify::Result::Continue => Continue(()),
         }
     }
+}
+
+/// Gets instructions which have the same effect on the input state
+/// Top mask - the mask of the information relevant to the program search.
+fn insts_with_same_effect<W: Word + HasBitWord>(
+    top_mask: Mask,
+    bank: &Bank<W>,
+    sub_input_mask: Mask,
+    inputs: &[State<W>],
+    outputs: &[State<W>],
+) -> impl Iterator<Item = Inst<W>> {
+    // Look at super-masks of the input
+    // TODO: We can do this more efficiently
+    top_mask
+        .sub_masks()
+        .filter(move |m| sub_input_mask.is_sub_mask(m))
+        .flat_map(move |sub_input_mask| {
+            let sub_inputs = inputs.iter().map(move |s| s.masked(sub_input_mask));
+            // And masks of the output that are in the in the bank
+            // TODO: We should filter them before asking the bank, because asking the bank is slow
+            top_mask
+                .sub_masks()
+                .filter({
+                    let sub_inputs = sub_inputs.clone();
+                    move |sub_output_mask| {
+                        let sub_outputs = outputs.iter().map(|s| s.masked(*sub_output_mask));
+                        sub_inputs.clone().zip(sub_outputs.clone()).all(
+                            |(sub_input, sub_output)| {
+                                bank.get(&sub_input)
+                                    .expect("we have initialized this at the start")
+                                    .contains_key(&sub_output)
+                            },
+                        )
+                    }
+                })
+                .flat_map(move |sub_output_mask| {
+                    let sub_outputs = outputs.iter().map(move |s| s.masked(sub_output_mask));
+                    intersect_all(
+                        sub_inputs
+                            .clone()
+                            .zip(sub_outputs)
+                            .map(|(input, sub_output)| {
+                                bank.get(&input)
+                                    .expect("we have initialized this at the start")
+                                    .get(&sub_output)
+                                    .unwrap()
+                            }),
+                    )
+                    .cloned()
+                })
+        })
 }
