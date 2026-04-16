@@ -501,10 +501,9 @@ mod tests {
         panic!("No instruction produced non-empty input states for the given output state!");
     }
 
-    static BM: std::sync::LazyLock<BackwardMap<Word4>> =
-        std::sync::LazyLock::new(|| {
-            BackwardMap::<Word4>::new(&[Register(0), Register(1)]).unwrap()
-        });
+    static BM: std::sync::LazyLock<BackwardMap<Word4>> = std::sync::LazyLock::new(|| {
+        BackwardMap::<Word4>::new(&[Register(0), Register(1)]).unwrap()
+    });
 
     #[property_test]
     fn test_cmpeq(out: State<Word4>) {
