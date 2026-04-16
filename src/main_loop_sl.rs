@@ -185,7 +185,6 @@ where
                     // classes that can run from the states.
                     let empty = Default::default();
                     let insts = sub_inputs
-                        .clone()
                         .map(|sub_input| {
                             // For this state, return set of commands that can run from it.
                             bank.get(&sub_input)
@@ -371,36 +370,44 @@ fn insts_with_same_effect<W: Word + HasBitWord>(
         .sub_masks()
         .filter(move |m| sub_input_mask.is_sub_mask(m))
         .flat_map(move |sub_input_mask| {
-            let sub_inputs = inputs.iter().map(move |s| s.masked(sub_input_mask));
+            let sub_inputs = inputs
+                .iter()
+                .map(|i| i.masked(sub_input_mask))
+                .map(|i| {
+                    (
+                        //Also contains the buckets!
+                        i,
+                        bank.get(&i).expect("we have initialized this at the start"),
+                    )
+                })
+                .collect::<Vec<_>>();
             // And masks of the output that are in the in the bank
             // TODO: We should filter them before asking the bank, because asking the bank is slow
             top_mask
                 .sub_masks()
+                .map(|sub_output_mask| {
+                    (
+                        sub_output_mask,
+                        outputs.iter().map(move |s| s.masked(sub_output_mask)),
+                    )
+                })
                 .filter({
                     let sub_inputs = sub_inputs.clone();
-                    move |sub_output_mask| {
-                        let sub_outputs = outputs.iter().map(|s| s.masked(*sub_output_mask));
-                        sub_inputs.clone().zip(sub_outputs.clone()).all(
-                            |(sub_input, sub_output)| {
-                                bank.get(&sub_input)
-                                    .expect("we have initialized this at the start")
-                                    .contains_key(&sub_output)
-                            },
-                        )
+                    move |(_sub_output_mask, sub_outputs)| {
+                        sub_inputs
+                            .iter()
+                            .cloned()
+                            .zip(sub_outputs.clone())
+                            .all(|((_, bucket), sub_output)| bucket.contains_key(&sub_output))
                     }
                 })
-                .flat_map(move |sub_output_mask| {
-                    let sub_outputs = outputs.iter().map(move |s| s.masked(sub_output_mask));
+                .flat_map(move |(_sub_output_mask, sub_outputs)| {
                     intersect_all(
                         sub_inputs
-                            .clone()
+                            .iter()
+                            .cloned()
                             .zip(sub_outputs)
-                            .map(|(input, sub_output)| {
-                                bank.get(&input)
-                                    .expect("we have initialized this at the start")
-                                    .get(&sub_output)
-                                    .unwrap()
-                            })
+                            .map(|((_, bucket), sub_output)| bucket.get(&sub_output).unwrap())
                             .collect::<Vec<_>>()
                             .into_iter(),
                     )
