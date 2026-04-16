@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::hash::{BuildHasher, Hash};
 
 pub fn intersect_all<'a, T, S>(
-    mut sets: impl Iterator<Item = &'a HashSet<T, S>> + Clone,
+    sets: impl Iterator<Item = &'a HashSet<T, S>> + Clone,
 ) -> impl Iterator<Item = &'a T>
 where
     HashSet<T, S>: Default,
@@ -16,7 +16,7 @@ where
     };
     smallest
         .iter()
-        .filter(move |x| sets.all(|s| s.contains(x)))
+        .filter(move |x| sets.clone().all(|s| s.contains(x)))
         .pipe(Either::Right)
 }
 
@@ -54,6 +54,8 @@ mod tests {
 
     #[property_test]
     fn two_sets(x: HashSet<u8>, y: HashSet<u8>) {
+        println!("------------------------");
+        println!("x {x:?}  y {y:?}");
         prop_assert_eq!(
             f([x.clone(), y.clone()]),
             x.intersection(&y).cloned().collect()
@@ -63,5 +65,21 @@ mod tests {
     #[property_test]
     fn intersection_with_empty(sets: Vec<HashSet<u8>>) {
         prop_assert_eq!(f([[].into()].into_iter().chain(sets)), [].into(),);
+    }
+
+    #[property_test]
+    fn contains_all(sets: Vec<HashSet<u8>>) {
+        println!("------------------------");
+        println!("Sets:");
+        for s in sets.iter() {
+            println!("  {s:?}");
+        }
+        let s = intersect_all(sets.iter()).copied().collect::<Vec<_>>();
+        println!("Intersection: \n{s:?}");
+        for x in s {
+            for s1 in sets.iter() {
+                prop_assert!(s1.contains(&x));
+            }
+        }
     }
 }
