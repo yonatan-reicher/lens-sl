@@ -31,6 +31,7 @@ enum Filter {
     None,
     Ours,
     Lens,
+    Name(String),
 }
 
 static O: std::sync::LazyLock<Options> = std::sync::LazyLock::new(parse_options);
@@ -53,7 +54,7 @@ fn main() {
 fn run_all_sequential(benchmarks: &[Benchmark]) {
     for b in benchmarks {
         let b = black_box(b); // Don't let the compiler optimize the input
-        print!("{} - ...", b.name);
+        print!("{} - ...\r", b.name);
         let _ = std::io::Write::flush(&mut std::io::stdout());
         let result = run(b);
         print_result(b, &result);
@@ -208,6 +209,7 @@ fn benchmarks() -> Vec<Benchmark> {
     if !matches!(O.filter, Filter::Lens) {
         ret.extend(benchmarks_in_dir("./our-benchmarks"))
     }
+    ret.retain(|b| O.filter.check(b));
     ret.sort_by_key(|b| b.name.clone());
     ret
 }
@@ -334,6 +336,10 @@ fn parse_options() -> Options {
                 ret.filter = match args.next().as_deref() {
                     Some("ours") => Filter::Ours,
                     Some("lens") => Filter::Lens,
+                    Some("name") => {
+                        let name = args.next().unwrap();
+                        Filter::Name(name)
+                    }
                     None => {
                         eprintln!("error: filter option requires an argument");
                         exit(1);
@@ -412,7 +418,7 @@ fn parse_options() -> Options {
 
 fn print_usage(command: &str) {
     eprintln!(
-        "Usage: {command} [--sl] [--parallel] [--timeout <seconds>] [--filter [ours | lens]] [--csv <filename>] [--forward-only | -f] [(--average-over | -a) <n>]"
+        "Usage: {command} [--sl] [--parallel] [--timeout <seconds>] [--filter [ours | lens | name <name>]] [--csv <filename>] [--forward-only | -f] [(--average-over | -a) <n>]"
     );
 }
 
@@ -434,4 +440,15 @@ fn std<'a>(i: impl Iterator<Item = &'a Duration> + Clone) -> Duration {
         .map(|d| d.abs_diff(avg).as_secs_f64() * d.abs_diff(avg).as_secs_f64());
     let sqr_dists_avg = sqr_dists.sum::<f64>() / n as f64;
     Duration::from_secs_f64(sqr_dists_avg.sqrt())
+}
+
+impl Filter {
+    pub fn check(&self, b: &Benchmark) -> bool {
+        match self {
+            Filter::None => true,
+            Filter::Ours => true, // TODO
+            Filter::Lens => true, // TODO
+            Filter::Name(s) => b.name.find(s.as_str()).is_some(),
+        }
+    }
 }
