@@ -622,6 +622,13 @@ impl<B> Mask<B> {
             registers: [B::r#false(); _],
         }
     }
+
+    pub fn is_sub_mask(&self, other: &Self) -> B
+        where B: Bool,
+              Self: BoolEq<B>
+    {
+        (*self & *other).eq(self)
+    }
 }
 
 impl<'st> BoolEq<SmtBool<'st>> for Mask<SmtBool<'st>> {
@@ -643,7 +650,7 @@ impl BitMask {
     }
 
     pub const fn is_sub_mask(&self, other: &Self) -> bool {
-        self.0 & other.0 == self.0
+        (self.0 & other.0) == self.0
     }
 }
 
