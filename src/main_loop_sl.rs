@@ -171,17 +171,16 @@ where
                 for sub_input_mask in biggest_mask.sub_masks() {
                     let sub_inputs = inputs
                         .iter()
-                        .map(|s| s.masked(sub_input_mask))
-                        .collect::<Vec<_>>();
+                        .map(|s| s.masked(sub_input_mask));
                     // Find all instructions (and their effects!) that can run from the current states.
                     // Instead of doing this by iterating all instructions, do this by intersection of equivalence
                     // classes that can run from the states.
                     let empty = Default::default();
                     let insts = sub_inputs
-                        .iter()
+                        .clone()
                         .map(|sub_input| {
                             // For this state, return set of commands that can run from it.
-                            bank.get(sub_input)
+                            bank.get(&sub_input)
                                 .unwrap_or(&empty)
                                 .iter()
                                 .flat_map(|(_, set)| set.iter().copied())
@@ -226,13 +225,12 @@ where
                         }) {
                             let sub_inputs = inputs
                                 .iter()
-                                .map(|s| s.masked(sub_input_mask))
-                                .collect::<Vec<_>>();
+                                .map(|s| s.masked(sub_input_mask));
                             for sub_output_mask in biggest_mask.sub_masks() {
                                 let sub_outputs = outputs.iter().map(|s| s.masked(sub_output_mask));
-                                if !sub_inputs.iter().zip(sub_outputs.clone()).all(
+                                if !sub_inputs.clone().zip(sub_outputs.clone()).all(
                                     |(sub_input, sub_output)| {
-                                        bank.get(sub_input)
+                                        bank.get(&sub_input)
                                             .expect("we have initialized this at the start")
                                             .contains_key(&sub_output)
                                     },
@@ -242,10 +240,10 @@ where
                                 discarded.extend(intersect_all(
                                     // &inputs
                                     &sub_inputs
-                                        .iter()
+                                        .clone()
                                         .zip(sub_outputs)
                                         .map(|(input, sub_output)| {
-                                            bank.get(input)
+                                            bank.get(&input)
                                                 .expect("we have initialized this at the start")
                                                 .get(&sub_output)
                                                 .unwrap()
