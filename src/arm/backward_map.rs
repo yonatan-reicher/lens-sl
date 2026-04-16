@@ -173,7 +173,11 @@ impl<W: Word + HasBitWord> BackwardMap<W, BitWord<W>> {
         vec.push(inp);
     }
 
-    pub fn get(&self, inst: Inst<W>, out_orig: State<W>) -> impl Iterator<Item=State<W>> + use<W> {
+    pub fn get(
+        &self,
+        inst: Inst<W>,
+        out_orig: State<W>,
+    ) -> impl Iterator<Item = State<W>> + use<W> {
         use itertools::Either;
         // Edge cases:
         // 1. Nop!
@@ -188,22 +192,29 @@ impl<W: Word + HasBitWord> BackwardMap<W, BitWord<W>> {
         // condition was false and the instruction didn't run, and it could be that the condition
         // was true and the instruction did run, and the flags were just changed.
         if inst.affects_flags() && !inst.cond_code.check(out_orig.flags.into()) {
-            return Either::Left(self.get(normalize_inst(inst), out_orig).collect::<Vec<_>>().mutate(|v| {
-                v.push(out_orig);
-            }).into_iter());
+            return Either::Left(
+                self.get(normalize_inst(inst), out_orig)
+                    .collect::<Vec<_>>()
+                    .mutate(|v| {
+                        v.push(out_orig);
+                    })
+                    .into_iter(),
+            );
         }
         let inst = normalize_inst(inst);
         let out = normalize_output_state(&inst, out_orig);
-        Either::Right(self.map
-            .get(&(inst, out))
-            .cloned()
-            .unwrap_or_default()
-            .into_iter()
-            .flat_map(move |inp| {
-                let inst = inst;
-                let out_orig = out_orig;
-                unnormalize_input_state(&inst, &out_orig, inp)
-            }))
+        Either::Right(
+            self.map
+                .get(&(inst, out))
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .flat_map(move |inp| {
+                    let inst = inst;
+                    let out_orig = out_orig;
+                    unnormalize_input_state(&inst, &out_orig, inp)
+                }),
+        )
     }
 }
 
