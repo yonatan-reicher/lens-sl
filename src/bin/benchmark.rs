@@ -448,7 +448,7 @@ impl Filter {
             Filter::None => true,
             Filter::Ours => true, // TODO
             Filter::Lens => true, // TODO
-            Filter::Name(s) => b.name.find(s.as_str()).is_some(),
+            Filter::Name(s) => b.name.contains(s.as_str()),
         }
     }
 }
