@@ -400,7 +400,9 @@ fn insts_with_same_effect<W: Word + HasBitWord>(
                                     .expect("we have initialized this at the start")
                                     .get(&sub_output)
                                     .unwrap()
-                            }),
+                            })
+                            .collect::<Vec<_>>()
+                            .into_iter(),
                     )
                     .cloned()
                 })
