@@ -229,9 +229,7 @@ where
                                 .map(|s| s.masked(sub_input_mask))
                                 .collect::<Vec<_>>();
                             for sub_output_mask in biggest_mask.sub_masks() {
-                                let sub_outputs = outputs
-                                    .iter()
-                                    .map(|s| s.masked(sub_output_mask));
+                                let sub_outputs = outputs.iter().map(|s| s.masked(sub_output_mask));
                                 if !sub_inputs.iter().zip(sub_outputs.clone()).all(
                                     |(sub_input, sub_output)| {
                                         bank.get(sub_input)
