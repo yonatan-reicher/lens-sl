@@ -7,10 +7,11 @@ use lens_sl::{
 fn main() {
     let args: &mut Vec<String> = &mut std::env::args().collect();
     let sl = parse_flag(args, "--sl");
+    let forward_only = parse_flag(args, "--forward-only");
     let h = parse_flag(args, "--help") || parse_flag(args, "-h");
 
     if args.len() > 2 || h {
-        eprintln!("Usage: {} [--sl] [PROGRAM_PATH]", args[0]);
+        eprintln!("Usage: {} [--sl] [--forward-only] [PROGRAM_PATH]", args[0]);
         std::process::exit(1);
     }
 
@@ -70,7 +71,7 @@ fn main() {
         additional_registers: &[],
         additional_immediates: &[],
         should_cancel: ShouldCancel::Never,
-        forward_only: false,
+        forward_only: forward_only,
     };
 
     let tui = Tui::default();
