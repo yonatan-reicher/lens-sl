@@ -186,7 +186,8 @@ where
                         })
                         .collect::<Vec<_>>()
                         // Intersect!
-                        .pipe(|v| intersect_all(v.iter()))
+                        .as_slice()
+                        .pipe(|a| intersect_all(a.iter()))
                         .cloned()
                         .collect::<FxHashSet<_>>();
                     for inst in insts {
