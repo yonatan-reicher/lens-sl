@@ -3,18 +3,20 @@ use itertools::Either;
 use std::collections::HashSet;
 use std::hash::{BuildHasher, Hash};
 
-pub fn intersect_all<T, S>(sets: &[HashSet<T, S>]) -> impl Iterator<Item = &T>
+pub fn intersect_all<'a, T, S>(
+    mut sets: impl Iterator<Item = &'a HashSet<T, S>> + Clone,
+) -> impl Iterator<Item = &'a T>
 where
     HashSet<T, S>: Default,
-    T: Eq + Hash,
-    S: BuildHasher,
+    T: Eq + Hash + 'a,
+    S: BuildHasher + 'a,
 {
-    let Some(smallest) = sets.iter().min_by_key(|s| s.len()) else {
+    let Some(smallest) = sets.clone().min_by_key(|s| s.len()) else {
         return Either::Left(std::iter::empty());
     };
     smallest
         .iter()
-        .filter(|x| sets.iter().all(|s| s.contains(x)))
+        .filter(move |x| sets.all(|s| s.contains(x)))
         .pipe(Either::Right)
 }
 
@@ -29,10 +31,11 @@ mod tests {
         inputs: impl IntoIterator<Item: IntoIterator<Item = T>>,
     ) -> HashSet<T> {
         intersect_all::<T, RandomState>(
-            &inputs
+            inputs
                 .into_iter()
                 .map(|x| x.into_iter().collect())
-                .collect::<Vec<_>>(),
+                .collect::<Vec<_>>()
+                .iter(),
         )
         .cloned()
         .collect()

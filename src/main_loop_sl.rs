@@ -169,9 +169,7 @@ where
                 // The red code.
                 let mut discarded = FxHashSet::<Inst<W>>::default();
                 for sub_input_mask in biggest_mask.sub_masks() {
-                    let sub_inputs = inputs
-                        .iter()
-                        .map(|s| s.masked(sub_input_mask));
+                    let sub_inputs = inputs.iter().map(|s| s.masked(sub_input_mask));
                     // Find all instructions (and their effects!) that can run from the current states.
                     // Instead of doing this by iterating all instructions, do this by intersection of equivalence
                     // classes that can run from the states.
@@ -188,8 +186,7 @@ where
                         })
                         .collect::<Vec<_>>()
                         // Intersect!
-                        .as_slice()
-                        .pipe(intersect_all)
+                        .pipe(|v| intersect_all(v.iter()))
                         .cloned()
                         .collect::<FxHashSet<_>>();
                     for inst in insts {
@@ -223,9 +220,7 @@ where
                                 .into_bit_mask()
                                 .is_sub_mask(&m.into_bit_mask())
                         }) {
-                            let sub_inputs = inputs
-                                .iter()
-                                .map(|s| s.masked(sub_input_mask));
+                            let sub_inputs = inputs.iter().map(|s| s.masked(sub_input_mask));
                             for sub_output_mask in biggest_mask.sub_masks() {
                                 let sub_outputs = outputs.iter().map(|s| s.masked(sub_output_mask));
                                 if !sub_inputs.clone().zip(sub_outputs.clone()).all(
@@ -238,18 +233,14 @@ where
                                     continue;
                                 }
                                 discarded.extend(intersect_all(
-                                    // &inputs
-                                    &sub_inputs
-                                        .clone()
-                                        .zip(sub_outputs)
-                                        .map(|(input, sub_output)| {
+                                    sub_inputs.clone().zip(sub_outputs).map(
+                                        |(input, sub_output)| {
                                             bank.get(&input)
                                                 .expect("we have initialized this at the start")
                                                 .get(&sub_output)
                                                 .unwrap()
-                                                .clone()
-                                        })
-                                        .collect::<Vec<_>>(),
+                                        },
+                                    ),
                                 ));
                             }
                         }
