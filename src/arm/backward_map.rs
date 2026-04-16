@@ -175,33 +175,25 @@ impl<W: Word + HasBitWord> BackwardMap<W, BitWord<W>> {
 
     pub fn get(
         &self,
-        inst: Inst<W>,
+        inst_orig: Inst<W>,
         out_orig: State<W>,
     ) -> impl Iterator<Item = State<W>> + use<W> {
         use itertools::Either;
         // Edge cases:
         // 1. Nop!
-        if inst.op_code == OpCode::Nop {
-            return Either::Left(vec![out_orig].into_iter());
+        if inst_orig.op_code == OpCode::Nop {
+            return Either::Left(std::iter::once(out_orig));
         }
         // 2. Condition is false, and flags aren't affected. The instruction was just skipped.
-        if !inst.affects_flags() && !inst.cond_code.check(out_orig.flags.into()) {
-            return Either::Left(vec![out_orig].into_iter());
+        if !inst_orig.affects_flags() && !inst_orig.cond_code.check(out_orig.flags.into()) {
+            return Either::Left(std::iter::once(out_orig));
         }
         // 3. Condition is false (now), and the flags are affected. It could be both that the
         // condition was false and the instruction didn't run, and it could be that the condition
         // was true and the instruction did run, and the flags were just changed.
-        if inst.affects_flags() && !inst.cond_code.check(out_orig.flags.into()) {
-            return Either::Left(
-                self.get(normalize_inst(inst), out_orig)
-                    .collect::<Vec<_>>()
-                    .mutate(|v| {
-                        v.push(out_orig);
-                    })
-                    .into_iter(),
-            );
-        }
-        let inst = normalize_inst(inst);
+        let maybe_instruction_didnt_run =
+            inst_orig.affects_flags() && !inst_orig.cond_code.check(out_orig.flags.into());
+        let inst = normalize_inst(inst_orig);
         let out = normalize_output_state(&inst, out_orig);
         Either::Right(
             self.map
@@ -213,7 +205,10 @@ impl<W: Word + HasBitWord> BackwardMap<W, BitWord<W>> {
                     let inst = inst;
                     let out_orig = out_orig;
                     unnormalize_input_state(&inst, &out_orig, inp)
-                }),
+                })
+                // TODO: Should this be maybe before unnormalization?
+                .filter(move |inp| inst_orig.cond_code.check(inp.flags.into()))
+                .chain(maybe_instruction_didnt_run.then_some(out_orig)),
         )
     }
 }
@@ -310,6 +305,8 @@ mod tests {
     use crate::arm::{Flags, FlagsBitField};
     use crate::inst;
     use functionality::Mutate;
+    use proptest::prelude::*;
+    use proptest::property_test;
 
     #[test]
     fn normalize_inst_example() {
@@ -504,11 +501,25 @@ mod tests {
         panic!("No instruction produced non-empty input states for the given output state!");
     }
 
+    static BM: std::sync::LazyLock<BackwardMap<Word4>> =
+        std::sync::LazyLock::new(|| {
+            BackwardMap::<Word4>::new(&[Register(0), Register(1)]).unwrap()
+        });
+
+    #[property_test]
+    fn test_cmpeq(out: State<Word4>) {
+        println!("out = {out}");
+        let inst = inst!(Cmp Eq, 0, 0);
+        let inps = BM.get(inst, out);
+        for inp in inps {
+            let out1 = inp.mutate(|i| inst.run(i));
+            prop_assert_eq!(out1, out);
+        }
+    }
+
     #[test]
     #[ignore]
-    fn no_missing() {
-        type W = Word4;
-        let bm = BackwardMap::<W>::new(&[Register(0), Register(1)]).unwrap();
+    fn spec() {
         let flush = || {
             let _ = std::io::Write::flush(&mut std::io::stdout());
         };
@@ -532,16 +543,46 @@ mod tests {
             width = width.max(inst_str.len());
             print!("\rInst {inst_str:width$} [{} / {total}]:", i + 1);
             flush();
-            State::all_each(&ei.registers, |inp| {
-                let out = (*inp).mutate(|i| inst.run(i));
-                let success = bm.get(inst, out).any(|i| i == *inp);
-                if !success {
-                    println!("Failed!!");
-                    print!("  inp {inp}");
-                    print!("  out {out}:");
-                    bm.get(inst, out).for_each(|s| print!("  {s}"));
-                    flush();
-                    panic!();
+            State::all_each(&ei.registers, |state| {
+                // Check ⊆
+                {
+                    let inp = *state;
+                    let out = inp.mutate(|i| inst.run(i));
+                    let inps = || BM.get(inst, out);
+                    let success = inps().any(|i| i == inp);
+                    if !success {
+                        let inps_str = inps()
+                            .map(|s| format!("\n{s}"))
+                            .collect::<Vec<_>>()
+                            .join("");
+                        panic!(
+                            "instruction {inst} with input {inp} outputs {out}, but the backward map had only {inps_str}"
+                        );
+                    }
+                }
+                // Check ⊇
+                {
+                    let out = *state;
+                    let inps = || BM.get(inst, out);
+                    let outs = || inps().map(|i| i.mutate(|i| inst.run(i)));
+                    let success = outs().all(|o| o == out);
+                    if !success {
+                        let inps_str = inps()
+                            .map(|s| format!("\n{s}"))
+                            .collect::<Vec<_>>()
+                            .join("");
+                        let bad_inps = inps()
+                            .filter_map(|i| {
+                                let o = i.mutate(|i| inst.run(i));
+                                Some((i, o)).filter(|(_, o)| *o != out)
+                            })
+                            .map(|(i, o)| format!("\n{i} |-> {o}"))
+                            .collect::<Vec<_>>()
+                            .join("");
+                        panic!(
+                            "instruction {inst} with output {out} had the following in the backword map: {inps_str}\nbut {bad_inps}"
+                        );
+                    }
                 }
             });
         }
