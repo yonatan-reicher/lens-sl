@@ -41,6 +41,22 @@ pub enum RegArgType {
     InpOut,
 }
 
+impl RegArgType {
+    pub const fn is_inp(&self) -> bool {
+        match self {
+            RegArgType::Inp | RegArgType::InpOut => true,
+            RegArgType::Out => false,
+        }
+    }
+
+    pub const fn is_out(&self) -> bool {
+        match self {
+            RegArgType::Out | RegArgType::InpOut => true,
+            RegArgType::Inp => false,
+        }
+    }
+}
+
 impl ArgType {
     /// Shorthand for `matches!(x, ArgType::Reg(..))`
     pub fn is_reg(&self) -> bool {
@@ -414,6 +430,30 @@ impl<W: Word + HasBitWord> Inst<W> {
         let (mut read_mask, mut write_mask) = Default::default();
         semantics::run(self, &input, &mut read_mask, &mut write_mask, &());
         read_mask
+    }
+
+    pub fn potential_read_mask(&self) -> Mask {
+        Mask {
+            flags: self.reads_flags(),
+            registers: Register::ALL.map(|r| {
+                self.args_with_types().any(|(a, t)| {
+                    Register::from(a) == r
+                        && matches!(t, ArgType::Reg(reg_type) if reg_type.is_inp())
+                })
+            }),
+        }
+    }
+
+    pub fn potential_write_mask(&self) -> Mask {
+        Mask {
+            flags: self.affects_flags(),
+            registers: Register::ALL.map(|r| {
+                self.args_with_types().any(|(a, t)| {
+                    Register::from(a) == r
+                        && matches!(t, ArgType::Reg(reg_type) if reg_type.is_out())
+                })
+            }),
+        }
     }
 
     pub fn run_masked(&self, masked: state::Masked<W>) -> Option<state::Masked<W>> {
