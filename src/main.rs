@@ -71,7 +71,7 @@ fn main() {
         additional_registers: &[],
         additional_immediates: &[],
         should_cancel: ShouldCancel::Never,
-        forward_only: forward_only,
+        forward_only,
     };
 
     let tui = Tui::default();

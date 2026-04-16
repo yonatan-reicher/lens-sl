@@ -736,6 +736,7 @@ where
 
 /// Returns a mask having only those parts of the input state that affect the output of the
 /// program.
+#[allow(dead_code)]
 pub fn what_program_reads<W: Word + HasBitWord>(
     prog: impl IntoIterator<Item = Inst<W>>,
     input: &State<W>,
@@ -754,6 +755,7 @@ pub fn what_program_reads<W: Word + HasBitWord>(
     input_mask
 }
 
+#[allow(dead_code)]
 pub fn run_program_masked<W: Word + HasBitWord>(
     prog: impl IntoIterator<Item = Inst<W>>,
     input: state::Masked<W>,
