@@ -433,6 +433,9 @@ impl<W: Word + HasBitWord> Inst<W> {
     }
 
     pub fn potential_read_mask(&self) -> Mask {
+        if self.op_code == OpCode::Nop {
+            return Mask::default();
+        }
         Mask {
             flags: self.reads_flags(),
             registers: Register::ALL.map(|r| {
