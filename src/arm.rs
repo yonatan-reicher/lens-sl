@@ -432,6 +432,14 @@ impl<W: Word + HasBitWord> Inst<W> {
         read_mask
     }
 
+    /// What the instruction writes to, given a state.
+    pub fn write_mask(&self, state: &State<W>) -> Mask {
+        let input = *state;
+        let (mut read_mask, mut write_mask) = Default::default();
+        semantics::run(self, &input, &mut read_mask, &mut write_mask, &());
+        write_mask
+    }
+
     pub fn potential_read_mask(&self) -> Mask {
         if self.op_code == OpCode::Nop {
             return Mask::default();
