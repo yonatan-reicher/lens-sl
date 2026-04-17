@@ -1006,4 +1006,15 @@ mod tests {
             prop_assert!(success);
         }
     }
+
+    #[property_test]
+    fn potential_read_write_mask_eq_read_write_mask_when_no_condition_code(mut inst : Inst<Word4>, state: State<Word4>) {
+        inst.cond_code = CondCode::Al;
+        println!("----------------");
+        println!("inst {inst}  state {state}");
+        let r = inst.read_mask(&state);
+        let w = inst.write_mask(&state);
+        prop_assert_eq!(r, inst.potential_read_mask());
+        prop_assert_eq!(w, inst.potential_write_mask());
+    }
 }
