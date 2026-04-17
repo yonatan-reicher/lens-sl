@@ -10,6 +10,7 @@ use crate::collect_registers;
 use crate::reduce_bit_width::Reducer;
 use crate::word::prelude::*;
 use std::fmt::{self, Debug, Display, Formatter};
+use std::ops::ControlFlow;
 // derive macros
 use derive_more::Display;
 use serde::{Deserialize, Serialize};
@@ -214,7 +215,7 @@ impl<W: Copy> State<W> {
         Masked::from(self) & mask
     }
 
-    pub fn all_each(ei: &EnumerationInfoOptions<Register>, mut f: impl FnMut(&Self))
+    pub fn try_all_each<T>(ei: &EnumerationInfoOptions<Register>, mut f: impl FnMut(&Self) -> ControlFlow<T>) -> ControlFlow<T>
     where
         W: All + Default,
         W::Iter: Clone,
@@ -230,9 +231,18 @@ impl<W: Copy> State<W> {
             }
             for flags in Flags::ALL {
                 state.set_flags(flags.into());
-                f(&state)
+                f(&state)?
             }
         }
+        ControlFlow::Continue(())
+    }
+
+    pub fn all_each(ei: &EnumerationInfoOptions<Register>, mut f: impl FnMut(&Self))
+    where
+        W: All + Default,
+        W::Iter: Clone,
+    {
+        let _ = Self::try_all_each::<()>(ei, |s| { f(s); ControlFlow::Continue(()) });
     }
 }
 
