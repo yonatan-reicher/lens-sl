@@ -828,6 +828,7 @@ mod tests {
     use functionality::prelude::*;
     use proptest::property_test;
     use std::collections::HashSet;
+    use std::ops::ControlFlow::{self, Break, Continue};
 
     #[test]
     fn basic_extend_test() {
@@ -950,5 +951,59 @@ mod tests {
         let out = dbg!(run_program_masked(prog, state));
         prop_assert!(out.is_some());
         println!("Success!");
+    }
+
+    macro_rules! try_ {
+        ( $($t:tt)* ) => {
+            (|| { $($t)* })()
+        }
+    }
+
+    #[property_test]
+    #[ignore]
+    fn potential_read_mask_potential_write_mask_spec(inst: Inst<Word4>) {
+        println!("-------------------");
+        println!("{inst}");
+        let regs = inst
+            .args_with_types()
+            .filter_map(|(a, t)| matches!(t, ArgType::Reg(_)).then_some(a.into()))
+            .collect::<Vec<_>>();
+        let ei = EnumerationInfoOptions::Limited(regs.as_slice());
+        let mut total_read_mask = Mask::default();
+        let mut total_write_mask = Mask::default();
+        match State::try_all_each(&ei, |s| {
+            match try_! {
+                let rm = inst.read_mask(s);
+                let wm = inst.write_mask(s);
+                total_read_mask = total_read_mask | rm;
+                total_write_mask = total_write_mask | wm;
+                let success = rm.is_sub_mask(&inst.potential_read_mask()) && wm.is_sub_mask(&inst.potential_write_mask());
+                if !success {
+                    println!(
+                        "Bad: Inst {inst}  State {s}  Read Mask {rm}  Write Mask {wm}  Potential Read Mask {}  Potential Write Mask {}",
+                        inst.potential_read_mask(),
+                        inst.potential_write_mask(),
+                    );
+                    prop_assert!(success);
+                }
+                Ok(())
+            } {
+                Ok(()) => Continue(()),
+                Err(x) => Break(x),
+            }
+        }) {
+            Continue(()) => (),
+            Break(x) => return Err(x),
+        };
+        let success = inst.potential_read_mask().is_sub_mask(&total_read_mask)
+            && inst.potential_write_mask().is_sub_mask(&total_write_mask);
+        if !success {
+            println!(
+                "Bad: Inst {inst}  Toltal Read Mask {total_read_mask}  Total Write Mask {total_write_mask}  Potential Read Mask {}  Potential Write Mask {}",
+                inst.potential_read_mask(),
+                inst.potential_write_mask(),
+            );
+            prop_assert!(success);
+        }
     }
 }
