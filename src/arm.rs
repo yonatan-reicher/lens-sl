@@ -448,6 +448,9 @@ impl<W: Word + HasBitWord> Inst<W> {
     }
 
     pub fn potential_write_mask(&self) -> Mask {
+        if self.op_code == OpCode::Nop {
+            return Mask::default();
+        }
         Mask {
             flags: self.affects_flags(),
             registers: Register::ALL.map(|r| {
