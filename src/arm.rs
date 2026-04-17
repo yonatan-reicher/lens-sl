@@ -242,7 +242,7 @@ define_instructions! {
     | BicI    | Reg(Out)    | Reg(Inp) | Imm      | "bic"  |    false    |     false     |
     | Eor     | Reg(Out)    | Reg(Inp) | Reg(Inp) | "eor"  |    true     |     false     |
     | Mov     | Reg(Out)    | Reg(Inp) | Unused   | "mov"  |    false    |     false     |
-    | MovI    | Reg(Inp)    | Imm      | Unused   | "mov"  |    false    |     false     |
+    | MovI    | Reg(Out)    | Imm      | Unused   | "mov"  |    false    |     false     |
     | Mvn     | Reg(Out)    | Reg(Inp) | Unused   | "mvn"  |    false    |     false     |
     | MvnI    | Reg(Out)    | Imm      | Unused   | "mvn"  |    false    |     false     |
     | Uxth    | Reg(Out)    | Reg(Inp) | Unused   | "uxth" |    false    |     false     |
