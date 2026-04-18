@@ -266,11 +266,6 @@ where
     }
 }
 
-enum ProgramOrRetry<W: Word + HasBitWord> {
-    Program(Program<W>),
-    Retry,
-}
-
 fn init_bank<W: Word + HasBitWord>(
     bank: &mut Bank<W>,
     inp: MaskedState<W>,
@@ -291,69 +286,6 @@ fn init_bank<W: Word + HasBitWord>(
         let out = out & inst.potential_write_mask();
         let class = bank.get_mut(&inp).unwrap().entry(out).or_default();
         class.insert(inst);
-    }
-}
-
-#[derive(Debug, Default)]
-#[allow(clippy::type_complexity)]
-struct InputsOutputsCell<W>(RefCell<(Vec<State<W>>, Vec<State<W>>)>);
-
-impl<W: Word> InputsOutputsCell<W> {
-    pub fn inputs(&self) -> Ref<'_, [State<W>]> {
-        Ref::map(self.0.borrow(), |(inps, _)| inps.as_slice())
-    }
-    pub fn outputs(&self) -> Ref<'_, [State<W>]> {
-        Ref::map(self.0.borrow(), |(_, outs)| outs.as_slice())
-    }
-    pub fn push(&self, inp: State<W>, out: State<W>) {
-        let (inps, outs) = &mut *self.0.borrow_mut();
-        inps.push(inp);
-        outs.push(out);
-    }
-    pub fn contains(&self, inp: &State<W>, out: &State<W>) -> bool {
-        let (inps, outs) = &*self.0.borrow();
-        inps.iter().zip(outs).contains(&(inp, out))
-    }
-}
-
-struct ReducedProgramOracle<'a, WBig: HasBitWord, W: HasBitWord> {
-    inputs_outputs: &'a InputsOutputsCell<W>,
-    oracle: &'a mut dyn Oracle<[Inst<WBig>], State<WBig>>,
-    oracle_reduced: &'a mut dyn Oracle<[Inst<W>], State<W>>,
-    reducer: &'a Reducer<WBig, W>,
-    tui: &'a dyn TuiHook<&'a Graph<W>, State<W>>,
-}
-
-impl<'a, WBig, W> ReducedProgramOracle<'a, WBig, W>
-where
-    WBig: Word + HasBitWord,
-    W: Word + HasBitWord,
-{
-    fn verify(&mut self, prog: &[Inst<W>]) -> ControlFlow<ProgramOrRetry<WBig>>
-    where
-        WBig: Word + HasBitWord,
-        W: Word + HasBitWord,
-    {
-        use crate::verify;
-        match verify::verify(
-            prog,
-            self.reducer,
-            self.oracle_reduced,
-            self.oracle,
-            |equivalent_prog| Break(ProgramOrRetry::Program(equivalent_prog.to_vec())),
-        ) {
-            verify::Result::CounterExample(inp, out) => {
-                self.tui.found_counter_example(inp, out);
-                assert!(
-                    !self.inputs_outputs.contains(&inp, &out),
-                    "Counter-example from reduced oracle should not have been seen before."
-                );
-                self.inputs_outputs.push(inp, out);
-                Break(ProgramOrRetry::Retry)
-            }
-            verify::Result::Break(prog) => Break(prog),
-            verify::Result::Continue => Continue(()),
-        }
     }
 }
 
@@ -423,6 +355,89 @@ fn insts_with_same_effect<W: Word + HasBitWord>(
                     .inspect(|_| stats.total_intersection_output_sizes += 1)
                 })
         })
+}
+
+// =================================================================================================
+//                                       Inputs And Outputs
+// =================================================================================================
+
+/// The list of counter examples. Shared mutably.
+#[derive(Debug, Default)]
+#[allow(clippy::type_complexity)]
+struct InputsOutputsCell<W>(RefCell<(Vec<State<W>>, Vec<State<W>>)>);
+
+impl<W: Word> InputsOutputsCell<W> {
+    pub fn inputs(&self) -> Ref<'_, [State<W>]> {
+        Ref::map(self.0.borrow(), |(inps, _)| inps.as_slice())
+    }
+    pub fn outputs(&self) -> Ref<'_, [State<W>]> {
+        Ref::map(self.0.borrow(), |(_, outs)| outs.as_slice())
+    }
+    pub fn push(&self, inp: State<W>, out: State<W>) {
+        let (inps, outs) = &mut *self.0.borrow_mut();
+        inps.push(inp);
+        outs.push(out);
+    }
+    pub fn contains(&self, inp: &State<W>, out: &State<W>) -> bool {
+        let (inps, outs) = &*self.0.borrow();
+        inps.iter().zip(outs).contains(&(inp, out))
+    }
+}
+
+// =================================================================================================
+//                                       Verifying Programs
+// =================================================================================================
+
+/// This struct bundles up all the information needed to verify a candidate program against the
+/// actual real original program. Use [Self::verify] to do the verification!
+struct ReducedProgramOracle<'a, WBig: HasBitWord, W: HasBitWord> {
+    inputs_outputs: &'a InputsOutputsCell<W>,
+    oracle: &'a mut dyn Oracle<[Inst<WBig>], State<WBig>>,
+    oracle_reduced: &'a mut dyn Oracle<[Inst<W>], State<W>>,
+    reducer: &'a Reducer<WBig, W>,
+    tui: &'a dyn TuiHook<&'a Graph<W>, State<W>>,
+}
+
+impl<'a, WBig, W> ReducedProgramOracle<'a, WBig, W>
+where
+    WBig: Word + HasBitWord,
+    W: Word + HasBitWord,
+{
+    fn verify(&mut self, prog: &[Inst<W>]) -> ControlFlow<ProgramOrRetry<WBig>>
+    where
+        WBig: Word + HasBitWord,
+        W: Word + HasBitWord,
+    {
+        use crate::verify;
+        match verify::verify(
+            prog,
+            self.reducer,
+            self.oracle_reduced,
+            self.oracle,
+            |equivalent_prog| Break(ProgramOrRetry::Program(equivalent_prog.to_vec())),
+        ) {
+            verify::Result::CounterExample(inp, out) => {
+                self.tui.found_counter_example(inp, out);
+                assert!(
+                    !self.inputs_outputs.contains(&inp, &out),
+                    "Counter-example from reduced oracle should not have been seen before."
+                );
+                self.inputs_outputs.push(inp, out);
+                Break(ProgramOrRetry::Retry)
+            }
+            verify::Result::Break(prog) => Break(prog),
+            verify::Result::Continue => Continue(()),
+        }
+    }
+}
+
+// =================================================================================================
+//                                          Other Types
+// =================================================================================================
+
+enum ProgramOrRetry<W: Word + HasBitWord> {
+    Program(Program<W>),
+    Retry,
 }
 
 #[derive(Copy, Clone, Debug, Default)]
