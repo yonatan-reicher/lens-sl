@@ -184,8 +184,7 @@ where
                 // The red code.
                 let mut discarded = FxHashSet::<Inst<W>>::default();
                 for sub_input_mask in biggest_mask.sub_masks() {
-                    let sub_inputs = inputs.iter().map(|s| s.masked(sub_input_mask));
-                    let insts = insts_with_inputs(&bank, sub_inputs);
+                    let insts = insts_with_inputs(&bank, &inputs, sub_input_mask);
                     for inst in insts {
                         // We can't do this filtering as part of the intersection above because the
                         // discard set changes through the loop.
@@ -279,10 +278,13 @@ fn init_bank<W: Word + HasBitWord>(
 /// classes that can run from the states.
 fn insts_with_inputs<W: Word + HasBitWord>(
     bank: &Bank<W>,
-    sub_inputs: impl Iterator<Item = MaskedState<W>>,
+    inputs: &[State<W>],
+    input_mask: Mask,
 ) -> impl Iterator<Item = Inst<W>> {
     let empty = Default::default();
-    sub_inputs
+    inputs
+        .iter()
+        .map(|input| input.masked(input_mask))
         .map(|sub_input| {
             // For this state, return set of commands that can run from it.
             bank.get(&sub_input)
