@@ -283,12 +283,12 @@ fn init_bank<W: Word + HasBitWord>(
         bank.entry(s).or_default();
     }
     // Now to the thing!
-        let Some(_) = inst.run_masked(inp) else {
     for inst in Inst::enumerate(ei) {
+        let Some(out) = inst.run_masked(inp) else {
             continue;
         };
-        let inp = inp & inst.read_mask(inp.state());
-        let out = inst.run_masked(inp).unwrap();
+        let inp = inp & inst.potential_read_mask();
+        let out = out & inst.potential_write_mask();
         let class = bank.get_mut(&inp).unwrap().entry(out).or_default();
         class.insert(inst);
     }
