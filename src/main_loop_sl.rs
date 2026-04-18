@@ -4,7 +4,7 @@
 use crate::all::All;
 use crate::arm::enumerate::{EnumerationInfo, EnumerationInfoOptions};
 use crate::arm::state::{Mask, Masked as MaskedState, State};
-use crate::arm::{self, Register};
+use crate::arm::{self, Inst, Register};
 use crate::collect_registers::Collector;
 use crate::direction::Direction;
 use crate::intersect_all::intersect_all;
@@ -30,8 +30,6 @@ use itertools::Itertools;
 // =================================================================================================
 //                                          Short-hands
 // =================================================================================================
-
-type Inst<W> = arm::Inst<W, BitWord<W>>;
 
 type Program<W> = programs::Program<Inst<W>>;
 
