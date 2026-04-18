@@ -185,8 +185,7 @@ where
                 // The red code.
                 let mut discarded = FxHashSet::<Inst<W>>::default();
                 for sub_input_mask in top_mask.sub_masks() {
-                    let insts = insts_with_inputs(&bank, &inputs, sub_input_mask);
-                    for inst in insts {
+                    for inst in insts_with_inputs(&bank, &inputs, sub_input_mask) {
                         // We can't do this filtering as part of the intersection above because the
                         // discard set changes through the loop.
                         if discarded.contains(&inst) {
@@ -277,11 +276,11 @@ fn init_bank<W: Word + HasBitWord>(
 /// Find all instructions (and their effects!) that can run from the current states.
 /// Instead of doing this by iterating all instructions, do this by intersection of equivalence
 /// classes that can run from the states.
-fn insts_with_inputs<W: Word + HasBitWord>(
-    bank: &Bank<W>,
-    inputs: &[State<W>],
+fn insts_with_inputs<'a, W: Word + HasBitWord>(
+    bank: &'a Bank<W>,
+    inputs: &'a [State<W>],
     input_mask: Mask,
-) -> impl Iterator<Item = Inst<W>> {
+) -> impl Iterator<Item = Inst<W>> + use<'a, W> {
     let empty = Default::default();
     inputs
         .iter()
