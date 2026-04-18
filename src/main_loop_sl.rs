@@ -129,7 +129,6 @@ where
         include_nop: false,
         skip_cond_code: false,
     };
-    let total_instructions = Inst::enumerate(*enumeration_info).count();
     let mut seen = FxHashSet::default();
     let mut current_states = vec![]; // TODO: rename to frontier.
     let mut next_states = vec![];
@@ -141,6 +140,10 @@ where
         reducer: &reducer,
         tui,
         inputs_outputs: &inputs_outputs,
+    };
+    let mut stats = Stats {
+        n_instructions: Inst::enumerate(*enumeration_info).count(),
+        ..Stats::default()
     };
     let biggest_mask = registers
         .iter()
@@ -162,7 +165,7 @@ where
         // ----- Reachability - Bfs loop to reach outputs ----------------------------------------
         for _length in 0..original_reduced.len() {
             tui.searching();
-            tui.progress(0, total_instructions);
+            tui.progress(0, stats.n_instructions);
             let len = current_states.len();
             for (i, (inputs, prog)) in current_states.iter().cloned().enumerate() {
                 tui.progress(i, len);
@@ -173,7 +176,7 @@ where
                 // First we need to check that all the states are properly represented in the bank.
                 for inp in inputs.iter().cloned() {
                     if !bank.contains_key(&inp.masked(biggest_mask)) {
-                        init_bank(&mut bank, inp.masked(biggest_mask), registers, immediates);
+                        init_bank(&mut bank, inp.masked(biggest_mask), *enumeration_info);
                     }
                 }
                 // The red code.
@@ -203,6 +206,8 @@ where
                         // We can't do this filtering as part of the intersection above because the
                         // discard set changes through the loop.
                         if discarded.contains(&inst) {
+                            stats.n_discarded += 1;
+                            stats.last_discard_size = discarded.len();
                             continue;
                         }
                         let outputs = inputs
@@ -220,6 +225,7 @@ where
                             }
                         }
                         if seen.contains(&outputs) {
+                            discarded.insert(inst);
                             continue;
                         }
                         seen.insert(outputs.clone());
@@ -231,11 +237,13 @@ where
                             sub_input_mask,
                             inputs.as_slice(),
                             outputs.as_slice(),
+                            &mut stats,
                         ));
                         // TODO: you know how to solve this memory allocation...
                         next_states.push((outputs, prog.clone().mutate(|p| p.push(inst))));
                     }
                 }
+                assert_eq!(discarded.len(), stats.n_instructions);
             }
             tui.progress(len, len);
             // ------------------------------ Expand Phase --------------------------------------------
@@ -266,8 +274,7 @@ enum ProgramOrRetry<W: Word + HasBitWord> {
 fn init_bank<W: Word + HasBitWord>(
     bank: &mut Bank<W>,
     inp: MaskedState<W>,
-    regs: &[Register],
-    imms: &[W],
+    ei: EnumerationInfo<W>,
 ) {
     debug_assert!(!bank.contains_key(&inp));
     // Make sure we don't re-initialize this state or a sub-state for no reason by making sure
@@ -276,13 +283,8 @@ fn init_bank<W: Word + HasBitWord>(
         bank.entry(s).or_default();
     }
     // Now to the thing!
-    for inst in Inst::enumerate(EnumerationInfo {
-        registers: EnumerationInfoOptions::Limited(regs),
-        immediates: EnumerationInfoOptions::Limited(imms),
-        include_nop: false,
-        skip_cond_code: false,
-    }) {
         let Some(_) = inst.run_masked(inp) else {
+    for inst in Inst::enumerate(ei) {
             continue;
         };
         let inp = inp & inst.read_mask(inp.state());
@@ -363,7 +365,9 @@ fn insts_with_same_effect<W: Word + HasBitWord>(
     sub_input_mask: Mask,
     inputs: &[State<W>],
     outputs: &[State<W>],
+    stats: &mut Stats,
 ) -> impl Iterator<Item = Inst<W>> {
+    let stats = &*std::cell::UnsafeCell::from_mut(stats);
     // Look at super-masks of the input
     // TODO: We can do this more efficiently
     top_mask
@@ -402,16 +406,31 @@ fn insts_with_same_effect<W: Word + HasBitWord>(
                     }
                 })
                 .flat_map(move |(_sub_output_mask, sub_outputs)| {
+                    // We know these are ran one by one.
+                    let stats = unsafe { &mut *stats.get() };
+                    stats.n_intersections += 1;
                     intersect_all(
                         sub_inputs
                             .iter()
                             .cloned()
                             .zip(sub_outputs)
                             .map(|((_, bucket), sub_output)| bucket.get(&sub_output).unwrap())
+                            .inspect(|s| stats.total_intersection_input_sizes += s.len())
                             .collect::<Vec<_>>()
                             .into_iter(),
                     )
                     .cloned()
+                    .inspect(|_| stats.total_intersection_output_sizes += 1)
                 })
         })
+}
+
+#[derive(Copy, Clone, Debug, Default)]
+struct Stats {
+    n_intersections: usize,
+    total_intersection_input_sizes: usize,
+    total_intersection_output_sizes: usize,
+    n_discarded: usize,
+    last_discard_size: usize,
+    n_instructions: usize,
 }
