@@ -185,25 +185,7 @@ where
                 let mut discarded = FxHashSet::<Inst<W>>::default();
                 for sub_input_mask in biggest_mask.sub_masks() {
                     let sub_inputs = inputs.iter().map(|s| s.masked(sub_input_mask));
-                    // Find all instructions (and their effects!) that can run from the current states.
-                    // Instead of doing this by iterating all instructions, do this by intersection of equivalence
-                    // classes that can run from the states.
-                    let empty = Default::default();
-                    let insts = sub_inputs
-                        .map(|sub_input| {
-                            // For this state, return set of commands that can run from it.
-                            bank.get(&sub_input)
-                                .unwrap_or(&empty)
-                                .iter()
-                                .flat_map(|(_, set)| set.iter().copied())
-                                .collect::<FxHashSet<_>>()
-                        })
-                        .collect::<Vec<_>>()
-                        // Intersect!
-                        .as_slice()
-                        .pipe(|a| intersect_all(a.iter()))
-                        .cloned()
-                        .collect::<FxHashSet<_>>();
+                    let insts = insts_with_inputs(&bank, sub_inputs);
                     for inst in insts {
                         // We can't do this filtering as part of the intersection above because the
                         // discard set changes through the loop.
@@ -289,6 +271,33 @@ fn init_bank<W: Word + HasBitWord>(
         let class = bank.get_mut(&inp).unwrap().entry(out).or_default();
         class.insert(inst);
     }
+}
+
+/// Gets all instructions which have the same input
+/// Find all instructions (and their effects!) that can run from the current states.
+/// Instead of doing this by iterating all instructions, do this by intersection of equivalence
+/// classes that can run from the states.
+fn insts_with_inputs<W: Word + HasBitWord>(
+    bank: &Bank<W>,
+    sub_inputs: impl Iterator<Item = MaskedState<W>>,
+) -> impl Iterator<Item = Inst<W>> {
+    let empty = Default::default();
+    sub_inputs
+        .map(|sub_input| {
+            // For this state, return set of commands that can run from it.
+            bank.get(&sub_input)
+                .unwrap_or(&empty)
+                .iter()
+                .flat_map(|(_, set)| set.iter().copied())
+                .collect::<FxHashSet<_>>()
+        })
+        .collect::<Vec<_>>()
+        // Intersect!
+        .as_slice()
+        .pipe(|a| intersect_all(a.iter()))
+        .cloned()
+        .collect::<FxHashSet<_>>()
+        .into_iter()
 }
 
 /// Gets instructions which have the same effect on the input state
