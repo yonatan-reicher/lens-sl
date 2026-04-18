@@ -39,7 +39,9 @@ type Programs<W> = programs::Programs<Inst<W>>;
 
 type Graph<W> = graph::Graph<State<W>, Programs<W>>;
 
-// ====================================== Implementation ==========================================
+// =================================================================================================
+//                                         Implementation
+// =================================================================================================
 
 // This is the main function that gets exposed.
 /// `WT` for word size of the target program.
