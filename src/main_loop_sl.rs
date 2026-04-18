@@ -298,7 +298,7 @@ fn insts_with_inputs<'a, W: Word + HasBitWord>(
         .as_slice()
         .pipe(|a| intersect_all(a.iter()))
         .cloned()
-        .collect::<FxHashSet<_>>()
+        .collect::<Vec<_>>()
         .into_iter()
 }
 
