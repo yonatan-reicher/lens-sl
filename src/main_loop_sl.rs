@@ -130,8 +130,8 @@ where
         skip_cond_code: false,
     };
     let mut seen = FxHashSet::default();
-    let mut current_states = vec![]; // TODO: rename to frontier.
-    let mut next_states = vec![];
+    let mut frontier = vec![];
+    let mut next_frontier = vec![];
     let mut bank = Bank::default();
     let inputs_outputs = InputsOutputsCell::default();
     let mut oracle = ReducedProgramOracle {
@@ -157,17 +157,17 @@ where
         Break(ProgramOrRetry::Retry) => (),
     }
     'restart: loop {
-        current_states.clear();
-        current_states.push((inputs_outputs.inputs().to_vec(), vec![]));
-        next_states.clear();
+        frontier.clear();
+        frontier.push((inputs_outputs.inputs().to_vec(), vec![]));
+        next_frontier.clear();
         seen.clear();
         tui.reset_lengths();
         // ----- Reachability - Bfs loop to reach outputs ----------------------------------------
         for _length in 0..original_reduced.len() {
             tui.searching();
             tui.progress(0, stats.n_instructions);
-            let len = current_states.len();
-            for (i, (inputs, prog)) in current_states.iter().cloned().enumerate() {
+            let len = frontier.len();
+            for (i, (inputs, prog)) in frontier.iter().cloned().enumerate() {
                 tui.progress(i, len);
                 // Should we stop?
                 if should_cancel.check() {
@@ -240,7 +240,7 @@ where
                             &mut stats,
                         ));
                         // TODO: you know how to solve this memory allocation...
-                        next_states.push((outputs, prog.clone().mutate(|p| p.push(inst))));
+                        next_frontier.push((outputs, prog.clone().mutate(|p| p.push(inst))));
                     }
                 }
                 assert_eq!(discarded.len(), stats.n_instructions);
@@ -250,10 +250,10 @@ where
             let direction = Direction::Forward;
             tui.expanding(direction);
             //expand(&mut todo!(), g.tui);
-            current_states.clear();
-            std::mem::swap(&mut next_states, &mut current_states);
+            frontier.clear();
+            std::mem::swap(&mut next_frontier, &mut frontier);
         } // end of length loop
-        let lengths = next_states
+        let lengths = next_frontier
             .iter()
             .map(|(_, p)| p)
             .chunk_by(|p| p.len())
