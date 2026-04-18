@@ -135,13 +135,13 @@ where
     let mut frontier = vec![];
     let mut next_frontier = vec![];
     let mut bank = Bank::default();
-    let inputs_outputs = InputsOutputsCell::default();
+    let counter_examples = CounterExamplesCell::default();
     let mut oracle = ReducedProgramOracle {
         oracle: &mut oracle,
         oracle_reduced: &mut oracle_reduced,
         reducer: &reducer,
         tui,
-        inputs_outputs: &inputs_outputs,
+        counter_examples: &counter_examples,
     };
     let mut stats = Stats {
         n_instructions: Inst::enumerate(*enumeration_info).count(),
@@ -160,7 +160,7 @@ where
     }
     'restart: loop {
         frontier.clear();
-        frontier.push((inputs_outputs.inputs().to_vec(), vec![]));
+        frontier.push((counter_examples.inputs().to_vec(), vec![]));
         next_frontier.clear();
         seen.clear();
         tui.reset_lengths();
@@ -198,7 +198,7 @@ where
                             .map(|s| (*s).mutate(|s| inst.run(s)))
                             .collect::<Vec<_>>();
                         // Did we succeed?
-                        if outputs == *inputs_outputs.outputs() {
+                        if outputs == *counter_examples.outputs() {
                             let prog = prog.clone().mutate(|p| p.push(inst));
                             match oracle.verify(&prog) {
                                 // Continue(()) => todo!("what do we do here? '{prog:?}'"),
@@ -377,9 +377,9 @@ fn insts_with_same_effect<W: Word + HasBitWord>(
 /// The list of counter examples. Shared mutably.
 #[derive(Debug, Default)]
 #[allow(clippy::type_complexity)]
-struct InputsOutputsCell<W>(RefCell<(Vec<State<W>>, Vec<State<W>>)>);
+struct CounterExamplesCell<W>(RefCell<(Vec<State<W>>, Vec<State<W>>)>);
 
-impl<W: Word> InputsOutputsCell<W> {
+impl<W: Word> CounterExamplesCell<W> {
     pub fn inputs(&self) -> Ref<'_, [State<W>]> {
         Ref::map(self.0.borrow(), |(inps, _)| inps.as_slice())
     }
@@ -404,7 +404,7 @@ impl<W: Word> InputsOutputsCell<W> {
 /// This struct bundles up all the information needed to verify a candidate program against the
 /// actual real original program. Use [Self::verify] to do the verification!
 struct ReducedProgramOracle<'a, WBig: HasBitWord, W: HasBitWord> {
-    inputs_outputs: &'a InputsOutputsCell<W>,
+    counter_examples: &'a CounterExamplesCell<W>,
     oracle: &'a mut dyn Oracle<[Inst<WBig>], State<WBig>>,
     oracle_reduced: &'a mut dyn Oracle<[Inst<W>], State<W>>,
     reducer: &'a Reducer<WBig, W>,
@@ -432,10 +432,10 @@ where
             verify::Result::CounterExample(inp, out) => {
                 self.tui.found_counter_example(inp, out);
                 assert!(
-                    !self.inputs_outputs.contains(&inp, &out),
+                    !self.counter_examples.contains(&inp, &out),
                     "Counter-example from reduced oracle should not have been seen before."
                 );
-                self.inputs_outputs.push(inp, out);
+                self.counter_examples.push(inp, out);
                 Break(ProgramOrRetry::Retry)
             }
             verify::Result::Break(prog) => Break(prog),
