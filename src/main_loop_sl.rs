@@ -147,6 +147,7 @@ where
         n_instructions: Inst::enumerate(*enumeration_info).count(),
         ..Stats::default()
     };
+    // The mask that contains all the things in the state we might care about.
     let top_mask = registers
         .iter()
         .cloned()
