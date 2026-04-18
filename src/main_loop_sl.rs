@@ -135,13 +135,13 @@ where
     let mut frontier = vec![];
     let mut next_frontier = vec![];
     let mut bank = Bank::default();
-    let counter_examples = CounterExamplesCell::default();
+    let counter_examples = &CounterExamplesCell::default();
     let mut oracle = ReducedProgramOracle {
         oracle: &mut oracle,
         oracle_reduced: &mut oracle_reduced,
         reducer: &reducer,
         tui,
-        counter_examples: &counter_examples,
+        counter_examples,
     };
     let mut stats = Stats {
         n_instructions: Inst::enumerate(*enumeration_info).count(),
