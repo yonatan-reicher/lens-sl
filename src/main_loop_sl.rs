@@ -4,7 +4,7 @@
 use crate::all::All;
 use crate::arm::enumerate::{EnumerationInfo, EnumerationInfoOptions};
 use crate::arm::state::{Mask, Masked as MaskedState, State};
-use crate::arm::{self, Inst, Register};
+use crate::arm::{Inst, Register};
 use crate::collect_registers::Collector;
 use crate::direction::Direction;
 use crate::intersect_all::intersect_all;
@@ -147,7 +147,7 @@ where
         n_instructions: Inst::enumerate(*enumeration_info).count(),
         ..Stats::default()
     };
-    let biggest_mask = registers
+    let top_mask = registers
         .iter()
         .cloned()
         .fold(Mask::JUST_FLAGS, |m, r| m | Mask::just_register(r));
@@ -177,13 +177,13 @@ where
                 }
                 // First we need to check that all the states are properly represented in the bank.
                 for inp in inputs.iter().cloned() {
-                    if !bank.contains_key(&inp.masked(biggest_mask)) {
-                        init_bank(&mut bank, inp.masked(biggest_mask), *enumeration_info);
+                    if !bank.contains_key(&inp.masked(top_mask)) {
+                        init_bank(&mut bank, inp.masked(top_mask), *enumeration_info);
                     }
                 }
                 // The red code.
                 let mut discarded = FxHashSet::<Inst<W>>::default();
-                for sub_input_mask in biggest_mask.sub_masks() {
+                for sub_input_mask in top_mask.sub_masks() {
                     let insts = insts_with_inputs(&bank, &inputs, sub_input_mask);
                     for inst in insts {
                         // We can't do this filtering as part of the intersection above because the
@@ -215,7 +215,7 @@ where
                         // Extend Hila's discard set. Extend it by all the instructions which do the
                         // exact same thing as this instruction on the current inputs.
                         discarded.extend(insts_with_same_effect(
-                            biggest_mask,
+                            top_mask,
                             &bank,
                             sub_input_mask,
                             inputs.as_slice(),
