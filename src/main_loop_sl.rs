@@ -132,9 +132,16 @@ where
         skip_cond_code: false,
     };
     let mut seen = FxHashSet::default();
+    // The frontier is the set of discovered-but-unvisited states. Kind of like the current layer in
+    // a BFS. This one specifically is for the forward search.
+    // forward searching, 
     let mut frontier = vec![];
     let mut next_frontier = vec![];
-    let mut bank = Bank::default();
+    // Just like the frontier, but for the backward search.
+    let mut backtier = vec![];
+    let mut next_backtier = vec![];
+    let mut forward_bank = Bank::default();
+    let mut backward_bank = Bank::default();
     let counter_examples = &CounterExamplesCell::default();
     let mut oracle = ReducedProgramOracle {
         oracle: &mut oracle,
@@ -163,12 +170,16 @@ where
         frontier.clear();
         frontier.push((counter_examples.inputs().to_vec(), vec![]));
         next_frontier.clear();
+        backtier.clear();
+        backtier.push((counter_examples.outputs().to_vec(), vec![]));
+        next_backtier.clear();
         seen.clear();
         tui.reset_lengths();
         // ----- Reachability - Bfs loop to reach outputs ----------------------------------------
-        for _length in 0..original_reduced.len() {
+        for length in 0..original_reduced.len() {
             tui.searching();
             tui.progress(0, stats.n_instructions);
+            let search_forward = frontier.len() < backtier.len();
             let len = frontier.len();
             for (i, (inputs, prog)) in frontier.iter().cloned().enumerate() {
                 tui.progress(i, len);
