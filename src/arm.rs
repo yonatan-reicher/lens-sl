@@ -485,18 +485,31 @@ impl<W: Word + HasBitWord> Inst<W> {
 
     pub fn run_backward_masked<'a>(
         &self,
-        _output: state::Masked<W>,
-        _bm: &'a BackwardMap<W>,
-    ) -> impl IntoIterator<Item = &'a state::Masked<W>> + use<'a, W> {
-        // let unmasked_outputs = output.mask().;
-        // self.run_backward(*output.state(), bm)
-        //     .into_iter()
-        //     .map(|input| {
-        //         todo!()
-        //     })
-        todo!();
-        #[allow(unreachable_code)]
-        []
+        output: state::Masked<W>,
+        bm: &'a BackwardMap<W>,
+    ) -> impl Iterator<Item = state::Masked<W>> + use<'a, W> {
+        let inst = *self;
+        inst.run_backward(*output.state(), bm)
+            .into_iter()
+            .filter_map(move |inp| {
+                let read_mask = inst.read_mask(&inp);
+                let inp_masked = inp.masked(read_mask);
+                match inst.run_masked(inp_masked) {
+                    Some(out_again) => {
+                        if out_again.mask().is_sub_mask(&output.mask()) {
+                            debug_assert!(out_again.is_sub_state(&output));
+                            let missing_bit_mask = output.mask() & !out_again.mask();
+                            Some(inp_masked | (output & missing_bit_mask.into_mask()))
+                        } else
+                        /* Not a sub-mask */
+                        {
+                            // The output we got wrote to registers we don't have!
+                            None
+                        }
+                    }
+                    None => None,
+                }
+            })
     }
 
     pub fn reduce<WSmall: Word, WShiftSmall: Word>(
