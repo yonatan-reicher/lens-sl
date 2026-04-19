@@ -31,6 +31,9 @@ type Programs<W> = programs::Programs<Inst<W>>;
 
 type Graph<W> = graph::Graph<State<W>, Programs<W>>;
 
+type BackwardGraph<W> = backward_graph::BackwardGraph<State<W>, Inst<W>>;
+type BackwardGraphPath<'a, W> = backward_graph::BackwardGraphPath<'a, State<W>, Inst<W>>;
+
 // ====================================== Implementation ==========================================
 
 // This is the main function that gets exposed.
@@ -109,7 +112,8 @@ where
     // The forward and backward graphs start while having the empty program.
     let empty_program = Programs::empty_program();
     let mut forward_graph = Graph::Leaf(empty_program.clone());
-    let mut backward_graph = Graph::Leaf(empty_program);
+    // Note that as a special case, this contains the empty program.
+    let mut backward_graph = BackwardGraph::default();
     let enumeration_info = &EnumerationInfo::<W> {
         registers: EnumerationInfoOptions::Limited(registers),
         immediates: EnumerationInfoOptions::Limited(immediates),
@@ -140,7 +144,7 @@ where
         }
     }
     tui.report_graph(Direction::Forward, &forward_graph);
-    tui.report_graph(Direction::Backward, &backward_graph);
+    // tui.report_graph(Direction::Backward, &backward_graph);
     loop {
         // ------------------------------ Search Phase --------------------------------------------
         tui.searching();
@@ -152,7 +156,7 @@ where
                 &mut globals,
                 &c.should_cancel,
                 &mut forward_graph,
-                &mut backward_graph,
+                &mut backward_graph.root(),
                 inst,
                 1,
             );
@@ -168,7 +172,7 @@ where
         // ------------------------------ Expand Phase --------------------------------------------
         tui.progress(globals.total_instructions, globals.total_instructions);
         tui.report_graph(Direction::Forward, &forward_graph);
-        tui.report_graph(Direction::Backward, &backward_graph);
+        // tui.report_graph(Direction::Backward, &backward_graph);
         if globals.forward_length + globals.backward_length + 1 == c.program.len() - 1 {
             return Ok(None);
         }
@@ -197,7 +201,7 @@ where
                 &c.should_cancel,
             );
             globals.backward_length += 1;
-            tui.report_graph(Direction::Backward, &backward_graph);
+            // tui.report_graph(Direction::Backward, &backward_graph);
             ret
         };
         match ret {
@@ -255,7 +259,7 @@ fn connect_and_refine<WT: Word + HasBitWord, WS: Word + HasBitWord>(
     >,
     should_cancel: &ShouldCancel,
     forward_graph: &mut Graph<WS>,
-    backward_graph: &mut Graph<WS>,
+    backward_graph: &mut BackwardGraphPath<WS>,
     inst: Inst<WS>,
     // This is the index of the input/output pair we are currently trying to connect.
     k: usize,
@@ -266,8 +270,8 @@ fn connect_and_refine<WT: Word + HasBitWord, WS: Word + HasBitWord>(
     let tui = globals.tui;
     if k > globals.inputs.len() {
         let mut counter_example_added = false;
-        match (&forward_graph, &backward_graph) {
-            (Graph::Leaf(prefixes), Graph::Leaf(postfixes)) => {
+        match (&forward_graph, backward_graph.try_leaf()) {
+            (Graph::Leaf(prefixes), Some(postfixes)) => {
                 let ret = {
                     // We found a class of candidate programs.
                     // Try each one. If one works, return it. If none work, adds all counter-examples.
@@ -276,7 +280,7 @@ fn connect_and_refine<WT: Word + HasBitWord, WS: Word + HasBitWord>(
                     let mut program = Vec::with_capacity(program_length);
                     prefixes.try_each(|prefix| {
                         debug_assert_eq!(prefix.len(), globals.forward_length);
-                        postfixes.try_each(|postfix| {
+                        postfixes.iter().try_for_each(|postfix| {
                             debug_assert_eq!(postfix.len(), globals.backward_length);
                             // Build the current candidate (reduced) program.
                             program.clear();
@@ -331,7 +335,7 @@ fn connect_and_refine<WT: Word + HasBitWord, WS: Word + HasBitWord>(
             _ => {
                 println!("Graphs are not leaves at the end.");
                 println!("Forward Graph: \n{}", forward_graph.pretty_print());
-                println!("Backward Graph: \n{}", backward_graph.pretty_print());
+                // println!("Backward Graph: \n{}", backward_graph.pretty_print());
                 panic!();
             }
         }
@@ -348,9 +352,9 @@ fn connect_and_refine<WT: Word + HasBitWord, WS: Word + HasBitWord>(
         build_forward(forward_graph, &globals.inputs[k - 1]);
     }
 
-    if matches!(backward_graph, Graph::Leaf(..)) {
+    if backward_graph.is_leaf() {
         build_backward(
-            backward_graph,
+            backward_graph.g,
             &globals.outputs[k - 1],
             &globals.backward_map,
         );
@@ -360,9 +364,7 @@ fn connect_and_refine<WT: Word + HasBitWord, WS: Word + HasBitWord>(
     let Graph::Nest(forward_outputs) = forward_graph else {
         panic!();
     };
-    let Graph::Nest(backward_outputs) = backward_graph else {
-        panic!();
-    };
+    debug_assert!(!backward_graph.is_leaf());
 
     let mut next = State::default();
     for (forward_output, forward_subgraph) in forward_outputs {
@@ -411,21 +413,30 @@ fn expand_forward<W: Word + HasBitWord>(
 }
 
 fn expand_backward<W: Word + HasBitWord>(
-    graph: &mut Graph<W>,
+    graph: &mut BackwardGraph<W>,
     ei: &EnumerationInfo<W>,
     tui: &impl for<'g> TuiHook<&'g Graph<W>, State<W>>,
     total_inst: usize,
     bm: &BackwardMap<W>,
     should_cancel: &ShouldCancel,
 ) -> ControlFlow<Cancelled> {
-    expand_forward_or_backward(
-        graph,
-        ei,
-        tui,
-        total_inst,
-        |state, inst| inst.run_backward(state, bm).into_iter(),
-        should_cancel,
-    )
+    let old_graph = std::mem::replace(graph, BackwardGraph::default());
+    let mut out_states = vec![];
+    for (i, inst) in Inst::enumerate(*ei).enumerate()
+    {
+        tui.progress(i, total_inst);
+        out_states.clear();
+        for (counter_example, bucket) in old_graph.maps.iter().enumerate() {
+            for (input, programs) in bucket.iter() {
+                for new_input in inst.run_backward(*input, bm) {
+                    graph.maps[counter_example].entry(new_input)
+                        .or_default()
+                        .extend(&programs.concat(inst));
+                }
+            }
+        }
+    }
+    Continue(())
 }
 
 fn expand_forward_or_backward<W: Word + HasBitWord, StepRet: IntoIterator<Item = State<W>>>(
@@ -501,7 +512,7 @@ fn build_forward<W: Word + HasBitWord>(graph: &mut Graph<W>, input: &State<W>) {
 }
 
 fn build_backward<W: Word + HasBitWord>(
-    graph: &mut Graph<W>,
+    graph: &mut BackwardGraph<W>,
     input: &State<W>,
     bm: &BackwardMap<W>,
 ) {
