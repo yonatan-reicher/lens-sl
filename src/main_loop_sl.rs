@@ -288,6 +288,7 @@ fn init_bank<W: Word + HasBitWord>(
     bank: &mut Bank<W>,
     inp: MaskedState<W>,
     ei: EnumerationInfo<W>,
+    dir: Direction,
 ) {
     debug_assert!(!bank.contains_key(&inp));
     // Make sure we don't re-initialize this state or a sub-state for no reason by making sure
@@ -302,7 +303,10 @@ fn init_bank<W: Word + HasBitWord>(
         };
         let inp = inp & inst.potential_read_mask();
         let out = out & inst.potential_write_mask();
-        let class = bank.get_mut(&inp).unwrap().entry(out).or_default();
+        let class = match dir {
+            Forward => bank.get_mut(&inp).unwrap().entry(out).or_default(),
+            Backward => bank.get_mut(&out).unwrap().entry(inp).or_default(),
+        };
         class.insert(inst);
     }
 }
