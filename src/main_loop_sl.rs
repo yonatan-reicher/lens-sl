@@ -180,7 +180,7 @@ where
         next_backward_frontier.clear();
         //
         tui.reset_lengths();
-        for length in 0..original_reduced.len() {
+        for _length in 0..original_reduced.len() {
             tui.searching();
             tui.progress(0, stats.n_instructions);
             let direction = if forward_frontier.len() < backward_frontier.len() {
