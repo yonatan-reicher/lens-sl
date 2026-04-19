@@ -112,6 +112,23 @@ impl<I> Programs<I> {
         }
     }
 
+    pub fn contains(&self, i: &[I]) -> bool
+    where
+        I: Eq,
+    {
+        match &self.0 {
+            Inner::EmptyProgram => i == &[],
+            Inner::Concat(rc) => {
+                let (start, last) = rc.as_ref();
+                i.last() == Some(last) && start.contains(&i[..i.len() - 1])
+            }
+            Inner::ConcatsMap(_) => todo!(),
+            Inner::ConcatsVec(items) => items
+                .iter()
+                .any(|(start, last)| i.last() == Some(last) && start.contains(&i[..i.len() - 1])),
+        }
+    }
+
     // Get a single program from the collection, if there is any.
     pub fn sample(&self) -> Option<Program<I>>
     where
