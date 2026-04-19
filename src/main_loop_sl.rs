@@ -4,7 +4,7 @@
 use crate::all::All;
 use crate::arm::enumerate::{EnumerationInfo, EnumerationInfoOptions};
 use crate::arm::state::{Mask, Masked as MaskedState, State};
-use crate::arm::{Inst, Register};
+use crate::arm::{Inst, Register, BackwardMap};
 use crate::collect_registers::Collector;
 use crate::direction::Direction::{self, Backward, Forward};
 use crate::intersect_all::intersect_all;
@@ -214,13 +214,13 @@ where
                 // First we need to check that all the states are properly represented in the bank.
                 for s in states.iter().cloned() {
                     if !bank.contains_key(&s.masked(top_mask)) {
-                        init_bank(bank, s.masked(top_mask), *enumeration_info, direction);
+                        init_bank(bank, s.masked(top_mask), *enumeration_info, direction, todo!());
                     }
                 }
                 // The red code.
                 let mut discarded = FxHashSet::<Inst<W>>::default();
                 for mask in top_mask.sub_masks() {
-                    for inst in insts_with_precondtion(&bank, &states, mask) {
+                    for inst in insts_with_precondtion(bank, &states, mask) {
                         // We can't do this filtering as part of the selecting the instructions
                         // because the discard set changes through the loop.
                         if discarded.contains(&inst) {
@@ -251,7 +251,7 @@ where
                         // exact same thing as this instruction on the current inputs.
                         discarded.extend(insts_with_same_effect(
                             top_mask,
-                            &bank,
+                            bank,
                             mask,
                             states.as_slice(),
                             next_states.as_slice(),
@@ -286,22 +286,28 @@ where
 
 fn init_bank<W: Word + HasBitWord>(
     bank: &mut Bank<W>,
-    inp: MaskedState<W>,
+    state: MaskedState<W>,
     ei: EnumerationInfo<W>,
     dir: Direction,
+    bm: &BackwardMap<W>,
 ) {
-    debug_assert!(!bank.contains_key(&inp));
+    use itertools::Either;
+    debug_assert!(!bank.contains_key(&state));
     // Make sure we don't re-initialize this state or a sub-state for no reason by making sure
     // they're already created.
-    for s in inp.sub_states() {
+    for s in state.sub_states() {
         bank.entry(s).or_default();
     }
     // Now to the thing!
     for inst in Inst::enumerate(ei) {
-        let Some(out) = inst.run_masked(inp) else {
+        let outs = match dir {
+            Forward => Either::Left(inst.run_masked(state)),
+            Backward => Either::Right(inst.run_backward_masked(state, bm)),
+        };
+        let Some(out) = inst.run_masked(state) else {
             continue;
         };
-        let inp = inp & inst.potential_read_mask();
+        let inp = state & inst.potential_read_mask();
         let out = out & inst.potential_write_mask();
         let class = match dir {
             Forward => bank.get_mut(&inp).unwrap().entry(out).or_default(),
@@ -315,7 +321,7 @@ fn init_bank<W: Word + HasBitWord>(
 /// Find all instructions (and their effects!) that can run from the current states.
 /// Instead of doing this by iterating all instructions, do this by intersection of equivalence
 /// classes that can run from the states.
-fn insts_with_inputs<'a, W: Word + HasBitWord>(
+fn insts_with_precondtion<'a, W: Word + HasBitWord>(
     bank: &'a Bank<W>,
     inputs: &'a [State<W>],
     input_mask: Mask,
