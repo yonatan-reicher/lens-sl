@@ -267,15 +267,15 @@ where
             frontier.clear();
             std::mem::swap(next_frontier, frontier);
         } // end of length loop
-        let lengths = next_frontier
-            .iter()
-            .map(|(_, p)| p)
-            .chunk_by(|p| p.len())
-            .into_iter()
-            .map(|(len, progs)| format!("{len}: {}", progs.count()))
-            .join("\n");
-        println!("Progs");
-        println!("{}", lengths);
+        // let lengths = next_frontier
+        //     .iter()
+        //     .map(|(_, p)| p)
+        //     .chunk_by(|p| p.len())
+        //     .into_iter()
+        //     .map(|(len, progs)| format!("{len}: {}", progs.count()))
+        //     .join("\n");
+        // println!("Progs");
+        // println!("{}", lengths);
         return Ok(None);
     }
 }
