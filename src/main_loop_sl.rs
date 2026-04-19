@@ -182,15 +182,27 @@ where
         for length in 0..original_reduced.len() {
             tui.searching();
             tui.progress(0, stats.n_instructions);
-            let search_forward = forward_frontier.len() < backward_frontier.len();
-            let (bank, seen, frontier, next_frontier) = if search_forward {
-                (&mut forward_bank, &mut forward_seen, &forward_frontier, &mut next_forward_frontier)
+            let direction = if forward_frontier.len() < backward_frontier.len() {
+                Direction::Forward
             } else {
-                (&mut backward_bank, &mut backward_seen, &backward_frontier, &mut next_backward_frontier)
+                Direction::Backward
             };
-            let bank = if search_forward { &mut forward_bank } else { &mut backward_bank };
-            let len = states.len();
-            for (i, (inputs, prog)) in states.iter().cloned().enumerate() {
+            let (bank, seen, frontier, next_frontier) = match direction {
+                Direction::Forward => (
+                    &mut forward_bank,
+                    &mut forward_seen,
+                    &forward_frontier,
+                    &mut next_forward_frontier,
+                ),
+                Direction::Backward => (
+                    &mut backward_bank,
+                    &mut backward_seen,
+                    &backward_frontier,
+                    &mut next_backward_frontier,
+                ),
+            };
+            let len = frontier.len();
+            for (i, (inputs, prog)) in frontier.iter().cloned().enumerate() {
                 tui.progress(i, len);
                 // Should we stop?
                 if should_cancel.check() {
