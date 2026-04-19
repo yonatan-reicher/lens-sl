@@ -166,21 +166,31 @@ where
         Break(ProgramOrRetry::Retry) => (),
     }
     'restart: loop {
-        frontier.clear();
-        frontier.push((counter_examples.inputs().to_vec(), vec![]));
-        next_frontier.clear();
-        backtier.clear();
-        backtier.push((counter_examples.outputs().to_vec(), vec![]));
-        next_backtier.clear();
-        seen.clear();
+        // forward
+        forward_seen.clear();
+        forward_frontier.clear();
+        forward_frontier.push((counter_examples.inputs().to_vec(), vec![]));
+        next_forward_frontier.clear();
+        // backward
+        backward_seen.clear();
+        backward_frontier.clear();
+        backward_frontier.push((counter_examples.outputs().to_vec(), vec![]));
+        next_backward_frontier.clear();
+        //
         tui.reset_lengths();
         // ----- Reachability - Bfs loop to reach outputs ----------------------------------------
         for length in 0..original_reduced.len() {
             tui.searching();
             tui.progress(0, stats.n_instructions);
-            let search_forward = frontier.len() < backtier.len();
-            let len = frontier.len();
-            for (i, (inputs, prog)) in frontier.iter().cloned().enumerate() {
+            let search_forward = forward_frontier.len() < backward_frontier.len();
+            let (bank, seen, frontier, next_frontier) = if search_forward {
+                (&mut forward_bank, &mut forward_seen, &forward_frontier, &mut next_forward_frontier)
+            } else {
+                (&mut backward_bank, &mut backward_seen, &backward_frontier, &mut next_backward_frontier)
+            };
+            let bank = if search_forward { &mut forward_bank } else { &mut backward_bank };
+            let len = states.len();
+            for (i, (inputs, prog)) in states.iter().cloned().enumerate() {
                 tui.progress(i, len);
                 // Should we stop?
                 if should_cancel.check() {
