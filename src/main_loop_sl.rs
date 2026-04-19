@@ -6,7 +6,7 @@ use crate::arm::enumerate::{EnumerationInfo, EnumerationInfoOptions};
 use crate::arm::state::{Mask, Masked as MaskedState, State};
 use crate::arm::{Inst, Register};
 use crate::collect_registers::Collector;
-use crate::direction::Direction;
+use crate::direction::Direction::{self, Backward, Forward};
 use crate::intersect_all::intersect_all;
 use crate::oracle::{Oracle, SmtOracle};
 use crate::reduce_bit_width::{ImmediateInfo, Reducer};
@@ -182,18 +182,18 @@ where
             tui.searching();
             tui.progress(0, stats.n_instructions);
             let direction = if forward_frontier.len() < backward_frontier.len() {
-                Direction::Forward
+                Forward
             } else {
-                Direction::Backward
+                Backward
             };
             let (bank, seen, frontier, next_frontier) = match direction {
-                Direction::Forward => (
+                Forward => (
                     &mut forward_bank,
                     &mut forward_seen,
                     &mut forward_frontier,
                     &mut next_forward_frontier,
                 ),
-                Direction::Backward => (
+                Backward => (
                     &mut backward_bank,
                     &mut backward_seen,
                     &mut backward_frontier,
