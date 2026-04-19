@@ -178,7 +178,6 @@ where
         next_backward_frontier.clear();
         //
         tui.reset_lengths();
-        // ----- Reachability - Bfs loop to reach outputs ----------------------------------------
         for length in 0..original_reduced.len() {
             tui.searching();
             tui.progress(0, stats.n_instructions);
