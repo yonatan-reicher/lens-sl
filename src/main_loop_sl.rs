@@ -190,13 +190,13 @@ where
                 Direction::Forward => (
                     &mut forward_bank,
                     &mut forward_seen,
-                    &forward_frontier,
+                    &mut forward_frontier,
                     &mut next_forward_frontier,
                 ),
                 Direction::Backward => (
                     &mut backward_bank,
                     &mut backward_seen,
-                    &backward_frontier,
+                    &mut backward_frontier,
                     &mut next_backward_frontier,
                 ),
             };
@@ -265,7 +265,7 @@ where
             tui.expanding(direction);
             //expand(&mut todo!(), g.tui);
             frontier.clear();
-            std::mem::swap(&mut next_frontier, &mut frontier);
+            std::mem::swap(next_frontier, frontier);
         } // end of length loop
         let lengths = next_frontier
             .iter()
