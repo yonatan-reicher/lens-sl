@@ -188,16 +188,18 @@ where
             } else {
                 Backward
             };
-            let (bank, seen, frontier, next_frontier) = match direction {
+            let (bank, seen, other_side_seen, frontier, next_frontier) = match direction {
                 Forward => (
                     &mut forward_bank,
                     &mut forward_seen,
+                    &backward_seen,
                     &mut forward_frontier,
                     &mut next_forward_frontier,
                 ),
                 Backward => (
                     &mut backward_bank,
                     &mut backward_seen,
+                    &forward_seen,
                     &mut backward_frontier,
                     &mut next_backward_frontier,
                 ),
