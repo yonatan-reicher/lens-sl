@@ -168,11 +168,13 @@ where
     'restart: loop {
         // forward
         forward_seen.clear();
+        forward_seen.insert(counter_examples.inputs().to_vec());
         forward_frontier.clear();
         forward_frontier.push((counter_examples.inputs().to_vec(), vec![]));
         next_forward_frontier.clear();
         // backward
         backward_seen.clear();
+        forward_seen.insert(counter_examples.outputs().to_vec());
         backward_frontier.clear();
         backward_frontier.push((counter_examples.outputs().to_vec(), vec![]));
         next_backward_frontier.clear();
