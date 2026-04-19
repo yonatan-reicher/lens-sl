@@ -205,35 +205,35 @@ where
                 ),
             };
             let len = frontier.len();
-            for (i, (inputs, prog)) in frontier.iter().cloned().enumerate() {
+            for (i, (states, prog)) in frontier.iter().cloned().enumerate() {
                 tui.progress(i, len);
                 // Should we stop?
                 if should_cancel.check() {
                     return Err(Cancelled);
                 }
                 // First we need to check that all the states are properly represented in the bank.
-                for inp in inputs.iter().cloned() {
-                    if !bank.contains_key(&inp.masked(top_mask)) {
-                        init_bank(&mut bank, inp.masked(top_mask), *enumeration_info);
+                for s in states.iter().cloned() {
+                    if !bank.contains_key(&s.masked(top_mask)) {
+                        init_bank(bank, s.masked(top_mask), *enumeration_info, direction);
                     }
                 }
                 // The red code.
                 let mut discarded = FxHashSet::<Inst<W>>::default();
-                for sub_input_mask in top_mask.sub_masks() {
-                    for inst in insts_with_inputs(&bank, &inputs, sub_input_mask) {
-                        // We can't do this filtering as part of the intersection above because the
-                        // discard set changes through the loop.
+                for mask in top_mask.sub_masks() {
+                    for inst in insts_with_precondtion(&bank, &states, mask) {
+                        // We can't do this filtering as part of the selecting the instructions
+                        // because the discard set changes through the loop.
                         if discarded.contains(&inst) {
                             stats.n_discarded += 1;
                             stats.last_discard_size = discarded.len();
                             continue;
                         }
-                        let outputs = inputs
+                        let next_states = states
                             .iter()
                             .map(|s| (*s).mutate(|s| inst.run(s)))
                             .collect::<Vec<_>>();
                         // Did we succeed?
-                        if outputs == *counter_examples.outputs() {
+                        if other_side_seen.contains(&next_states) {
                             let prog = prog.clone().mutate(|p| p.push(inst));
                             match oracle.verify(&prog) {
                                 // Continue(()) => todo!("what do we do here? '{prog:?}'"),
@@ -242,23 +242,23 @@ where
                                 Break(ProgramOrRetry::Retry) => continue 'restart,
                             }
                         }
-                        if seen.contains(&outputs) {
+                        if seen.contains(&next_states) {
                             discarded.insert(inst);
                             continue;
                         }
-                        seen.insert(outputs.clone());
+                        seen.insert(next_states.clone());
                         // Extend Hila's discard set. Extend it by all the instructions which do the
                         // exact same thing as this instruction on the current inputs.
                         discarded.extend(insts_with_same_effect(
                             top_mask,
                             &bank,
-                            sub_input_mask,
-                            inputs.as_slice(),
-                            outputs.as_slice(),
+                            mask,
+                            states.as_slice(),
+                            next_states.as_slice(),
                             &mut stats,
                         ));
                         // TODO: you know how to solve this memory allocation...
-                        next_frontier.push((outputs, prog.clone().mutate(|p| p.push(inst))));
+                        next_frontier.push((next_states, prog.clone().mutate(|p| p.push(inst))));
                     }
                 }
                 assert_eq!(discarded.len(), stats.n_instructions);
