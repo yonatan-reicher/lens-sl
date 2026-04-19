@@ -131,15 +131,14 @@ where
         include_nop: false,
         skip_cond_code: false,
     };
-    let mut seen = FxHashSet::default();
+    let mut forward_seen = FxHashSet::default();
+    let mut backward_seen = FxHashSet::default();
     // The frontier is the set of discovered-but-unvisited states. Kind of like the current layer in
-    // a BFS. This one specifically is for the forward search.
-    // forward searching, 
-    let mut frontier = vec![];
-    let mut next_frontier = vec![];
-    // Just like the frontier, but for the backward search.
-    let mut backtier = vec![];
-    let mut next_backtier = vec![];
+    // a BFS.
+    let mut forward_frontier = vec![];
+    let mut next_forward_frontier = vec![];
+    let mut backward_frontier = vec![];
+    let mut next_backward_frontier = vec![];
     let mut forward_bank = Bank::default();
     let mut backward_bank = Bank::default();
     let counter_examples = &CounterExamplesCell::default();
