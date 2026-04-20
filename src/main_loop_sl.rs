@@ -186,22 +186,25 @@ where
             } else {
                 Backward
             };
-            let (bank, seen, other_side_seen, frontier, next_frontier) = match direction {
-                Forward => (
-                    &mut forward_bank,
-                    &mut forward_seen,
-                    &backward_seen,
-                    &mut forward_frontier,
-                    &mut next_forward_frontier,
-                ),
-                Backward => (
-                    &mut backward_bank,
-                    &mut backward_seen,
-                    &forward_seen,
-                    &mut backward_frontier,
-                    &mut next_backward_frontier,
-                ),
-            };
+            let (bank, seen, other_side_seen, frontier, next_frontier, other_side_frontier) =
+                match direction {
+                    Forward => (
+                        &mut forward_bank,
+                        &mut forward_seen,
+                        &backward_seen,
+                        &mut forward_frontier,
+                        &mut next_forward_frontier,
+                        &backward_frontier,
+                    ),
+                    Backward => (
+                        &mut backward_bank,
+                        &mut backward_seen,
+                        &forward_seen,
+                        &mut backward_frontier,
+                        &mut next_backward_frontier,
+                        &forward_frontier,
+                    ),
+                };
             let len = frontier.len();
             for (i, (states, prog)) in frontier.iter().cloned().enumerate() {
                 tui.progress(i, len);
@@ -216,7 +219,7 @@ where
                     }
                 }
                 // The red code.
-                let do_discard = direction == Forward;
+                let do_discard = false && direction == Forward;
                 let mut discarded = FxHashSet::<Inst<W>>::default();
                 for mask in top_mask.sub_masks() {
                     for inst in insts_with_precondtion(bank, &states, mask) {
@@ -233,10 +236,22 @@ where
                             .collect::<Vec<_>>();
                         // Did we succeed?
                         if other_side_seen.contains(&next_states) {
-                            let prog = prog.clone().mutate(|p| p.push(inst));
-                            todo!(
-                                "we need to look for the actual program here. that is, construct it from a prefix and postfix."
-                            );
+                            // Find the full program!
+                            let mut prog = prog.clone().mutate(|p| p.push(inst)).mutate(|p| {
+                                p.extend(
+                                    other_side_frontier
+                                        .iter()
+                                        .find_map(|(s, p)| (*s == next_states).then_some(p))
+                                        .unwrap()
+                                        .iter()
+                                        .cloned()
+                                        .rev(),
+                                )
+                            });
+                            match direction {
+                                Forward => (),
+                                Backward => prog.reverse(),
+                            }
                             match oracle.verify(&prog) {
                                 // Continue(()) => todo!("what do we do here? '{prog:?}'"),
                                 Continue(()) => (),
@@ -267,11 +282,12 @@ where
                         next_frontier.push((next_states, prog.clone().mutate(|p| p.push(inst))));
                     }
                 }
-                assert_eq!(discarded.len(), stats.n_instructions);
+                if do_discard {
+                    assert_eq!(discarded.len(), stats.n_instructions);
+                }
             }
             tui.progress(len, len);
             // ------------------------------ Expand Phase -----------------------------------------
-            let direction = Direction::Forward;
             tui.expanding(direction);
             //expand(&mut todo!(), g.tui);
             frontier.clear();
