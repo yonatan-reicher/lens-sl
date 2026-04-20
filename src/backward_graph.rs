@@ -31,9 +31,6 @@ impl<S, I> BackwardGraph<S, I> {
     fn longest(&self) -> Option<&InputsByCounterExample<S, I>> {
         self.0.last()
     }
-    fn longest_mut(&mut self) -> Option<&mut InputsByCounterExample<S, I>> {
-        self.0.last_mut()
-    }
 }
 
 impl<'a, S, I> BackwardGraphPath<'a, S, I>

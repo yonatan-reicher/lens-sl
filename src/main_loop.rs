@@ -502,7 +502,7 @@ fn update_backward_graph_cell<W: Word + HasBitWord>(
 ) {
     for inst in Inst::enumerate(ei) {
         for (input, programs) in prev.iter() {
-            let in_list = inst.run_backward(*input, &bm);
+            let in_list = inst.run_backward(*input, bm);
             let new_progs = programs.clone().concat(inst);
             for new_input in in_list {
                 current.entry(new_input).or_default().extend(&new_progs);

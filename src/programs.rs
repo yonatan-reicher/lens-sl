@@ -117,7 +117,7 @@ impl<I> Programs<I> {
         I: Eq,
     {
         match &self.0 {
-            Inner::EmptyProgram => i == &[],
+            Inner::EmptyProgram => i.is_empty(),
             Inner::Concat(rc) => {
                 let (start, last) = rc.as_ref();
                 i.last() == Some(last) && start.contains(&i[..i.len() - 1])
