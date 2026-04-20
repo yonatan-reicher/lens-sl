@@ -45,12 +45,11 @@ impl<W: Word + HasBitWord> BackwardMap<W, BitWord<W>> {
     {
         let file_path = std::path::Path::new(".").join(Self::file_name(registers));
         if file_path.exists() {
-            println!("loading backwards map from '{}'", file_path.display());
             let f = std::fs::File::open(file_path)?;
             let reader = std::io::BufReader::new(&f);
             Self::load(reader)
         } else {
-            println!("creating backwards map");
+            println!("creating backwards map '{}'", file_path.display());
             let f = std::fs::File::create(&file_path)?;
             let this = Self::new_recalculate(registers);
             println!("saving backwards map to '{}'", file_path.display());

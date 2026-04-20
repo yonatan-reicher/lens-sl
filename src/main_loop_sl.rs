@@ -229,7 +229,7 @@ where
                 assert_eq!(discarded.len(), stats.n_instructions);
             }
             tui.progress(len, len);
-            // ------------------------------ Expand Phase --------------------------------------------
+            // ------------------------------ Expand Phase -----------------------------------------
             let direction = Direction::Forward;
             tui.expanding(direction);
             //expand(&mut todo!(), g.tui);
