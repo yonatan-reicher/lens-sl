@@ -362,14 +362,18 @@ fn connect_and_refine<WT: Word + HasBitWord, WS: Word + HasBitWord>(
     }
 
     if backward_graph.ended() {
-        build_backward(
+        match build_backward(
             backward_graph.g,
             k - 1,
             &globals.backward_map,
             globals.enumeration_info,
             &globals.outputs,
             globals.backward_length,
-        );
+            should_cancel,
+        ) {
+            Continue(()) => (),
+            Break(Cancelled) => return ConnectAndRefineResult::Cancel,
+        };
     }
 
     // Must be nests, because build_forwards/backwards always turn leaves into nests.
@@ -436,11 +440,8 @@ fn expand_backward<W: Word + HasBitWord>(
 ) -> ControlFlow<Cancelled> {
     let n_counter_examples = outputs.len();
     for i in 0..n_counter_examples {
-        if should_cancel.check() {
-            return Break(Cancelled);
-        }
         tui.progress(i, n_counter_examples);
-        update_backward_graph(*ei, bm, graph, outputs, backward_length, i);
+        update_backward_graph(*ei, bm, graph, outputs, backward_length, i, should_cancel)?;
     }
     Continue(())
 }
@@ -452,7 +453,8 @@ fn update_backward_graph<W: Word + HasBitWord>(
     outputs: &[State<W>],
     postfix_length: usize,
     ce: usize,
-) {
+    should_cancel: &ShouldCancel,
+) -> ControlFlow<Cancelled> {
     // Implementation: treat the backward graph as a matrix, where the row index is length, and the
     // column index is counter example index. Go through column `ce` top to bottom, assuming all 0
     // <= i < ce have been initialized. For each cell, if we need to, initialize it. Once we
@@ -488,10 +490,11 @@ fn update_backward_graph<W: Word + HasBitWord>(
                 // We already calculated this...
                 curr_row[ce] = curr_row[ce_before].clone();
             } else {
-                update_backward_graph_cell(ei, prev_cell, curr_cell, bm);
+                update_backward_graph_cell(ei, prev_cell, curr_cell, bm, should_cancel)?;
             }
         }
     }
+    Continue(())
 }
 
 fn update_backward_graph_cell<W: Word + HasBitWord>(
@@ -499,9 +502,13 @@ fn update_backward_graph_cell<W: Word + HasBitWord>(
     prev: &mut FxHashMap<State<W>, Programs<W>>,
     current: &mut FxHashMap<State<W>, Programs<W>>,
     bm: &BackwardMap<W>,
-) {
+    should_cancel: &ShouldCancel,
+) -> ControlFlow<Cancelled> {
     for inst in Inst::enumerate(ei) {
         for (input, programs) in prev.iter() {
+            if should_cancel.check() {
+                return Break(Cancelled);
+            }
             let in_list = inst.run_backward(*input, bm);
             let new_progs = programs.clone().concat(inst);
             for new_input in in_list {
@@ -509,6 +516,7 @@ fn update_backward_graph_cell<W: Word + HasBitWord>(
             }
         }
     }
+    Continue(())
 }
 
 fn expand_forward_or_backward<W: Word + HasBitWord, StepRet: IntoIterator<Item = State<W>>>(
@@ -590,8 +598,9 @@ fn build_backward<W: Word + HasBitWord>(
     ei: EnumerationInfo<W>,
     outputs: &[State<W>],
     postfix_length: usize,
-) {
-    update_backward_graph(ei, bm, graph, outputs, postfix_length, ce);
+    should_cancel: &ShouldCancel,
+) -> ControlFlow<Cancelled> {
+    update_backward_graph(ei, bm, graph, outputs, postfix_length, ce, should_cancel)
 }
 
 fn build_forwards_or_backwards<W: Word + HasBitWord, StepRet: IntoIterator<Item = State<W>>>(
