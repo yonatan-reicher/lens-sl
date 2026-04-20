@@ -101,8 +101,8 @@ where
 type Bank<W> = FxHashMap<MaskedState<W>, FxHashMap<MaskedState<W>, FxHashSet<Inst<W>>>>;
 type BackwardBank<W> = FxHashMap<
     /* output */ MaskedState<W>,
-    /* one input */
     FxHashMap<
+        /* one input */
         MaskedState<W>,
         FxHashMap</* the command */ Inst<W>, Rc<FxHashSet<MaskedState<W> /* all inputs */>>>,
     >,
