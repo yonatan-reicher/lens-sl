@@ -37,6 +37,15 @@ pub struct BackwardMap<W: Word, WShift: Word = BitWord<W>> {
 }
 pub type Inputs<W> = Vec<State<W>>;
 
+impl<W: Word, WShift: Word> Default for BackwardMap<W, WShift> {
+    fn default() -> Self {
+        Self {
+            map: FxHashMap::default(),
+            registers: Vec::new(),
+        }
+    }
+}
+
 impl<W: Word + HasBitWord> BackwardMap<W, BitWord<W>> {
     pub fn new(registers: &[Register]) -> std::io::Result<Self>
     where

@@ -94,6 +94,7 @@ where
         reduced_program,
         c.should_cancel,
         tui,
+        c,
     )
 }
 
@@ -117,6 +118,7 @@ fn synthesize<WT, W>(
     original_reduced: Program<W>,
     should_cancel: ShouldCancel,
     tui: &impl for<'g> TuiHook<&'g Graph<W>, State<W>>,
+    c: Config<WT>,
 ) -> Result<Option<Program<WT>>, Cancelled>
 where
     WT: Word + HasBitWord,
@@ -148,6 +150,11 @@ where
         reducer: &reducer,
         tui,
         counter_examples,
+    };
+    let bm = if !c.forward_only {
+        BackwardMap::new(registers).unwrap()
+    } else {
+        BackwardMap::default()
     };
     let mut stats = Stats {
         n_instructions: Inst::enumerate(*enumeration_info).count(),
@@ -214,7 +221,7 @@ where
                 // First we need to check that all the states are properly represented in the bank.
                 for s in states.iter().cloned() {
                     if !bank.contains_key(&s.masked(top_mask)) {
-                        init_bank(bank, s.masked(top_mask), *enumeration_info, direction, todo!());
+                        init_bank(bank, s.masked(top_mask), *enumeration_info, direction, &bm);
                     }
                 }
                 // The red code.
@@ -300,20 +307,22 @@ fn init_bank<W: Word + HasBitWord>(
     }
     // Now to the thing!
     for inst in Inst::enumerate(ei) {
-        let outs = match dir {
+        let next_states = match dir {
             Forward => Either::Left(inst.run_masked(state)),
             Backward => Either::Right(inst.run_backward_masked(state, bm)),
         };
-        let Some(out) = inst.run_masked(state) else {
-            continue;
-        };
-        let inp = state & inst.potential_read_mask();
-        let out = out & inst.potential_write_mask();
-        let class = match dir {
-            Forward => bank.get_mut(&inp).unwrap().entry(out).or_default(),
-            Backward => bank.get_mut(&out).unwrap().entry(inp).or_default(),
-        };
-        class.insert(inst);
+        for next_state in next_states.into_iter() {
+            let (state_mask, next_state_mask) = match dir {
+                Forward => (inst.potential_read_mask(), inst.potential_write_mask()),
+                Backward => (
+                    inst.potential_write_mask(),
+                    inst.potential_read_mask() | inst.potential_write_mask(), /* Why both? Well, basically, we can't have the second index be smaller than the first, it must contain it. I don't remember why. */
+                ),
+            };
+            let (state, next_state) = (state & state_mask, next_state & next_state_mask);
+            let class = bank.get_mut(&state).unwrap().entry(next_state).or_default();
+            class.insert(inst);
+        }
     }
 }
 
