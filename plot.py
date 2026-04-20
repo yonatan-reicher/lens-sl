@@ -7,6 +7,8 @@ np.random.seed(19680801)
 
 lens = p.read_csv('lens.csv').replace('timeout', '11')
 sl = p.read_csv('sl.csv').replace('timeout', '11')
+lens = lens[lens['name'].map(lambda n: n in frozenset(sl['name']))]
+sl = sl[sl['name'].map(lambda n: n in frozenset(lens['name']))]
 
 time_column = 'time(seconds/timeout)'
 
