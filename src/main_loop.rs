@@ -440,12 +440,12 @@ fn expand_backward<W: Word + HasBitWord>(
             return Break(Cancelled);
         }
         tui.progress(i, n_counter_examples);
-        build_backward_weird_all(*ei, bm, graph, outputs, backward_length, i);
+        update_backward_graph(*ei, bm, graph, outputs, backward_length, i);
     }
     Continue(())
 }
 
-fn build_backward_weird_all<W: Word + HasBitWord>(
+fn update_backward_graph<W: Word + HasBitWord>(
     ei: EnumerationInfo<W>,
     bm: &BackwardMap<W>,
     backward_graph: &mut BackwardGraph<W>,
@@ -488,13 +488,13 @@ fn build_backward_weird_all<W: Word + HasBitWord>(
                 // We already calculated this...
                 curr_row[ce] = curr_row[ce_before].clone();
             } else {
-                build_backward_weird(ei, prev_cell, curr_cell, bm);
+                update_backward_graph_cell(ei, prev_cell, curr_cell, bm);
             }
         }
     }
 }
 
-fn build_backward_weird<W: Word + HasBitWord>(
+fn update_backward_graph_cell<W: Word + HasBitWord>(
     ei: EnumerationInfo<W>,
     prev: &mut FxHashMap<State<W>, Programs<W>>,
     current: &mut FxHashMap<State<W>, Programs<W>>,
@@ -591,7 +591,7 @@ fn build_backward<W: Word + HasBitWord>(
     outputs: &[State<W>],
     postfix_length: usize,
 ) {
-    build_backward_weird_all(ei, bm, graph, outputs, postfix_length, ce);
+    update_backward_graph(ei, bm, graph, outputs, postfix_length, ce);
 }
 
 fn build_forwards_or_backwards<W: Word + HasBitWord, StepRet: IntoIterator<Item = State<W>>>(
