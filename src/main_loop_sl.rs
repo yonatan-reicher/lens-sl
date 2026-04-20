@@ -181,7 +181,7 @@ where
         for _length in 0..original_reduced.len() {
             tui.searching();
             tui.progress(0, stats.n_instructions);
-            let direction = if forward_frontier.len() < backward_frontier.len() {
+            let direction = if c.forward_only || forward_frontier.len() < backward_frontier.len() {
                 Forward
             } else {
                 Backward
