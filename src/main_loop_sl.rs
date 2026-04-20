@@ -18,7 +18,6 @@ use crate::{Config, programs};
 // std imports
 use std::cell::{Ref, RefCell};
 use std::ops::ControlFlow::{self, Break, Continue};
-use std::rc::Rc;
 
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::de::DeserializeOwned;
@@ -99,14 +98,6 @@ where
 }
 
 type Bank<W> = FxHashMap<MaskedState<W>, FxHashMap<MaskedState<W>, FxHashSet<Inst<W>>>>;
-type BackwardBank<W> = FxHashMap<
-    /* output */ MaskedState<W>,
-    FxHashMap<
-        /* one input */
-        MaskedState<W>,
-        FxHashMap</* the command */ Inst<W>, Rc<FxHashSet<MaskedState<W> /* all inputs */>>>,
-    >,
->;
 
 #[allow(clippy::too_many_arguments)]
 fn synthesize<WT, W>(
