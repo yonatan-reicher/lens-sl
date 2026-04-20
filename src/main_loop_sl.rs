@@ -4,7 +4,7 @@
 use crate::all::All;
 use crate::arm::enumerate::{EnumerationInfo, EnumerationInfoOptions};
 use crate::arm::state::{Mask, Masked as MaskedState, State};
-use crate::arm::{Inst, Register, BackwardMap};
+use crate::arm::{BackwardMap, Inst, Register};
 use crate::collect_registers::Collector;
 use crate::direction::Direction::{self, Backward, Forward};
 use crate::intersect_all::intersect_all;
