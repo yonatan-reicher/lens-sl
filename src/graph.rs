@@ -164,6 +164,21 @@ where
             }
         }
     }
+
+    pub fn try_for_each<F, T>(self, f: &mut F) -> std::ops::ControlFlow<T>
+    where
+        F: FnMut(P) -> std::ops::ControlFlow<T>,
+    {
+        match self {
+            Self::Leaf(programs) => f(programs),
+            Self::Nest(hash_map) => {
+                for sub_graph in hash_map.into_values() {
+                    sub_graph.try_for_each(f)?;
+                }
+                std::ops::ControlFlow::Continue(())
+            }
+        }
+    }
 }
 
 // ================================================================================================

@@ -134,7 +134,6 @@ where
         enumeration_info: *enumeration_info,
     };
     // Generate a first input
-    println!("Checking empty program");
     match globals.oracle_reduced.check_program(&[]) {
         // TODO: What if the reduced program is equivalent but not the unreduced?
         Ok(()) => return Ok(Some(vec![])), // Turns out it's actually the empty program 🤷
@@ -358,7 +357,10 @@ fn connect_and_refine<WT: Word + HasBitWord, WS: Word + HasBitWord>(
     }
 
     if matches!(forward_graph, Graph::Leaf(..)) {
-        build_forward(forward_graph, &globals.inputs[k - 1]);
+        match build_forward(forward_graph, &globals.inputs[k - 1], should_cancel) {
+            Continue(()) => (),
+            Break(Cancelled) => return ConnectAndRefineResult::Cancel,
+        }
     }
 
     if backward_graph.ended() {
@@ -585,13 +587,17 @@ fn expand_forward_or_backward<W: Word + HasBitWord, StepRet: IntoIterator<Item =
     }
 }
 
-fn build_forward<W: Word + HasBitWord>(graph: &mut Graph<W>, input: &State<W>) {
-    build_forwards_or_backwards(graph, input, |program, mut state| {
+fn build_forward<W: Word + HasBitWord>(
+    graph: &mut Graph<W>,
+    input: &State<W>,
+    should_cancel: &ShouldCancel,
+) -> ControlFlow<Cancelled> {
+    build_forwards_or_backwards(graph, input, should_cancel, |program, mut state| {
         for inst in program {
             inst.run(&mut state);
         }
         [state]
-    });
+    })
 }
 
 fn build_backward<W: Word + HasBitWord>(
@@ -609,22 +615,27 @@ fn build_backward<W: Word + HasBitWord>(
 fn build_forwards_or_backwards<W: Word + HasBitWord, StepRet: IntoIterator<Item = State<W>>>(
     graph: &mut Graph<W>,
     input: &State<W>,
+    should_cancel: &ShouldCancel,
     step: impl Fn(&Program<W>, State<W>) -> StepRet,
-) {
+) -> ControlFlow<Cancelled> {
     debug_assert!(matches!(graph, Graph::Leaf(..)));
     // Rebuild the graph.
     // TODO: We can probably avoid completely rebuilding by just removing and adding programs on
     // the same data-structure. This would reduce allocations, but you need to mark which programs
     // have been visited, or store them in a list.
     let old_graph = std::mem::replace(graph, Graph::Nest(Default::default()));
-    old_graph.for_each(&mut |programs| {
-        programs.each(|program| {
+    old_graph.try_for_each(&mut |programs| {
+        programs.try_each(|program| {
+            if should_cancel.check() {
+                return Break(Cancelled);
+            }
             let programs: Programs<W> = program.iter().cloned().collect();
             for output in step(&program, *input) {
                 graph.insert(output, [programs.clone()]);
             }
-        });
-    });
+            Continue(())
+        })
+    })
 }
 
 /// Checks if the given counter-example has already been seen, by searching the input-output pairs
