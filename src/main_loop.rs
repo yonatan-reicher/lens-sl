@@ -481,7 +481,10 @@ fn update_backward_graph<W: Word + HasBitWord>(
             panic!();
         };
         let n_ces_ran_on = curr_row.len();
-        debug_assert!(n_ces_ran_on >= ce, "assuming that we created the previous columns");
+        debug_assert!(
+            n_ces_ran_on >= ce,
+            "assuming that we created the previous columns"
+        );
         if n_ces_ran_on == ce {
             // We haven't created this one yet!
             curr_row.push(FxHashMap::default());

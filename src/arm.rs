@@ -1008,7 +1008,10 @@ mod tests {
     }
 
     #[property_test]
-    fn potential_read_write_mask_eq_read_write_mask_when_no_condition_code(mut inst : Inst<Word4>, state: State<Word4>) {
+    fn potential_read_write_mask_eq_read_write_mask_when_no_condition_code(
+        mut inst: Inst<Word4>,
+        state: State<Word4>,
+    ) {
         inst.cond_code = CondCode::Al;
         println!("----------------");
         println!("inst {inst}  state {state}");

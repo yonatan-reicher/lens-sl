@@ -215,7 +215,10 @@ impl<W: Copy> State<W> {
         Masked::from(self) & mask
     }
 
-    pub fn try_all_each<T>(ei: &EnumerationInfoOptions<Register>, mut f: impl FnMut(&Self) -> ControlFlow<T>) -> ControlFlow<T>
+    pub fn try_all_each<T>(
+        ei: &EnumerationInfoOptions<Register>,
+        mut f: impl FnMut(&Self) -> ControlFlow<T>,
+    ) -> ControlFlow<T>
     where
         W: All + Default,
         W::Iter: Clone,
@@ -242,7 +245,10 @@ impl<W: Copy> State<W> {
         W: All + Default,
         W::Iter: Clone,
     {
-        let _ = Self::try_all_each::<()>(ei, |s| { f(s); ControlFlow::Continue(()) });
+        let _ = Self::try_all_each::<()>(ei, |s| {
+            f(s);
+            ControlFlow::Continue(())
+        });
     }
 }
 
@@ -634,8 +640,9 @@ impl<B> Mask<B> {
     }
 
     pub fn is_sub_mask(&self, other: &Self) -> B
-        where B: Bool,
-              Self: BoolEq<B>
+    where
+        B: Bool,
+        Self: BoolEq<B>,
     {
         (*self & *other).eq(self)
     }

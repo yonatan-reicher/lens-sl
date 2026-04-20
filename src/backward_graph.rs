@@ -1,7 +1,7 @@
 use crate::programs::Programs;
 use rustc_hash::FxHashMap;
-use std::hash::Hash;
 use std::fmt::Debug;
+use std::hash::Hash;
 
 /// BackwardsMap[postfix-length][test-index][input] = set of programs, that postfix-length
 /// instructions before the end, on the given input, return output of the given test.
