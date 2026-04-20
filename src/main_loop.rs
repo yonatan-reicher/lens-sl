@@ -6,7 +6,6 @@ use crate::arm::enumerate::{EnumerationInfo, EnumerationInfoOptions};
 use crate::arm::{BackwardMap, Inst, Register, State};
 use crate::collect_registers::Collector;
 use crate::direction::Direction;
-use crate::graph;
 use crate::len::Len;
 use crate::oracle::{Oracle, SmtOracle};
 use crate::programs;
@@ -15,10 +14,12 @@ use crate::tui::TuiHook;
 use crate::verify::{self, verify};
 use crate::word::prelude::*;
 use crate::{Cancelled, Config, ShouldCancel};
+use crate::{backward_graph, graph};
 
 // std imports
 use std::ops::ControlFlow::{self, Break, Continue};
 
+use rustc_hash::FxHashMap;
 use serde::de::DeserializeOwned;
 
 use functionality::prelude::*;
@@ -112,7 +113,6 @@ where
     // The forward and backward graphs start while having the empty program.
     let empty_program = Programs::empty_program();
     let mut forward_graph = Graph::Leaf(empty_program.clone());
-    // Note that as a special case, this contains the empty program.
     let mut backward_graph = BackwardGraph::default();
     let enumeration_info = &EnumerationInfo::<W> {
         registers: EnumerationInfoOptions::Limited(registers),
@@ -131,6 +131,7 @@ where
         tui,
         backward_map: BackwardMap::new(registers).unwrap(),
         total_instructions: Inst::enumerate(*enumeration_info).count(),
+        enumeration_info: *enumeration_info,
     };
     // Generate a first input
     println!("Checking empty program");
@@ -141,6 +142,10 @@ where
             tui.found_counter_example(inp, out);
             globals.inputs.push(inp);
             globals.outputs.push(out);
+            // Put the empty program into the backward graph under that input-output pair.
+            backward_graph
+                .0
+                .push(vec![[(out, empty_program)].into_iter().collect()]);
         }
     }
     tui.report_graph(Direction::Forward, &forward_graph);
@@ -196,9 +201,10 @@ where
                 &mut backward_graph,
                 enumeration_info,
                 globals.tui,
-                globals.total_instructions,
                 &globals.backward_map,
                 &c.should_cancel,
+                &globals.outputs,
+                globals.backward_length + 1,
             );
             globals.backward_length += 1;
             // tui.report_graph(Direction::Backward, &backward_graph);
@@ -241,6 +247,7 @@ struct Globals<
     backward_map: BackwardMap<WS>,
     /// The total instructions we are enumerating
     total_instructions: usize,
+    enumeration_info: EnumerationInfo<'tui, WS>,
 }
 
 enum ProgramOrRetry<W: Word + HasBitWord> {
@@ -270,7 +277,7 @@ fn connect_and_refine<WT: Word + HasBitWord, WS: Word + HasBitWord>(
     let tui = globals.tui;
     if k > globals.inputs.len() {
         let mut counter_example_added = false;
-        match (&forward_graph, backward_graph.try_leaf()) {
+        match (&forward_graph, backward_graph.get()) {
             (Graph::Leaf(prefixes), Some(postfixes)) => {
                 let ret = {
                     // We found a class of candidate programs.
@@ -306,6 +313,8 @@ fn connect_and_refine<WT: Word + HasBitWord, WS: Word + HasBitWord>(
                                     debug_assert!(actual != out, "Found mismatched interpreter behaviours!");
                                     inputs.push(inp);
                                     outputs.push(out);
+                                    // TODO: What is the equivalent of this in greenthumb's impl?
+                                    // backward_graph.g.0.push(vec![[(inp, empty_program)].into_iter().collect()]);
                                     counter_example_added = true;
                                     Break(ProgramOrRetry::Retry)
                                 }
@@ -352,11 +361,14 @@ fn connect_and_refine<WT: Word + HasBitWord, WS: Word + HasBitWord>(
         build_forward(forward_graph, &globals.inputs[k - 1]);
     }
 
-    if backward_graph.is_leaf() {
+    if backward_graph.ended() {
         build_backward(
             backward_graph.g,
-            &globals.outputs[k - 1],
+            k - 1,
             &globals.backward_map,
+            globals.enumeration_info,
+            &globals.outputs,
+            globals.backward_length,
         );
     }
 
@@ -364,18 +376,18 @@ fn connect_and_refine<WT: Word + HasBitWord, WS: Word + HasBitWord>(
     let Graph::Nest(forward_outputs) = forward_graph else {
         panic!();
     };
-    debug_assert!(!backward_graph.is_leaf());
+    debug_assert!(!backward_graph.ended());
 
     let mut next = State::default();
     for (forward_output, forward_subgraph) in forward_outputs {
         forward_output.clone_to(&mut next);
         inst.run(&mut next);
-        if let Some(backward_subgraph) = backward_outputs.get_mut(&next) {
+        if let Ok(()) = backward_graph.try_descend(next) {
             let res = connect_and_refine(
                 globals,
                 should_cancel,
                 forward_subgraph,
-                backward_subgraph,
+                backward_graph,
                 inst,
                 k + 1,
             );
@@ -384,6 +396,7 @@ fn connect_and_refine<WT: Word + HasBitWord, WS: Word + HasBitWord>(
                 ConnectAndRefineResult::Continue => {}
                 ConnectAndRefineResult::Cancel => return ConnectAndRefineResult::Cancel,
             }
+            backward_graph.ascend();
         }
     }
     ConnectAndRefineResult::Continue
@@ -416,27 +429,86 @@ fn expand_backward<W: Word + HasBitWord>(
     graph: &mut BackwardGraph<W>,
     ei: &EnumerationInfo<W>,
     tui: &impl for<'g> TuiHook<&'g Graph<W>, State<W>>,
-    total_inst: usize,
     bm: &BackwardMap<W>,
     should_cancel: &ShouldCancel,
+    outputs: &[State<W>],
+    backward_length: usize,
 ) -> ControlFlow<Cancelled> {
-    let old_graph = std::mem::replace(graph, BackwardGraph::default());
-    let mut out_states = vec![];
-    for (i, inst) in Inst::enumerate(*ei).enumerate()
-    {
-        tui.progress(i, total_inst);
-        out_states.clear();
-        for (counter_example, bucket) in old_graph.maps.iter().enumerate() {
-            for (input, programs) in bucket.iter() {
-                for new_input in inst.run_backward(*input, bm) {
-                    graph.maps[counter_example].entry(new_input)
-                        .or_default()
-                        .extend(&programs.concat(inst));
-                }
+    let n_counter_examples = outputs.len();
+    for i in 0..n_counter_examples {
+        if should_cancel.check() {
+            return Break(Cancelled);
+        }
+        tui.progress(i, n_counter_examples);
+        build_backward_weird_all(*ei, bm, graph, outputs, backward_length, i);
+    }
+    Continue(())
+}
+
+fn build_backward_weird_all<W: Word + HasBitWord>(
+    ei: EnumerationInfo<W>,
+    bm: &BackwardMap<W>,
+    backward_graph: &mut BackwardGraph<W>,
+    outputs: &[State<W>],
+    postfix_length: usize,
+    ce: usize,
+) {
+    // Implementation: treat the backward graph as a matrix, where the row index is length, and the
+    // column index is counter example index. Go through column `ce` top to bottom, assuming all 0
+    // <= i < ce have been initialized. For each cell, if we need to, initialize it. Once we
+    // initialized a cell, we never have to mutate it again.
+    let output = outputs[ce];
+    let same_as = (0..ce).find(|i| outputs[*i] == output);
+    // Initializing the first row (postfixes of length 0)
+    if backward_graph.0[0].len() == ce {
+        let cell = FxHashMap::default().mutate(|m| {
+            m.insert(outputs[ce], Programs::empty_program());
+        });
+        backward_graph.0[0].push(cell);
+    }
+    // Initializing the rest!
+    for len in 1..=postfix_length {
+        debug_assert!(
+            backward_graph.0.len() >= len,
+            "we are initializing this one by one"
+        );
+        if backward_graph.0.len() == len {
+            backward_graph.0.push(vec![]);
+        }
+        let [.., prev_row, curr_row] = backward_graph.0.as_mut_slice() else {
+            panic!();
+        };
+        let n_ces_ran_on = curr_row.len();
+        debug_assert!(n_ces_ran_on >= ce, "assuming that we created the previous columns");
+        if n_ces_ran_on == ce {
+            // We haven't created this one yet!
+            curr_row.push(FxHashMap::default());
+            let (prev_cell, curr_cell) = (&mut prev_row[ce], &mut curr_row[ce]);
+            if let Some(ce_before) = same_as {
+                // We already calculated this...
+                curr_row[ce] = curr_row[ce_before].clone();
+            } else {
+                build_backward_weird(ei, prev_cell, curr_cell, bm);
             }
         }
     }
-    Continue(())
+}
+
+fn build_backward_weird<W: Word + HasBitWord>(
+    ei: EnumerationInfo<W>,
+    prev: &mut FxHashMap<State<W>, Programs<W>>,
+    current: &mut FxHashMap<State<W>, Programs<W>>,
+    bm: &BackwardMap<W>,
+) {
+    for inst in Inst::enumerate(ei) {
+        for (input, programs) in prev.iter() {
+            let in_list = inst.run_backward(*input, &bm);
+            let new_progs = programs.clone().concat(inst);
+            for new_input in in_list {
+                current.entry(new_input).or_default().extend(&new_progs);
+            }
+        }
+    }
 }
 
 fn expand_forward_or_backward<W: Word + HasBitWord, StepRet: IntoIterator<Item = State<W>>>(
@@ -513,24 +585,28 @@ fn build_forward<W: Word + HasBitWord>(graph: &mut Graph<W>, input: &State<W>) {
 
 fn build_backward<W: Word + HasBitWord>(
     graph: &mut BackwardGraph<W>,
-    input: &State<W>,
+    ce: usize,
     bm: &BackwardMap<W>,
+    ei: EnumerationInfo<W>,
+    outputs: &[State<W>],
+    postfix_length: usize,
 ) {
-    build_forwards_or_backwards(graph, input, |program, output| {
-        // A vector of reaching states, that we push backwards in time, one instruction at a time.
-        let mut states = vec![output];
-        let mut new_states = vec![];
-        for inst in program.iter().rev() {
-            for state in states.drain(..) {
-                for new_state in inst.run_backward(state, bm) {
-                    new_states.push(new_state);
-                }
-            }
-            std::mem::swap(&mut states, &mut new_states);
-            debug_assert!(new_states.is_empty());
-        }
-        states
-    });
+    build_backward_weird_all(ei, bm, graph, outputs, postfix_length, ce);
+    // build_forwards_or_backwards(graph, input, |program, output| {
+    //     // A vector of reaching states, that we push backwards in time, one instruction at a time.
+    //     let mut states = vec![output];
+    //     let mut new_states = vec![];
+    //     for inst in program.iter().rev() {
+    //         for state in states.drain(..) {
+    //             for new_state in inst.run_backward(state, bm) {
+    //                 new_states.push(new_state);
+    //             }
+    //         }
+    //         std::mem::swap(&mut states, &mut new_states);
+    //         debug_assert!(new_states.is_empty());
+    //     }
+    //     states
+    // });
 }
 
 fn build_forwards_or_backwards<W: Word + HasBitWord, StepRet: IntoIterator<Item = State<W>>>(
