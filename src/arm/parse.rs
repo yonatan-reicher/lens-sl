@@ -874,79 +874,57 @@ fn parse_old_arg(s: &str) -> Option<ParsedArg> {
         .or_else(|| s.parse::<i64>().ok().map(ParsedArg::Imm))
 }
 
+fn opcode_matches_args(op_code: OpCode, args: &[ParsedArg]) -> bool {
+    let mut arg_i = 0usize;
+    for arg_type in op_code.arg_types() {
+        match arg_type {
+            ArgType::Unused => {}
+            ArgType::Reg(_) => {
+                if !matches!(args.get(arg_i), Some(ParsedArg::Reg(_))) {
+                    return false;
+                }
+                arg_i += 1;
+            }
+            ArgType::Imm => {
+                if !matches!(args.get(arg_i), Some(ParsedArg::Imm(_))) {
+                    return false;
+                }
+                arg_i += 1;
+            }
+        }
+    }
+    arg_i == args.len()
+}
+
 fn map_opcode(op: &str, args: &[ParsedArg]) -> Result<OpCode, ParseError> {
-    match op {
-        "nop" if args.is_empty() => Ok(OpCode::Nop),
-        "mov" => match args {
-            [ParsedArg::Reg(_), ParsedArg::Reg(_)] => Ok(OpCode::Mov),
-            [ParsedArg::Reg(_), ParsedArg::Imm(_)] => Ok(OpCode::MovI),
-            _ => Err(ParseError {
-                message: "unsupported mov operands".into(),
-                line: 0,
-                col: 0,
-            }),
-        },
-        "add" => match args {
-            [ParsedArg::Reg(_), ParsedArg::Reg(_), ParsedArg::Reg(_)] => Ok(OpCode::Add),
-            [ParsedArg::Reg(_), ParsedArg::Reg(_), ParsedArg::Imm(_)] => Ok(OpCode::AddI),
-            _ => Err(ParseError {
-                message: "unsupported add operands".into(),
-                line: 0,
-                col: 0,
-            }),
-        },
-        "sub" => match args {
-            [ParsedArg::Reg(_), ParsedArg::Reg(_), ParsedArg::Reg(_)] => Ok(OpCode::Sub),
-            [ParsedArg::Reg(_), ParsedArg::Reg(_), ParsedArg::Imm(_)] => Ok(OpCode::SubI),
-            _ => Err(ParseError {
-                message: "unsupported sub operands".into(),
-                line: 0,
-                col: 0,
-            }),
-        },
-        "and" => match args {
-            [ParsedArg::Reg(_), ParsedArg::Reg(_), ParsedArg::Reg(_)] => Ok(OpCode::And),
-            _ => Err(ParseError {
-                message: "unsupported and operands".into(),
-                line: 0,
-                col: 0,
-            }),
-        },
-        "eor" => match args {
-            [ParsedArg::Reg(_), ParsedArg::Reg(_), ParsedArg::Reg(_)] => Ok(OpCode::Eor),
-            _ => Err(ParseError {
-                message: "unsupported eor operands".into(),
-                line: 0,
-                col: 0,
-            }),
-        },
-        "mul" => match args {
-            [ParsedArg::Reg(_), ParsedArg::Reg(_), ParsedArg::Reg(_)] => Ok(OpCode::Mul),
-            _ => Err(ParseError {
-                message: "unsupported mul operands".into(),
-                line: 0,
-                col: 0,
-            }),
-        },
-        "orr" => match args {
-            [ParsedArg::Reg(_), ParsedArg::Reg(_), ParsedArg::Reg(_)] => Ok(OpCode::Orr),
-            _ => Err(ParseError {
-                message: "unsupported orr operands".into(),
-                line: 0,
-                col: 0,
-            }),
-        },
-        "cmp" => match args {
-            [ParsedArg::Reg(_), ParsedArg::Reg(_)] => Ok(OpCode::Cmp),
-            [ParsedArg::Reg(_), ParsedArg::Imm(_)] => Ok(OpCode::CmpI),
-            _ => Err(ParseError {
-                message: "unsupported cmp operands".into(),
-                line: 0,
-                col: 0,
-            }),
-        },
-        _ => Err(ParseError {
+    let candidates: Vec<OpCode> = OpCode::ALL
+        .iter()
+        .copied()
+        .filter(|candidate| candidate.as_str() == op)
+        .collect();
+
+    if candidates.is_empty() {
+        return Err(ParseError {
             message: format!("unsupported opcode '{op}'"),
+            line: 0,
+            col: 0,
+        });
+    }
+
+    let matches: Vec<OpCode> = candidates
+        .into_iter()
+        .filter(|candidate| opcode_matches_args(*candidate, args))
+        .collect();
+
+    match matches.as_slice() {
+        [op_code] => Ok(*op_code),
+        [] => Err(ParseError {
+            message: format!("unsupported operands for opcode '{op}'"),
+            line: 0,
+            col: 0,
+        }),
+        _ => Err(ParseError {
+            message: format!("ambiguous opcode '{op}' for provided operands"),
             line: 0,
             col: 0,
         }),
@@ -1158,6 +1136,13 @@ mod tests {
     }
 
     #[test]
+    fn test_special_inst_udiv() {
+        let insts = parse_raw("bl __aeabi_uidiv").unwrap();
+        assert_eq!(op(&insts[0]), ("udiv", "", ""));
+        assert_eq!(insts[0].args, vec!["r0", "r0", "r1"]);
+    }
+
+    #[test]
     fn test_label_and_block_comment_skipped() {
         let src = "main:\n; BB0_1:\nmov r0, r1\n";
         let insts = parse_raw(src).unwrap();
@@ -1188,6 +1173,38 @@ mod tests {
         assert_eq!(insts[0].shift, ShiftCode::None);
         assert_eq!(usize::from(insts[0].args[0]), 0);
         assert_eq!(usize::from(insts[0].args[1]), 1);
+    }
+
+    #[test]
+    fn test_parse_sdiv() {
+        let insts = parse::<Word4, Word2>("sdiv r0, r1, r2").unwrap();
+        assert_eq!(insts.len(), 1);
+        assert_eq!(insts[0].op_code, OpCode::Sdiv);
+        assert_eq!(insts[0].cond_code, CondCode::Al);
+    }
+
+    #[test]
+    fn test_parse_special_sdiv_call() {
+        let insts = parse::<Word4, Word2>("bl __aeabi_idiv").unwrap();
+        assert_eq!(insts.len(), 1);
+        assert_eq!(insts[0].op_code, OpCode::Sdiv);
+        assert_eq!(insts[0].cond_code, CondCode::Al);
+    }
+
+    #[test]
+    fn test_parse_udiv() {
+        let insts = parse::<Word4, Word2>("udiv r0, r1, r2").unwrap();
+        assert_eq!(insts.len(), 1);
+        assert_eq!(insts[0].op_code, OpCode::Udiv);
+        assert_eq!(insts[0].cond_code, CondCode::Al);
+    }
+
+    #[test]
+    fn test_parse_special_udiv_call() {
+        let insts = parse::<Word4, Word2>("bl __aeabi_uidiv").unwrap();
+        assert_eq!(insts.len(), 1);
+        assert_eq!(insts[0].op_code, OpCode::Udiv);
+        assert_eq!(insts[0].cond_code, CondCode::Al);
     }
 
     #[test]
@@ -1230,6 +1247,122 @@ mod tests {
         assert_eq!(insts.len(), 1);
         assert_eq!(insts[0].op_code, OpCode::Add);
         assert_eq!(insts[0].shift, ShiftCode::Rrx);
+    }
+
+    #[test]
+    fn test_parse_movt() {
+        let insts = parse::<Word4, Word2>("movt r0, #1").unwrap();
+        assert_eq!(insts.len(), 1);
+        assert_eq!(insts[0].op_code, OpCode::Movt);
+        assert_eq!(insts[0].cond_code, CondCode::Al);
+    }
+
+    #[test]
+    fn test_parse_movt_with_condition() {
+        let insts = parse::<Word4, Word2>("movteq r0, #1").unwrap();
+        assert_eq!(insts.len(), 1);
+        assert_eq!(insts[0].op_code, OpCode::Movt);
+        assert_eq!(insts[0].cond_code, CondCode::Eq);
+    }
+
+    #[test]
+    fn test_parse_movw() {
+        let insts = parse::<Word4, Word2>("movw r0, #1").unwrap();
+        assert_eq!(insts.len(), 1);
+        assert_eq!(insts[0].op_code, OpCode::Movw);
+        assert_eq!(insts[0].cond_code, CondCode::Al);
+    }
+
+    #[test]
+    fn test_parse_movw_with_condition() {
+        let insts = parse::<Word4, Word2>("movweq r0, #1").unwrap();
+        assert_eq!(insts.len(), 1);
+        assert_eq!(insts[0].op_code, OpCode::Movw);
+        assert_eq!(insts[0].cond_code, CondCode::Eq);
+    }
+
+    #[test]
+    fn test_parse_mvn() {
+        let insts = parse::<Word4, Word2>("mvn r3, r3").unwrap();
+        assert_eq!(insts.len(), 1);
+        assert_eq!(insts[0].op_code, OpCode::Mvn);
+        assert_eq!(insts[0].cond_code, CondCode::Al);
+    }
+
+    #[test]
+    fn test_parse_mvni() {
+        let insts = parse::<Word4, Word2>("mvn r0, 0").unwrap();
+        assert_eq!(insts.len(), 1);
+        assert_eq!(insts[0].op_code, OpCode::MvnI);
+        assert_eq!(insts[0].cond_code, CondCode::Al);
+    }
+
+    #[test]
+    fn test_parse_uxth() {
+        let insts = parse::<Word4, Word2>("uxth r5, r0").unwrap();
+        assert_eq!(insts.len(), 1);
+        assert_eq!(insts[0].op_code, OpCode::Uxth);
+    }
+
+    #[test]
+    fn test_parse_uxtah() {
+        let insts = parse::<Word4, Word2>("uxtah r2, r5, r2").unwrap();
+        assert_eq!(insts.len(), 1);
+        assert_eq!(insts[0].op_code, OpCode::Uxtah);
+    }
+
+    #[test]
+    fn test_parse_rsb() {
+        let insts = parse::<Word4, Word2>("rsb r0, r1, r2").unwrap();
+        assert_eq!(insts.len(), 1);
+        assert_eq!(insts[0].op_code, OpCode::Rsb);
+    }
+
+    #[test]
+    fn test_parse_rsbi() {
+        let insts = parse::<Word4, Word2>("rsb r0, r1, #3").unwrap();
+        assert_eq!(insts.len(), 1);
+        assert_eq!(insts[0].op_code, OpCode::RsbI);
+    }
+
+    #[test]
+    fn test_parse_bic() {
+        let insts = parse::<Word4, Word2>("bic r0, r1, r2").unwrap();
+        assert_eq!(insts.len(), 1);
+        assert_eq!(insts[0].op_code, OpCode::Bic);
+    }
+
+    #[test]
+    fn test_parse_andi() {
+        let insts = parse::<Word4, Word2>("and r1, r3, #1").unwrap();
+        assert_eq!(insts.len(), 1);
+        assert_eq!(insts[0].op_code, OpCode::AndI);
+    }
+
+    #[test]
+    fn test_parse_orri_with_condition() {
+        let insts = parse::<Word4, Word2>("orrls r0, r2, #1").unwrap();
+        assert_eq!(insts.len(), 1);
+        assert_eq!(insts[0].op_code, OpCode::OrrI);
+        assert_eq!(insts[0].cond_code, CondCode::Ls);
+    }
+
+    #[test]
+    fn test_parse_bici() {
+        let insts = parse::<Word4, Word2>("bic r1, r3, #7").unwrap();
+        assert_eq!(insts.len(), 1);
+        assert_eq!(insts[0].op_code, OpCode::BicI);
+    }
+
+    #[test]
+    fn test_parse_tst_and_tsti_from_opcode_table() {
+        let reg = parse::<Word4, Word2>("tst r0, r1").unwrap();
+        assert_eq!(reg.len(), 1);
+        assert_eq!(reg[0].op_code, OpCode::Tst);
+
+        let imm = parse::<Word4, Word2>("tst r0, #1").unwrap();
+        assert_eq!(imm.len(), 1);
+        assert_eq!(imm[0].op_code, OpCode::TstI);
     }
 
     #[test]

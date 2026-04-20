@@ -38,6 +38,23 @@ pub enum RegArgType {
     // I like using 'Inp' instead of 'In' because it aligns with 'Out'
     Inp,
     Out,
+    InpOut,
+}
+
+impl RegArgType {
+    pub const fn is_inp(&self) -> bool {
+        match self {
+            RegArgType::Inp | RegArgType::InpOut => true,
+            RegArgType::Out => false,
+        }
+    }
+
+    pub const fn is_out(&self) -> bool {
+        match self {
+            RegArgType::Out | RegArgType::InpOut => true,
+            RegArgType::Inp => false,
+        }
+    }
 }
 
 impl ArgType {
@@ -154,7 +171,7 @@ macro_rules! define_instructions {
         /// The operation codes supported by our ISA.
         #[derive(Copy, Clone, Debug, derive_more::Display, PartialEq, Eq, Hash, Serialize, Deserialize)]
         #[cfg_attr(test, derive(proptest_derive::Arbitrary))]
-        #[display("{}", self.to_string())]
+        #[display("{}", self.as_str())]
         pub enum OpCode {
             $( $op_code, )+
         }
@@ -170,10 +187,14 @@ macro_rules! define_instructions {
                 }
             }
 
-            pub fn to_string(&self) -> String {
+            pub const fn as_str(&self) -> &'static str {
                 match self {
-                    $( OpCode::$op_code => $str.to_string(), )+
+                    $( OpCode::$op_code => $str, )+
                 }
+            }
+
+            pub fn to_string(&self) -> String {
+                self.as_str().to_owned()
             }
 
             /// An array of all op-codes.
@@ -206,21 +227,37 @@ macro_rules! define_instructions {
 }
 
 define_instructions! {
-    | OpCode  | Arg 1    | Arg 2    | Arg 3    | String | Commutative | Affects Flags |
-    -----------------------------------------------------------------------------------
-    | Nop     | Unused   | Unused   | Unused   | "nop"  |    true     |     false     |
-    | Add     | Reg(Out) | Reg(Inp) | Reg(Inp) | "add"  |    true     |     false     |
-    | AddI    | Reg(Out) | Reg(Inp) | Imm      | "add"  |    false    |     false     |
-    | Sub     | Reg(Out) | Reg(Inp) | Reg(Inp) | "sub"  |    false    |     false     |
-    | SubI    | Reg(Out) | Reg(Inp) | Imm      | "sub"  |    false    |     false     |
-    | And     | Reg(Out) | Reg(Inp) | Reg(Inp) | "and"  |    true     |     false     |
-    | Eor     | Reg(Out) | Reg(Inp) | Reg(Inp) | "eor"  |    true     |     false     |
-    | Mov     | Reg(Out) | Reg(Inp) | Unused   | "mov"  |    false    |     false     |
-    | MovI    | Reg(Inp) | Imm      | Unused   | "mov"  |    false    |     false     |
-    | Mul     | Reg(Out) | Reg(Inp) | Reg(Inp) | "mul"  |    true     |     false     |
-    | Orr     | Reg(Out) | Reg(Inp) | Reg(Inp) | "orr"  |    true     |     false     |
-    | Cmp     | Reg(Inp) | Reg(Inp) | Unused   | "cmp"  |    false    |     true      |
-    | CmpI    | Reg(Inp) | Imm      | Unused   | "cmp"  |    false    |     true      |
+    | OpCode  | Arg 1       | Arg 2    | Arg 3    | String | Commutative | Affects Flags |
+    -----------------------------------------------------------------------------------------
+    | Nop     | Unused      | Unused   | Unused   | "nop"  |    true     |     false     |
+    | Add     | Reg(Out)    | Reg(Inp) | Reg(Inp) | "add"  |    true     |     false     |
+    | AddI    | Reg(Out)    | Reg(Inp) | Imm      | "add"  |    false    |     false     |
+    | Sub     | Reg(Out)    | Reg(Inp) | Reg(Inp) | "sub"  |    false    |     false     |
+    | SubI    | Reg(Out)    | Reg(Inp) | Imm      | "sub"  |    false    |     false     |
+    | Rsb     | Reg(Out)    | Reg(Inp) | Reg(Inp) | "rsb"  |    false    |     false     |
+    | RsbI    | Reg(Out)    | Reg(Inp) | Imm      | "rsb"  |    false    |     false     |
+    | And     | Reg(Out)    | Reg(Inp) | Reg(Inp) | "and"  |    true     |     false     |
+    | AndI    | Reg(Out)    | Reg(Inp) | Imm      | "and"  |    false    |     false     |
+    | Bic     | Reg(Out)    | Reg(Inp) | Reg(Inp) | "bic"  |    false    |     false     |
+    | BicI    | Reg(Out)    | Reg(Inp) | Imm      | "bic"  |    false    |     false     |
+    | Eor     | Reg(Out)    | Reg(Inp) | Reg(Inp) | "eor"  |    true     |     false     |
+    | Mov     | Reg(Out)    | Reg(Inp) | Unused   | "mov"  |    false    |     false     |
+    | MovI    | Reg(Out)    | Imm      | Unused   | "mov"  |    false    |     false     |
+    | Mvn     | Reg(Out)    | Reg(Inp) | Unused   | "mvn"  |    false    |     false     |
+    | MvnI    | Reg(Out)    | Imm      | Unused   | "mvn"  |    false    |     false     |
+    | Uxth    | Reg(Out)    | Reg(Inp) | Unused   | "uxth" |    false    |     false     |
+    | Uxtah   | Reg(Out)    | Reg(Inp) | Reg(Inp) | "uxtah"|    false    |     false     |
+    | Movt    | Reg(InpOut) | Imm      | Unused   | "movt" |    false    |     false     |
+    | Movw    | Reg(InpOut) | Imm      | Unused   | "movw" |    false    |     false     |
+    | Mul     | Reg(Out)    | Reg(Inp) | Reg(Inp) | "mul"  |    true     |     false     |
+    | Sdiv    | Reg(Out)    | Reg(Inp) | Reg(Inp) | "sdiv" |    false    |     false     |
+    | Udiv    | Reg(Out)    | Reg(Inp) | Reg(Inp) | "udiv" |    false    |     false     |
+    | Orr     | Reg(Out)    | Reg(Inp) | Reg(Inp) | "orr"  |    true     |     false     |
+    | OrrI    | Reg(Out)    | Reg(Inp) | Imm      | "orr"  |    false    |     false     |
+    | Cmp     | Reg(Inp)    | Reg(Inp) | Unused   | "cmp"  |    false    |     true      |
+    | CmpI    | Reg(Inp)    | Imm      | Unused   | "cmp"  |    false    |     true      |
+    | Tst     | Reg(Inp)    | Reg(Inp) | Unused   | "tst"  |    true     |     true      |
+    | TstI    | Reg(Inp)    | Imm      | Unused   | "tst"  |    false    |     true      |
 }
 
 /// A number representing a register.
@@ -338,7 +375,7 @@ pub struct Inst<W, WShift = BitWord<W>> {
 pub mod state;
 
 use state::{BitMask, Mask};
-pub use state::{Flags, FlagsBitField, State, StateVars, SymbolicState};
+pub use state::{Flags, FlagsBitField, State};
 
 // ========================================= Semantics =============================================
 
@@ -372,7 +409,7 @@ impl<W: Word + HasBitWord> Inst<W> {
         *state = semantics::run(self, &input, &mut read_mask, &mut write_mask, &())
     }
 
-    pub fn run_symbolic<'st>(&self, state: &mut SymbolicState<'st, W::SmtWord<'st>>) {
+    pub fn run_symbolic<'st>(&self, state: &mut state::SymbolicState<'st, W::SmtWord<'st>>) {
         let input = *state;
         let (mut read_mask, mut write_mask) = (Mask::empty(), Mask::empty());
         let st = state.registers[0].st();
@@ -393,6 +430,44 @@ impl<W: Word + HasBitWord> Inst<W> {
         let (mut read_mask, mut write_mask) = Default::default();
         semantics::run(self, &input, &mut read_mask, &mut write_mask, &());
         read_mask
+    }
+
+    /// What the instruction writes to, given a state.
+    pub fn write_mask(&self, state: &State<W>) -> Mask {
+        let input = *state;
+        let (mut read_mask, mut write_mask) = Default::default();
+        semantics::run(self, &input, &mut read_mask, &mut write_mask, &());
+        write_mask
+    }
+
+    pub fn potential_read_mask(&self) -> Mask {
+        if self.op_code == OpCode::Nop {
+            return Mask::default();
+        }
+        Mask {
+            flags: self.reads_flags(),
+            registers: Register::ALL.map(|r| {
+                self.args_with_types().any(|(a, t)| {
+                    Register::from(a) == r
+                        && matches!(t, ArgType::Reg(reg_type) if reg_type.is_inp())
+                })
+            }),
+        }
+    }
+
+    pub fn potential_write_mask(&self) -> Mask {
+        if self.op_code == OpCode::Nop {
+            return Mask::default();
+        }
+        Mask {
+            flags: self.affects_flags(),
+            registers: Register::ALL.map(|r| {
+                self.args_with_types().any(|(a, t)| {
+                    Register::from(a) == r
+                        && matches!(t, ArgType::Reg(reg_type) if reg_type.is_out())
+                })
+            }),
+        }
     }
 
     pub fn run_masked(&self, masked: state::Masked<W>) -> Option<state::Masked<W>> {
@@ -698,6 +773,10 @@ where
     WBig: Word + HasBitWord,
     WSmall: Word + HasBitWord,
 {
+    if program.is_empty() {
+        f(&[])?;
+        return ControlFlow::Continue(());
+    }
     let mut ret = vec![];
     let iters: Vec<_> = program.iter().map(|inst| inst.extend(reducer)).collect();
     let mut iter = PermutationIter::new(iters.as_slice());
@@ -711,6 +790,7 @@ where
 
 /// Returns a mask having only those parts of the input state that affect the output of the
 /// program.
+#[allow(dead_code)]
 pub fn what_program_reads<W: Word + HasBitWord>(
     prog: impl IntoIterator<Item = Inst<W>>,
     input: &State<W>,
@@ -729,6 +809,7 @@ pub fn what_program_reads<W: Word + HasBitWord>(
     input_mask
 }
 
+#[allow(dead_code)]
 pub fn run_program_masked<W: Word + HasBitWord>(
     prog: impl IntoIterator<Item = Inst<W>>,
     input: state::Masked<W>,
@@ -747,6 +828,7 @@ mod tests {
     use functionality::prelude::*;
     use proptest::property_test;
     use std::collections::HashSet;
+    use std::ops::ControlFlow::{self, Break, Continue};
 
     #[test]
     fn basic_extend_test() {
@@ -869,5 +951,73 @@ mod tests {
         let out = dbg!(run_program_masked(prog, state));
         prop_assert!(out.is_some());
         println!("Success!");
+    }
+
+    macro_rules! try_ {
+        ( $($t:tt)* ) => {
+            (|| { $($t)* })()
+        }
+    }
+
+    #[property_test]
+    #[ignore]
+    fn potential_read_mask_potential_write_mask_spec(inst: Inst<Word4>) {
+        println!("-------------------");
+        println!("{inst}");
+        let regs = inst
+            .args_with_types()
+            .filter_map(|(a, t)| matches!(t, ArgType::Reg(_)).then_some(a.into()))
+            .collect::<Vec<_>>();
+        let ei = EnumerationInfoOptions::Limited(regs.as_slice());
+        let mut total_read_mask = Mask::default();
+        let mut total_write_mask = Mask::default();
+        match State::try_all_each(&ei, |s| {
+            match try_! {
+                let rm = inst.read_mask(s);
+                let wm = inst.write_mask(s);
+                total_read_mask = total_read_mask | rm;
+                total_write_mask = total_write_mask | wm;
+                let success = rm.is_sub_mask(&inst.potential_read_mask()) && wm.is_sub_mask(&inst.potential_write_mask());
+                if !success {
+                    println!(
+                        "Bad: Inst {inst}  State {s}  Read Mask {rm}  Write Mask {wm}  Potential Read Mask {}  Potential Write Mask {}",
+                        inst.potential_read_mask(),
+                        inst.potential_write_mask(),
+                    );
+                    prop_assert!(success);
+                }
+                Ok(())
+            } {
+                Ok(()) => Continue(()),
+                Err(x) => Break(x),
+            }
+        }) {
+            Continue(()) => (),
+            Break(x) => return Err(x),
+        };
+        let success = inst.potential_read_mask().is_sub_mask(&total_read_mask)
+            && inst.potential_write_mask().is_sub_mask(&total_write_mask);
+        if !success {
+            println!(
+                "Bad: Inst {inst}  Toltal Read Mask {total_read_mask}  Total Write Mask {total_write_mask}  Potential Read Mask {}  Potential Write Mask {}",
+                inst.potential_read_mask(),
+                inst.potential_write_mask(),
+            );
+            prop_assert!(success);
+        }
+    }
+
+    #[property_test]
+    fn potential_read_write_mask_eq_read_write_mask_when_no_condition_code(
+        mut inst: Inst<Word4>,
+        state: State<Word4>,
+    ) {
+        inst.cond_code = CondCode::Al;
+        println!("----------------");
+        println!("inst {inst}  state {state}");
+        let r = inst.read_mask(&state);
+        let w = inst.write_mask(&state);
+        prop_assert_eq!(r, inst.potential_read_mask());
+        prop_assert_eq!(w, inst.potential_write_mask());
     }
 }

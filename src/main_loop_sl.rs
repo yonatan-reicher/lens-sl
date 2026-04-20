@@ -3,136 +3,76 @@
 
 use crate::all::All;
 use crate::arm::enumerate::{EnumerationInfo, EnumerationInfoOptions};
-use crate::arm::state::Masked as MaskedState;
-use crate::arm::{Register, State, run_program_masked, what_program_reads};
+use crate::arm::state::{Mask, Masked as MaskedState, State};
+use crate::arm::{Inst, Register};
 use crate::collect_registers::Collector;
 use crate::direction::Direction;
-use crate::graph;
-use crate::len::Len;
+use crate::intersect_all::intersect_all;
 use crate::oracle::{Oracle, SmtOracle};
-use crate::programs_sl as programs;
 use crate::reduce_bit_width::{ImmediateInfo, Reducer};
 use crate::tui::TuiHook;
-use crate::verify::{self, verify};
 use crate::word::prelude::*;
+use crate::{Cancelled, ShouldCancel, graph};
+use crate::{Config, programs};
 
 // std imports
-use std::ops::ControlFlow::{Break, Continue};
+use std::cell::{Ref, RefCell};
+use std::ops::ControlFlow::{self, Break, Continue};
+use std::rc::Rc;
 
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde::de::DeserializeOwned;
 
 use functionality::prelude::*;
 
-// =========================================== Graph ==============================================
+use itertools::Itertools;
 
-type Inst<W> = crate::arm::Inst<W, BitWord<W>>;
+// =================================================================================================
+//                                          Short-hands
+// =================================================================================================
 
 type Program<W> = programs::Program<Inst<W>>;
 
 type Programs<W> = programs::Programs<Inst<W>>;
 
-type Graph<W> = graph::Graph<(MaskedState<W>, MaskedState<W>), Programs<W>>;
+type Graph<W> = graph::Graph<State<W>, Programs<W>>;
 
-// ========================================== Oracle ==============================================
-
-// impl<W: Word> oracle::smt::Inst<State<W>> for Inst<W> {
-//     type StateVars<'st> = StateVars<'st, W::SmtWord<'st>>;
-//
-//     type SymbolicState<'st> = SymbolicState<'st, W::SmtWord<'st>>;
-//
-//     fn new_state_vars<'st>(st: &'st smtlib::Storage, name: &str) -> Self::StateVars<'st> {
-//         StateVars::new(st, name)
-//     }
-//
-//     fn state_neq<'st>(
-//         s1: Self::SymbolicState<'st>,
-//         s2: Self::SymbolicState<'st>,
-//     ) -> smtlib::Bool<'st> {
-//         !s1.eq(s2)
-//     }
-//
-//     fn step_symbolic<'st>(&self, s: &mut Self::SymbolicState<'st>) {
-//         self.run_symbolic(s);
-//     }
-//
-//     fn step<'st>(&self, s: &mut State<W>) {
-//         self.run(s);
-//     }
-//
-//     fn extract_from_model<'st>(
-//         model: &smtlib::Model<'st>,
-//         s: StateVars<'st, W::SmtWord<'st>>,
-//     ) -> State<W> {
-//         // == Registers ==
-//         let mut state = State::default();
-//         for (i, var) in s.registers.iter().enumerate() {
-//             let reg = Register(i as u8);
-//             let val = model
-//                 .eval(*var)
-//                 .map(W::SmtWord::try_into_word)
-//                 .unwrap_or_else(|| Some(0.into()))
-//                 //.try_into()
-//                 .unwrap_or_else(|| {
-//                     panic!(
-//                         "Failed to convert variable '{var:?}' to the right type in model {model}."
-//                     )
-//                 });
-//             state.set_register(
-//                 reg,
-//                 val.into_word(), /* This is actually the same word type but whatever */
-//             );
-//         }
-//         // == Flags ==
-//         let load_bool = |b| {
-//             model
-//                 .eval(b)
-//                 .and_then(|b| bool_term_to_bool(b))
-//                 .unwrap_or(false /* Arbitrary default, result did not matter */)
-//         };
-//         state.set_flags(
-//             Flags {
-//                 z: load_bool(s.flags.z),
-//                 n: load_bool(s.flags.n),
-//                 c: load_bool(s.flags.c),
-//                 v: load_bool(s.flags.v),
-//             }
-//             .into(),
-//         );
-//         state
-//     }
-// }
-
-// ====================================== Implementation ==========================================
+// =================================================================================================
+//                                         Implementation
+// =================================================================================================
 
 // This is the main function that gets exposed.
 /// `WT` for word size of the target program.
 /// `WS` for word size of the synthesis process.
 pub fn optimize<WT: Word + HasBitWord, WS: Word + HasBitWord + serde::de::DeserializeOwned>(
-    program: &[Inst<WT>],
-    additional_registers: impl IntoIterator<Item = Register>,
-    additional_immediates: impl IntoIterator<Item = WT>,
-    tui: &impl for<'g> TuiHook<&'g Graph<WS>, MaskedState<WS>>,
-) -> Option<Program<WT>>
+    c: Config<WT>,
+    tui: &impl for<'g> TuiHook<&'g Graph<WS>, State<WS>>,
+) -> Result<Option<Program<WT>>, Cancelled>
 where
     BitWord<WS>: DeserializeOwned,
     <WS as All>::Iter: Clone,
 {
+    if c.program.is_empty() {
+        return Ok(None);
+    }
+
     let mut reducer = Reducer::<WT, WS>::default();
-    let mut reduced_program = Vec::with_capacity(program.len());
-    for inst in program {
+    let mut reduced_program = Vec::with_capacity(c.program.len());
+    for inst in c.program {
         // This puts the original unreduced constants into the reducer.
         reduced_program.push(inst.reduce(&mut reducer));
     }
-    let additional_immediates_reduced: Vec<WS> = additional_immediates
-        .into_iter()
-        .map(|i| reducer.reduce(i, &ImmediateInfo { is_shift: false }))
+    let additional_immediates_reduced: Vec<WS> = c
+        .additional_immediates
+        .iter()
+        .map(|i| reducer.reduce(*i, &ImmediateInfo { is_shift: false }))
         .collect();
 
     // Collect all the registers and immediates that might be useful for synthesis.
     let registers = Collector::new()
-        .mutate(|c| c.program(program))
+        .mutate(|col| col.program(c.program))
         .pipe(|c| c.registers)
-        .mutate(|r| r.extend(additional_registers))
+        .mutate(|r| r.extend(c.additional_registers))
         .mutate(|r| r.sort())
         .mutate(|r| r.dedup());
     let immediates: Vec<WS> = reducer
@@ -142,7 +82,7 @@ where
         .mutate(|r| r.sort())
         .mutate(|r| r.dedup());
 
-    let oracle = SmtOracle::new(program.to_vec());
+    let oracle = SmtOracle::new(c.program.to_vec());
     let oracle_reduced = SmtOracle::new(reduced_program.clone());
 
     synthesize::<WT, WS>(
@@ -151,333 +91,374 @@ where
         oracle,
         oracle_reduced,
         reducer,
-        program.len(),
         reduced_program,
+        c.should_cancel,
         tui,
     )
 }
+
+type Bank<W> = FxHashMap<MaskedState<W>, FxHashMap<MaskedState<W>, FxHashSet<Inst<W>>>>;
+type BackwardBank<W> = FxHashMap<
+    /* output */ MaskedState<W>,
+    /* one input */
+    FxHashMap<
+        MaskedState<W>,
+        FxHashMap</* the command */ Inst<W>, Rc<FxHashSet<MaskedState<W> /* all inputs */>>>,
+    >,
+>;
 
 #[allow(clippy::too_many_arguments)]
 fn synthesize<WT, W>(
     registers: &[Register],
     immediates: &[W],
-    oracle: impl Oracle<[Inst<WT>], State<WT>>,
-    oracle_reduced: impl Oracle<[Inst<W>], State<W>>,
+    mut oracle: impl Oracle<[Inst<WT>], State<WT>>,
+    mut oracle_reduced: impl Oracle<[Inst<W>], State<W>>,
     reducer: Reducer<WT, W>,
-    // The length of the original program.
-    // In the future, this could be max_cost.
-    original_length: usize,
     original_reduced: Program<W>,
-    tui: &impl for<'a> TuiHook<&'a Graph<W>, MaskedState<W>>,
-) -> Option<Program<WT>>
+    should_cancel: ShouldCancel,
+    tui: &impl for<'g> TuiHook<&'g Graph<W>, State<W>>,
+) -> Result<Option<Program<WT>>, Cancelled>
 where
     WT: Word + HasBitWord,
     W: Word + HasBitWord + DeserializeOwned,
     BitWord<W>: DeserializeOwned,
     <W as All>::Iter: Clone,
 {
-    // The graph starts with having just the empty program.
-    let mut graph = Graph::Leaf(Programs::empty_program());
+    // ----- Initialization ------------------------------------------------------------------------
     let enumeration_info = &EnumerationInfo::<W> {
         registers: EnumerationInfoOptions::Limited(registers),
         immediates: EnumerationInfoOptions::Limited(immediates),
         include_nop: false,
         skip_cond_code: false,
     };
-    let mut globals = Globals {
-        oracle,
-        oracle_reduced,
-        inputs: vec![],
-        outputs: vec![],
-        forward_length: 0,
-        extender: reducer,
+    let mut seen = FxHashSet::default();
+    let mut frontier = vec![];
+    let mut next_frontier = vec![];
+    let mut bank = Bank::default();
+    let counter_examples = &CounterExamplesCell::default();
+    let mut oracle = ReducedProgramOracle {
+        oracle: &mut oracle,
+        oracle_reduced: &mut oracle_reduced,
+        reducer: &reducer,
         tui,
-        total_instructions: Inst::enumerate(*enumeration_info).count(),
-        original_reduced,
+        counter_examples,
     };
-    tui.report_graph(Direction::Forward, &graph);
-    // ------------------------------- Initialization ---------------------------------------------
-    for inst in Inst::enumerate(*enumeration_info) {
-        graph.insert_all(&[], [inst.into()]);
+    let mut stats = Stats {
+        n_instructions: Inst::enumerate(*enumeration_info).count(),
+        ..Stats::default()
+    };
+    // The mask that contains all the things in the state we might care about.
+    let top_mask = registers
+        .iter()
+        .cloned()
+        .fold(Mask::JUST_FLAGS, |m, r| m | Mask::just_register(r));
+    // ----- The Actual Loop -----------------------------------------------------------------------
+    // We must start with at least one input...
+    match oracle.verify(&[]) {
+        Continue(()) => todo!(""),
+        Break(ProgramOrRetry::Program(p)) => return Ok(Some(p)),
+        Break(ProgramOrRetry::Retry) => (),
     }
-    loop {
-        // ------------------------------ Search Phase --------------------------------------------
-        tui.searching();
-        tui.progress(0, globals.total_instructions);
-        let res = connect_and_refine::<WT, W>(&mut globals, &mut graph, 1);
-        match res {
-            ConnectAndRefineResult::Found(prog) => {
-                println!("Found program of length {}", prog.len());
-                return Some(prog);
+    'restart: loop {
+        frontier.clear();
+        frontier.push((counter_examples.inputs().to_vec(), vec![]));
+        next_frontier.clear();
+        seen.clear();
+        tui.reset_lengths();
+        // ----- Reachability - Bfs loop to reach outputs ----------------------------------------
+        for _length in 0..original_reduced.len() {
+            tui.searching();
+            tui.progress(0, stats.n_instructions);
+            let len = frontier.len();
+            for (i, (inputs, prog)) in frontier.iter().cloned().enumerate() {
+                tui.progress(i, len);
+                // Should we stop?
+                if should_cancel.check() {
+                    return Err(Cancelled);
+                }
+                // First we need to check that all the states are properly represented in the bank.
+                for inp in inputs.iter().cloned() {
+                    if !bank.contains_key(&inp.masked(top_mask)) {
+                        init_bank(&mut bank, inp.masked(top_mask), *enumeration_info);
+                    }
+                }
+                // The red code.
+                let mut discarded = FxHashSet::<Inst<W>>::default();
+                for sub_input_mask in top_mask.sub_masks() {
+                    for inst in insts_with_inputs(&bank, &inputs, sub_input_mask) {
+                        // We can't do this filtering as part of the intersection above because the
+                        // discard set changes through the loop.
+                        if discarded.contains(&inst) {
+                            stats.n_discarded += 1;
+                            stats.last_discard_size = discarded.len();
+                            continue;
+                        }
+                        let outputs = inputs
+                            .iter()
+                            .map(|s| (*s).mutate(|s| inst.run(s)))
+                            .collect::<Vec<_>>();
+                        // Did we succeed?
+                        if outputs == *counter_examples.outputs() {
+                            let prog = prog.clone().mutate(|p| p.push(inst));
+                            match oracle.verify(&prog) {
+                                // Continue(()) => todo!("what do we do here? '{prog:?}'"),
+                                Continue(()) => (),
+                                Break(ProgramOrRetry::Program(p)) => return Ok(Some(p)),
+                                Break(ProgramOrRetry::Retry) => continue 'restart,
+                            }
+                        }
+                        if seen.contains(&outputs) {
+                            discarded.insert(inst);
+                            continue;
+                        }
+                        seen.insert(outputs.clone());
+                        // Extend Hila's discard set. Extend it by all the instructions which do the
+                        // exact same thing as this instruction on the current inputs.
+                        discarded.extend(insts_with_same_effect(
+                            top_mask,
+                            &bank,
+                            sub_input_mask,
+                            inputs.as_slice(),
+                            outputs.as_slice(),
+                            &mut stats,
+                        ));
+                        // TODO: you know how to solve this memory allocation...
+                        next_frontier.push((outputs, prog.clone().mutate(|p| p.push(inst))));
+                    }
+                }
+                assert_eq!(discarded.len(), stats.n_instructions);
             }
-            ConnectAndRefineResult::Continue => {}
-        }
-        tui.progress(globals.total_instructions, globals.total_instructions);
-        tui.report_graph(Direction::Forward, &graph);
-        if globals.forward_length == original_length - 1 {
-            return None;
-        }
-        // ------------------------------ Expand Phase --------------------------------------------
-        let direction = Direction::Forward;
-        tui.expanding(direction);
-        expand(&mut graph, globals.tui);
-        globals.forward_length += 1;
-        tui.report_graph(Direction::Forward, &graph);
+            tui.progress(len, len);
+            // ------------------------------ Expand Phase -----------------------------------------
+            let direction = Direction::Forward;
+            tui.expanding(direction);
+            //expand(&mut todo!(), g.tui);
+            frontier.clear();
+            std::mem::swap(&mut next_frontier, &mut frontier);
+        } // end of length loop
+        let lengths = next_frontier
+            .iter()
+            .map(|(_, p)| p)
+            .chunk_by(|p| p.len())
+            .into_iter()
+            .map(|(len, progs)| format!("{len}: {}", progs.count()))
+            .join("\n");
+        println!("Progs");
+        println!("{}", lengths);
+        return Ok(None);
     }
 }
 
-enum ConnectAndRefineResult<W: Word + HasBitWord> {
-    Found(Program<W>),
-    Continue,
+fn init_bank<W: Word + HasBitWord>(
+    bank: &mut Bank<W>,
+    inp: MaskedState<W>,
+    ei: EnumerationInfo<W>,
+) {
+    debug_assert!(!bank.contains_key(&inp));
+    // Make sure we don't re-initialize this state or a sub-state for no reason by making sure
+    // they're already created.
+    for s in inp.sub_states() {
+        bank.entry(s).or_default();
+    }
+    // Now to the thing!
+    for inst in Inst::enumerate(ei) {
+        let Some(out) = inst.run_masked(inp) else {
+            continue;
+        };
+        let inp = inp & inst.potential_read_mask();
+        let out = out & inst.potential_write_mask();
+        let class = bank.get_mut(&inp).unwrap().entry(out).or_default();
+        class.insert(inst);
+    }
 }
 
-/// WT - word for the target program. WS - word for the synthesis process.
-struct Globals<
-    'tui,
-    WT: Word + HasBitWord,
-    WS: Word + HasBitWord,
-    OT: Oracle<[Inst<WT>], State<WT>>,
-    OS: Oracle<[Inst<WS>], State<WS>>,
-    TUI: for<'g> TuiHook<&'g Graph<WS>, MaskedState<WS>>,
-> {
-    oracle: OT,
-    /// The oracle that checks program in the reduced word size.
-    oracle_reduced: OS,
-    inputs: Vec<MaskedState<WS>>,
-    outputs: Vec<MaskedState<WS>>,
-    /// The length of the prefixes of the program being built.
-    forward_length: usize,
-    extender: Reducer<WT, WS>,
-    tui: &'tui TUI,
-    /// The total instructions we are enumerating
-    total_instructions: usize,
-    original_reduced: Program<WS>,
+/// Gets all instructions which have the same input
+/// Find all instructions (and their effects!) that can run from the current states.
+/// Instead of doing this by iterating all instructions, do this by intersection of equivalence
+/// classes that can run from the states.
+fn insts_with_inputs<'a, W: Word + HasBitWord>(
+    bank: &'a Bank<W>,
+    inputs: &'a [State<W>],
+    input_mask: Mask,
+) -> impl Iterator<Item = Inst<W>> + use<'a, W> {
+    let empty = Default::default();
+    inputs
+        .iter()
+        .map(|input| input.masked(input_mask))
+        .map(|sub_input| {
+            // For this state, return set of commands that can run from it.
+            bank.get(&sub_input)
+                .unwrap_or(&empty)
+                .iter()
+                .flat_map(|(_, set)| set.iter().copied())
+                .collect::<FxHashSet<_>>()
+        })
+        .collect::<Vec<_>>()
+        // Intersect!
+        .as_slice()
+        .pipe(|a| intersect_all(a.iter()))
+        .cloned()
+        .collect::<Vec<_>>()
+        .into_iter()
 }
+
+/// Gets instructions which have the same effect on the input state
+/// Top mask - the mask of the information relevant to the program search.
+fn insts_with_same_effect<W: Word + HasBitWord>(
+    top_mask: Mask,
+    bank: &Bank<W>,
+    sub_input_mask: Mask,
+    inputs: &[State<W>],
+    outputs: &[State<W>],
+    stats: &mut Stats,
+) -> impl Iterator<Item = Inst<W>> {
+    let stats = &*std::cell::UnsafeCell::from_mut(stats);
+    // Look at super-masks of the input
+    // TODO: We can do this more efficiently
+    top_mask
+        .sub_masks()
+        .filter(move |m| sub_input_mask.is_sub_mask(m))
+        .flat_map(move |sub_input_mask| {
+            let sub_inputs = inputs
+                .iter()
+                .map(|i| i.masked(sub_input_mask))
+                .map(|i| {
+                    (
+                        //Also contains the buckets!
+                        i,
+                        bank.get(&i).expect("we have initialized this at the start"),
+                    )
+                })
+                .collect::<Vec<_>>();
+            // And masks of the output that are in the in the bank
+            // TODO: We should filter them before asking the bank, because asking the bank is slow
+            top_mask
+                .sub_masks()
+                .map(|sub_output_mask| {
+                    (
+                        sub_output_mask,
+                        outputs.iter().map(move |s| s.masked(sub_output_mask)),
+                    )
+                })
+                .filter({
+                    let sub_inputs = sub_inputs.clone();
+                    move |(_sub_output_mask, sub_outputs)| {
+                        sub_inputs
+                            .iter()
+                            .cloned()
+                            .zip(sub_outputs.clone())
+                            .all(|((_, bucket), sub_output)| bucket.contains_key(&sub_output))
+                    }
+                })
+                .flat_map(move |(_sub_output_mask, sub_outputs)| {
+                    // We know these are ran one by one.
+                    let stats = unsafe { &mut *stats.get() };
+                    stats.n_intersections += 1;
+                    intersect_all(
+                        sub_inputs
+                            .iter()
+                            .cloned()
+                            .zip(sub_outputs)
+                            .map(|((_, bucket), sub_output)| bucket.get(&sub_output).unwrap())
+                            .inspect(|s| stats.total_intersection_input_sizes += s.len())
+                            .collect::<Vec<_>>()
+                            .into_iter(),
+                    )
+                    .cloned()
+                    .inspect(|_| stats.total_intersection_output_sizes += 1)
+                })
+        })
+}
+
+// =================================================================================================
+//                                       Inputs And Outputs
+// =================================================================================================
+
+/// The list of counter examples. Shared mutably.
+#[derive(Debug, Default)]
+#[allow(clippy::type_complexity)]
+struct CounterExamplesCell<W>(RefCell<(Vec<State<W>>, Vec<State<W>>)>);
+
+impl<W: Word> CounterExamplesCell<W> {
+    pub fn inputs(&self) -> Ref<'_, [State<W>]> {
+        Ref::map(self.0.borrow(), |(inps, _)| inps.as_slice())
+    }
+    pub fn outputs(&self) -> Ref<'_, [State<W>]> {
+        Ref::map(self.0.borrow(), |(_, outs)| outs.as_slice())
+    }
+    pub fn push(&self, inp: State<W>, out: State<W>) {
+        let (inps, outs) = &mut *self.0.borrow_mut();
+        inps.push(inp);
+        outs.push(out);
+    }
+    pub fn contains(&self, inp: &State<W>, out: &State<W>) -> bool {
+        let (inps, outs) = &*self.0.borrow();
+        inps.iter().zip(outs).contains(&(inp, out))
+    }
+}
+
+// =================================================================================================
+//                                       Verifying Programs
+// =================================================================================================
+
+/// This struct bundles up all the information needed to verify a candidate program against the
+/// actual real original program. Use [Self::verify] to do the verification!
+struct ReducedProgramOracle<'a, WBig: HasBitWord, W: HasBitWord> {
+    counter_examples: &'a CounterExamplesCell<W>,
+    oracle: &'a mut dyn Oracle<[Inst<WBig>], State<WBig>>,
+    oracle_reduced: &'a mut dyn Oracle<[Inst<W>], State<W>>,
+    reducer: &'a Reducer<WBig, W>,
+    tui: &'a dyn TuiHook<&'a Graph<W>, State<W>>,
+}
+
+impl<'a, WBig, W> ReducedProgramOracle<'a, WBig, W>
+where
+    WBig: Word + HasBitWord,
+    W: Word + HasBitWord,
+{
+    fn verify(&mut self, prog: &[Inst<W>]) -> ControlFlow<ProgramOrRetry<WBig>>
+    where
+        WBig: Word + HasBitWord,
+        W: Word + HasBitWord,
+    {
+        use crate::verify;
+        match verify::verify(
+            prog,
+            self.reducer,
+            self.oracle_reduced,
+            self.oracle,
+            |equivalent_prog| Break(ProgramOrRetry::Program(equivalent_prog.to_vec())),
+        ) {
+            verify::Result::CounterExample(inp, out) => {
+                self.tui.found_counter_example(inp, out);
+                assert!(
+                    !self.counter_examples.contains(&inp, &out),
+                    "Counter-example from reduced oracle should not have been seen before."
+                );
+                self.counter_examples.push(inp, out);
+                Break(ProgramOrRetry::Retry)
+            }
+            verify::Result::Break(prog) => Break(prog),
+            verify::Result::Continue => Continue(()),
+        }
+    }
+}
+
+// =================================================================================================
+//                                          Other Types
+// =================================================================================================
 
 enum ProgramOrRetry<W: Word + HasBitWord> {
     Program(Program<W>),
     Retry,
 }
 
-fn connect_and_refine<WT: Word + HasBitWord, WS: Word + HasBitWord>(
-    globals: &mut Globals<
-        '_,
-        WT,
-        WS,
-        impl Oracle<[Inst<WT>], State<WT>>,
-        impl Oracle<[Inst<WS>], State<WS>>,
-        impl for<'a> TuiHook<&'a Graph<WS>, MaskedState<WS>>,
-    >,
-    graph: &mut Graph<WS>,
-    // This is the index of the input/output pair we are currently trying to connect.
-    k: usize,
-) -> ConnectAndRefineResult<WT> {
-    if k > globals.inputs.len() {
-        match &graph {
-            Graph::Leaf(programs) => {
-                // We found a class of candidate programs.
-                // Try each one. If one works, return it. If none work, adds all counter-examples.
-                let ret = programs.try_each(&mut |program| {
-                    match verify(
-                        &program,
-                        &globals.extender,
-                        &mut globals.oracle_reduced,
-                        &mut globals.oracle,
-                        |equivalent_prog| Break(ProgramOrRetry::Program(equivalent_prog.to_vec()))
-                    ) {
-                        verify::Result::CounterExample(inp, _out) => {
-                            let read_mask = what_program_reads(globals.original_reduced.iter().cloned(), &inp);
-                            let inp = inp.masked(read_mask.into());
-                            let out = run_program_masked(globals.original_reduced.iter().cloned(), inp).expect("the counter example found by the oracle must be runnable and the input mask for the program must be enough for it to run");
-                            globals.tui.found_counter_example(inp, out);
-                            debug_assert!(
-                                !has_counter_example_been_seen(globals, &inp, &out),
-                                "Counter-example from reduced oracle should not have been seen before."
-                            );
-                            globals.inputs.push(inp);
-                            globals.outputs.push(out);
-                            Break(ProgramOrRetry::Retry)
-                        },
-                        verify::Result::Break(prog) => Break(prog),
-                        verify::Result::Continue => Continue(()),
-                    }
-                });
-                match ret {
-                    Break(ProgramOrRetry::Program(p)) => return ConnectAndRefineResult::Found(p),
-                    Break(ProgramOrRetry::Retry) => return connect_and_refine(globals, graph, k),
-                    Continue(()) => (),
-                }
-            }
-            _ => {
-                println!("Graph is not leaves at the end.");
-                panic!();
-            }
-        }
-    }
-
-    if matches!(graph, Graph::Leaf(..)) {
-        build_forward(graph, &globals.inputs[k - 1]);
-    }
-
-    let Graph::Nest(map) = graph else {
-        panic!();
-    };
-    for ((inp, out), sub_graph) in map {
-        // Check if the input and output feel good to match against the real ones.
-        // The input just needs to be at least as general as the real input.
-        // The output needs to match exactly.
-        let (ce_inp, ce_out) = (&globals.inputs[k - 1], &globals.outputs[k - 1]);
-        let missing_inputs = inp.mask() & !ce_inp.mask();
-        let ce_inp_masked = *ce_inp & inp.mask().into_mask();
-        let good = missing_inputs.is_empty() && ce_inp_masked == *inp && ce_out == out;
-        if good {
-            let res = connect_and_refine(globals, sub_graph, k + 1);
-            match res {
-                ConnectAndRefineResult::Found(prog) => return ConnectAndRefineResult::Found(prog),
-                ConnectAndRefineResult::Continue => {}
-            }
-        }
-    }
-    ConnectAndRefineResult::Continue
-}
-
-/// Go through each program prefix in the graph, and expand it by one
-/// instruction forward. This is done for each program, and for each
-/// instruction.
-fn expand<W: Word + HasBitWord>(
-    graph: &mut Graph<W>,
-    tui: &impl for<'g> TuiHook<&'g Graph<W>, MaskedState<W>>,
-) {
-    let old_graph = std::mem::replace(graph, Graph::Leaf(Default::default()));
-    debug_assert_ne!(old_graph.n_programs(), 0);
-    let mut out_states = vec![];
-    let mut effects = vec![];
-    let mut i = 0;
-    let total = old_graph.n_leaves();
-    recurse_outer(&old_graph, &mut effects, &mut |progs, effects| {
-        tui.progress(i, total);
-        out_states.clear();
-        recurse_inner(&old_graph, graph, progs, effects, &mut out_states);
-        i += 1;
-    });
-    tui.progress(total, total);
-    debug_assert_ne!(graph.n_programs(), 0);
-
-    fn recurse_outer<W: Word + HasBitWord>(
-        old_graph: &Graph<W>,
-        effects: &mut Vec<(MaskedState<W>, MaskedState<W>)>,
-        f: &mut impl FnMut(&Programs<W>, &[(MaskedState<W>, MaskedState<W>)]),
-    ) {
-        match old_graph {
-            graph::Graph::Leaf(progs) => f(progs, effects),
-            graph::Graph::Nest(hash_map) => {
-                for (effect, sub_graph) in hash_map {
-                    effects.push(*effect);
-                    recurse_outer(sub_graph, effects, f);
-                    effects.pop();
-                }
-            }
-        }
-    }
-
-    fn recurse_inner<W: Word + HasBitWord>(
-        old_graph: &Graph<W>,
-        new_graph: &mut Graph<W>,
-        progs: &Programs<W>,
-        effects: &[(MaskedState<W>, MaskedState<W>)],
-        out_states: &mut Vec<(MaskedState<W>, MaskedState<W>)>,
-    ) {
-        match old_graph {
-            Graph::Leaf(programs) if programs.is_empty() => (),
-            Graph::Leaf(programs) => {
-                // TODO
-                // Move this composition to the match arm below!
-                let Some(effects): Option<Vec<_>> = effects
-                    .iter()
-                    .zip(out_states)
-                    .map(|(e1, e2)| MaskedState::compose(*e1, *e2))
-                    .collect()
-                else {
-                    return;
-                };
-                let programs = progs.clone().concat(programs.clone());
-                new_graph.insert_all(&effects, [programs]);
-            }
-            Graph::Nest(hash_map) => {
-                for (e, sub_graph) in hash_map.iter() {
-                    out_states.push(*e);
-                    recurse_inner(sub_graph, new_graph, progs, effects, out_states);
-                    out_states.pop();
-                }
-            }
-        }
-    }
-}
-
-fn build_forward<W: Word + HasBitWord>(graph: &mut Graph<W>, input: &MaskedState<W>) {
-    build_forwards_or_backwards(graph, input, |program, input| {
-        use itertools::Either;
-        // Check what we need to run and that we have it
-        let necessary = what_program_reads(program.iter().cloned(), input.state());
-        let Some(output) = run_program_masked(program.iter().cloned(), input & necessary.into())
-        else {
-            return Either::Left(std::iter::empty());
-        };
-        // What do we not need to run? (we add with it to the graph anyway)
-        let dont_matter = input.mask() & !necessary;
-        dont_matter
-            .into_mask()
-            .sub_masks()
-            // TODO: Filter additional masks that have more than like 2 or 3 registers.
-            .map(move |additional| {
-                let input = input & (necessary.into_mask() | additional);
-                (input, output | input)
-            })
-            .pipe(Either::Right)
-    });
-}
-
-fn build_forwards_or_backwards<
-    W: Word + HasBitWord,
-    StepRet: IntoIterator<Item = (MaskedState<W>, MaskedState<W>)>,
->(
-    graph: &mut Graph<W>,
-    input: &MaskedState<W>,
-    step: impl Fn(&Program<W>, MaskedState<W>) -> StepRet,
-) {
-    debug_assert!(matches!(graph, Graph::Leaf(..)));
-    // Rebuild the graph.
-    // TODO: We can probably avoid completely rebuilding by just removing and adding programs on
-    // the same data-structure. This would reduce allocations, but you need to mark which programs
-    // have been visited, or store them in a list.
-    let old_graph = std::mem::replace(graph, Graph::Nest(Default::default()));
-    old_graph.for_each(&mut |programs| {
-        programs.each(|program| {
-            let programs: Programs<W> = program.iter().cloned().collect();
-            for output in step(&program, *input) {
-                graph.insert(output, [programs.clone()]);
-            }
-        });
-    });
-}
-
-/// Checks if the given counter-example has already been seen, by searching the input-output pairs
-/// in the global context.
-fn has_counter_example_been_seen<WT: Word + HasBitWord, WS: Word + HasBitWord>(
-    globals: &mut Globals<
-        '_,
-        WT,
-        WS,
-        impl Oracle<[Inst<WT>], State<WT>>,
-        impl Oracle<[Inst<WS>], State<WS>>,
-        impl for<'g> TuiHook<&'g Graph<WS>, MaskedState<WS>>,
-    >,
-    inp: &MaskedState<WS>,
-    out: &MaskedState<WS>,
-) -> bool {
-    globals
-        .inputs
-        .iter()
-        .zip(&globals.outputs)
-        .any(|(i, o)| i == inp && o == out)
+#[derive(Copy, Clone, Debug, Default)]
+struct Stats {
+    n_intersections: usize,
+    total_intersection_input_sizes: usize,
+    total_intersection_output_sizes: usize,
+    n_discarded: usize,
+    last_discard_size: usize,
+    n_instructions: usize,
 }

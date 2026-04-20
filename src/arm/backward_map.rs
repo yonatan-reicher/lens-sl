@@ -1,6 +1,6 @@
+use super::state::{self, Flags, State};
 use super::{
     ArgType, CondCode, EnumerationInfo, EnumerationInfoOptions, Inst, OpCode, RegArgType, Register,
-    State, state,
 };
 use crate::all::All;
 use crate::word::prelude::*;
@@ -45,12 +45,11 @@ impl<W: Word + HasBitWord> BackwardMap<W, BitWord<W>> {
     {
         let file_path = std::path::Path::new(".").join(Self::file_name(registers));
         if file_path.exists() {
-            println!("loading backwards map from '{}'", file_path.display());
             let f = std::fs::File::open(file_path)?;
             let reader = std::io::BufReader::new(&f);
             Self::load(reader)
         } else {
-            println!("creating backwards map");
+            println!("creating backwards map '{}'", file_path.display());
             let f = std::fs::File::create(&file_path)?;
             let this = Self::new_recalculate(registers);
             println!("saving backwards map to '{}'", file_path.display());
@@ -173,33 +172,43 @@ impl<W: Word + HasBitWord> BackwardMap<W, BitWord<W>> {
         vec.push(inp);
     }
 
-    pub fn get(&self, inst: Inst<W>, out_orig: State<W>) -> Vec<State<W>> {
+    pub fn get(
+        &self,
+        inst_orig: Inst<W>,
+        out_orig: State<W>,
+    ) -> impl Iterator<Item = State<W>> + use<W> {
+        use itertools::Either;
         // Edge cases:
         // 1. Nop!
-        if inst.op_code == OpCode::Nop {
-            return vec![out_orig];
+        if inst_orig.op_code == OpCode::Nop {
+            return Either::Left(std::iter::once(out_orig));
         }
-        // 2. Condition is false, and flags aren't affected. This can't be, so there is no input.
-        if !inst.affects_flags() && !inst.cond_code.check(out_orig.flags.into()) {
-            return vec![];
+        // 2. Condition is false, and flags aren't affected. The instruction was just skipped.
+        if !inst_orig.affects_flags() && !inst_orig.cond_code.check(out_orig.flags.into()) {
+            return Either::Left(std::iter::once(out_orig));
         }
         // 3. Condition is false (now), and the flags are affected. It could be both that the
         // condition was false and the instruction didn't run, and it could be that the condition
         // was true and the instruction did run, and the flags were just changed.
-        if inst.affects_flags() && !inst.cond_code.check(out_orig.flags.into()) {
-            return self.get(normalize_inst(inst), out_orig).mutate(|v| {
-                v.push(out_orig);
-            });
-        }
-        let inst = normalize_inst(inst);
+        let maybe_instruction_didnt_run =
+            inst_orig.affects_flags() && !inst_orig.cond_code.check(out_orig.flags.into());
+        let inst = normalize_inst(inst_orig);
         let out = normalize_output_state(&inst, out_orig);
-        self.map
-            .get(&(inst, out))
-            .cloned()
-            .unwrap_or_default()
-            .into_iter()
-            .flat_map(|inp| unnormalize_input_state(&inst, &out, inp))
-            .collect()
+        Either::Right(
+            self.map
+                .get(&(inst, out))
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .flat_map(move |inp| {
+                    let inst = inst;
+                    let out_orig = out_orig;
+                    unnormalize_input_state(&inst, &out_orig, inp)
+                })
+                // TODO: Should this be maybe before unnormalization?
+                .filter(move |inp| inst_orig.cond_code.check(inp.flags.into()))
+                .chain(maybe_instruction_didnt_run.then_some(out_orig)),
+        )
     }
 }
 
@@ -241,8 +250,9 @@ fn input_state_mask<W: Copy + Into<Register>, WShift>(
     _out: &State<W>,
 ) -> state::Mask {
     let registers = Register::ALL.map(|r| {
-        inst.args_with_types()
-            .any(|(a, t)| t == ArgType::Reg(RegArgType::Inp) && r == a.into())
+        inst.args_with_types().any(|(a, t)| {
+            matches!(t, ArgType::Reg(RegArgType::Inp | RegArgType::InpOut)) && r == a.into()
+        })
     });
     state::Mask {
         flags: inst.reads_flags(),
@@ -250,15 +260,13 @@ fn input_state_mask<W: Copy + Into<Register>, WShift>(
     }
 }
 
+// Should this be unnormalize, or unormalize?
 fn unnormalize_input_state<W: Word, WShift>(
     inst: &Inst<W, WShift>,
     original_output: &State<W>,
     inp: State<W>,
-) -> impl Iterator<Item = State<W>>
-where
-    <W as All>::Iter: Clone,
-{
-    use itertools::Itertools;
+) -> impl Iterator<Item = State<W>> + use<W, WShift> {
+    use itertools::{Either, Itertools};
     let out_mask = output_state_mask(inst);
     let inp_mask = input_state_mask(inst, original_output);
     // We have three kinds of interesting things. We have the inputs that appear in the input mask.
@@ -273,12 +281,20 @@ where
         .registers()
         .map(|r| W::all().map(move |w| (r, w)))
         .multi_cartesian_product()
-        .map(move |to_set| {
+        .flat_map(move |to_set| {
             let mut ret = ret;
             for (r, w) in to_set {
                 ret[r] = w;
             }
-            ret
+            if only_in_output.flags {
+                Either::Left(
+                    Flags::ALL
+                        .into_iter()
+                        .map(move |f| ret.mutate(move |r| r.flags = f.into())),
+                )
+            } else {
+                Either::Right(std::iter::once(ret))
+            }
         })
 }
 
@@ -288,6 +304,8 @@ mod tests {
     use crate::arm::{Flags, FlagsBitField};
     use crate::inst;
     use functionality::Mutate;
+    use proptest::prelude::*;
+    use proptest::property_test;
 
     #[test]
     fn normalize_inst_example() {
@@ -471,7 +489,7 @@ mod tests {
             ..EnumerationInfo::default()
         };
         for inst in Inst::enumerate(ei) {
-            let x = bm.get(inst, state);
+            let x = bm.get(inst, state).collect::<Vec<_>>();
             println!("Instruction: {inst}, Output State: {state}");
             println!("Input States: {x:?}");
             if !x.is_empty() {
@@ -480,5 +498,91 @@ mod tests {
             }
         }
         panic!("No instruction produced non-empty input states for the given output state!");
+    }
+
+    static BM: std::sync::LazyLock<BackwardMap<Word4>> = std::sync::LazyLock::new(|| {
+        BackwardMap::<Word4>::new(&[Register(0), Register(1)]).unwrap()
+    });
+
+    #[property_test]
+    fn test_cmpeq(out: State<Word4>) {
+        println!("out = {out}");
+        let inst = inst!(Cmp Eq, 0, 0);
+        let inps = BM.get(inst, out);
+        for inp in inps {
+            let out1 = inp.mutate(|i| inst.run(i));
+            prop_assert_eq!(out1, out);
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn spec() {
+        let flush = || {
+            let _ = std::io::Write::flush(&mut std::io::stdout());
+        };
+
+        let ei = EnumerationInfo {
+            registers: EnumerationInfoOptions::Limited(&[Register(0), Register(1)]),
+            immediates: EnumerationInfoOptions::Limited(&[
+                0.into(),
+                1.into(),
+                2.into(),
+                3.into(),
+                14.into(),
+                15.into(),
+            ]),
+            ..EnumerationInfo::default()
+        };
+        let total = Inst::enumerate(ei).count();
+        let mut width = 7;
+        for (i, inst) in Inst::enumerate(ei).enumerate() {
+            let inst_str = format!("{inst}");
+            width = width.max(inst_str.len());
+            print!("\rInst {inst_str:width$} [{} / {total}]:", i + 1);
+            flush();
+            State::all_each(&ei.registers, |state| {
+                // Check ⊆
+                {
+                    let inp = *state;
+                    let out = inp.mutate(|i| inst.run(i));
+                    let inps = || BM.get(inst, out);
+                    let success = inps().any(|i| i == inp);
+                    if !success {
+                        let inps_str = inps()
+                            .map(|s| format!("\n{s}"))
+                            .collect::<Vec<_>>()
+                            .join("");
+                        panic!(
+                            "instruction {inst} with input {inp} outputs {out}, but the backward map had only {inps_str}"
+                        );
+                    }
+                }
+                // Check ⊇
+                {
+                    let out = *state;
+                    let inps = || BM.get(inst, out);
+                    let outs = || inps().map(|i| i.mutate(|i| inst.run(i)));
+                    let success = outs().all(|o| o == out);
+                    if !success {
+                        let inps_str = inps()
+                            .map(|s| format!("\n{s}"))
+                            .collect::<Vec<_>>()
+                            .join("");
+                        let bad_inps = inps()
+                            .filter_map(|i| {
+                                let o = i.mutate(|i| inst.run(i));
+                                Some((i, o)).filter(|(_, o)| *o != out)
+                            })
+                            .map(|(i, o)| format!("\n{i} |-> {o}"))
+                            .collect::<Vec<_>>()
+                            .join("");
+                        panic!(
+                            "instruction {inst} with output {out} had the following in the backword map: {inps_str}\nbut {bad_inps}"
+                        );
+                    }
+                }
+            });
+        }
     }
 }

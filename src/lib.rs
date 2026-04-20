@@ -8,6 +8,7 @@ mod main_loop_sl;
 // I tried to make them as independent as possible.
 /// The search graph that we use for forward and backward search.
 mod graph;
+mod backward_graph;
 /// Definitions of how we represent programs in an efficient way.
 mod programs;
 /// Rewrite of programs module for separation logic!
@@ -40,6 +41,44 @@ mod all;
 /// Definitions of different word sizes, for example 4-bit, 8-bit, 64-bit.
 mod word;
 mod direction;
+mod intersect_all;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Cancelled;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Algorithm {
+    #[default]
+    Lens,
+    LensSl,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Config<'a, WBig, WShiftBig = crate::word::BitWord<WBig>> {
+    pub algorithm: Algorithm,
+    pub program: &'a [Inst<WBig, WShiftBig>],
+    pub additional_registers: &'a [Register],
+    pub additional_immediates: &'a [WBig],
+    pub should_cancel: ShouldCancel,
+    pub forward_only: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ShouldCancel {
+    #[default]
+    Never,
+    At(std::time::Instant),
+}
+
+impl ShouldCancel {
+    pub fn check(&self) -> bool {
+        use ShouldCancel::*;
+        match self {
+            Never => false,
+            At(t) => std::time::Instant::now() >= *t,
+        }
+    }
+}
 
 // Let's expose just the necessary items.
 
@@ -48,7 +87,23 @@ pub use arm::parse::{LiveValue, info_from_file, liveness_from_file};
 pub use arm::{
     BackwardMap, CondCode, Flags, FlagsBitField, Inst, OpCode, Register, ShiftCode, State,
 };
-pub use main_loop::optimize;
-pub use main_loop_sl::optimize as optimize_sl;
 pub use tui::{NoTui, Tui, TuiHook};
-pub use word::{Word, Word4, Word8, Word64};
+pub use word::prelude::*;
+
+pub fn optimize<WT, WS>(
+    c: Config<WT>,
+    tui: &impl for<'g> TuiHook<
+        &'g crate::graph::Graph<State<WS>, crate::programs::Programs<Inst<WS>>>,
+        State<WS>,
+    >,
+) -> Result<Option<Vec<Inst<WT>>>, Cancelled>
+where
+    WT: Word + HasBitWord,
+    WS: Word + HasBitWord + serde::de::DeserializeOwned,
+    BitWord<WS>: serde::de::DeserializeOwned,
+{
+    match c.algorithm {
+        Algorithm::Lens => main_loop::optimize(c, tui),
+        Algorithm::LensSl => main_loop_sl::optimize(c, tui),
+    }
+}

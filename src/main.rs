@@ -1,12 +1,17 @@
 #[allow(unused_imports)]
-use lens_sl::{LiveValue, Register, Word4, Word8, Word64, inst, optimize, optimize_sl};
-#[allow(unused_imports)]
-use lens_sl::{NoTui, Tui};
+use lens_sl::{
+    Algorithm, Cancelled, Config, LiveValue, NoTui, Register, ShouldCancel, Tui, Word4, Word8,
+    Word64, inst, optimize,
+};
 
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() > 2 {
-        eprintln!("Usage: {} [PROGRAM_PATH]", args[0]);
+    let args: &mut Vec<String> = &mut std::env::args().collect();
+    let sl = parse_flag(args, "--sl");
+    let forward_only = parse_flag(args, "--forward-only");
+    let h = parse_flag(args, "--help") || parse_flag(args, "-h");
+
+    if args.len() > 2 || h {
+        eprintln!("Usage: {} [--sl] [--forward-only] [PROGRAM_PATH]", args[0]);
         std::process::exit(1);
     }
 
@@ -56,20 +61,43 @@ fn main() {
     // Keep parsed live-out info available until `optimize` accepts it directly.
     let _live_out = live_out;
 
+    let config = Config {
+        algorithm: if sl {
+            Algorithm::LensSl
+        } else {
+            Algorithm::Lens
+        },
+        program: &program,
+        additional_registers: &[],
+        additional_immediates: &[],
+        should_cancel: ShouldCancel::Never,
+        forward_only,
+    };
+
     let tui = Tui::default();
-    let p = optimize_sl::<Word64, Word4>(
-        &program,
-        vec![], // additional_registers
-        vec![], // additional_immediates
-        &tui,   // */ &NoTui,
+    let p = optimize::<Word64, Word4>(
+        config, &tui, // */ &NoTui,
     );
     tui.close();
-    let Some(p) = p else {
-        println!("No equivalent program found");
-        return;
-    };
-    println!("Optimized program:");
-    for inst in p {
-        println!("{inst}");
+    match p {
+        Err(Cancelled) => {
+            println!("Cancelled!");
+        }
+        Ok(None) => {
+            println!("No equivalent program found");
+        }
+        Ok(Some(p)) => {
+            println!("Optimized program:");
+            for inst in p {
+                println!("{inst}");
+            }
+        }
     }
+}
+
+fn parse_flag(args: &mut Vec<String>, flag: &str) -> bool {
+    args.iter()
+        .position(|a| *a == flag)
+        .map(|i| args.remove(i))
+        .is_some()
 }

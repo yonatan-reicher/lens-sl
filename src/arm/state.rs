@@ -9,7 +9,8 @@ use crate::bool::prelude::*;
 use crate::collect_registers;
 use crate::reduce_bit_width::Reducer;
 use crate::word::prelude::*;
-use std::fmt::{self, Display, Formatter};
+use std::fmt::{self, Debug, Display, Formatter};
+use std::ops::ControlFlow;
 // derive macros
 use derive_more::Display;
 use serde::{Deserialize, Serialize};
@@ -49,7 +50,7 @@ pub trait StateTrait<W: AbstractWord>: Get<W> + Set<W> {}
 
 // ============================= State =============================
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(test, derive(Arbitrary))]
 pub struct State<W> {
     /// This vector is always sorted by register. Registers that are zero are omitted.
@@ -214,7 +215,10 @@ impl<W: Copy> State<W> {
         Masked::from(self) & mask
     }
 
-    pub fn all_each(ei: &EnumerationInfoOptions<Register>, mut f: impl FnMut(&Self))
+    pub fn try_all_each<T>(
+        ei: &EnumerationInfoOptions<Register>,
+        mut f: impl FnMut(&Self) -> ControlFlow<T>,
+    ) -> ControlFlow<T>
     where
         W: All + Default,
         W::Iter: Clone,
@@ -230,9 +234,21 @@ impl<W: Copy> State<W> {
             }
             for flags in Flags::ALL {
                 state.set_flags(flags.into());
-                f(&state)
+                f(&state)?
             }
         }
+        ControlFlow::Continue(())
+    }
+
+    pub fn all_each(ei: &EnumerationInfoOptions<Register>, mut f: impl FnMut(&Self))
+    where
+        W: All + Default,
+        W::Iter: Clone,
+    {
+        let _ = Self::try_all_each::<()>(ei, |s| {
+            f(s);
+            ControlFlow::Continue(())
+        });
     }
 }
 
@@ -272,6 +288,16 @@ where
             ret.set_register(r, v);
         }
         ret
+    }
+}
+
+impl<W: Debug> Debug for State<W> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        write!(f, "{}", self.flags)?;
+        for (r, v) in Register::all().zip(&self.registers) {
+            write!(f, " {r}={v:>2?}")?;
+        }
+        Ok(())
     }
 }
 
@@ -424,6 +450,17 @@ impl<B: Bool> Flags<B> {
             | (op1_negative & op2_positive & diff.signed_positive());
         Flags { z, n, c, v }
     }
+
+    pub fn from_and<W: AbstractWord<Bool = B>>(a: W, b: W) -> Self {
+        let z = (a & b).is_zero();
+        let n = (a & b).signed_negative();
+        Flags {
+            z,
+            n,
+            c: B::r#false(),
+            v: B::r#false(),
+        }
+    }
 }
 
 impl Flags {
@@ -547,9 +584,10 @@ impl Mask {
     }
 
     /// The sub-mask are the masks that contain only a single thing
-    pub fn singleton_sub_masks(self) -> impl Iterator<Item = Mask> {
+    pub fn singleton_sub_masks(self) -> impl Iterator<Item = Mask> + Clone {
         return I(self);
 
+        #[derive(Clone)]
         struct I(Mask);
         impl Iterator for I {
             type Item = Mask;
@@ -568,13 +606,18 @@ impl Mask {
     }
 
     /// This is the power-set!
-    pub fn sub_masks(self) -> impl Iterator<Item = Mask> {
+    pub fn sub_masks(self) -> impl Iterator<Item = Mask> + Clone {
         self.singleton_sub_masks().powerset().map(|singletons| {
             singletons
                 .into_iter()
                 .reduce(|x, y| x | y)
                 .unwrap_or_default()
         })
+    }
+
+    pub fn len(&self) -> usize {
+        let bits = self.into_bit_mask();
+        bits.0.count_ones() as usize
     }
 }
 
@@ -595,6 +638,14 @@ impl<B> Mask<B> {
             registers: [B::r#false(); _],
         }
     }
+
+    pub fn is_sub_mask(&self, other: &Self) -> B
+    where
+        B: Bool,
+        Self: BoolEq<B>,
+    {
+        (*self & *other).eq(self)
+    }
 }
 
 impl<'st> BoolEq<SmtBool<'st>> for Mask<SmtBool<'st>> {
@@ -613,6 +664,10 @@ impl BitMask {
 
     pub const fn is_empty(&self) -> bool {
         self.0 == 0
+    }
+
+    pub const fn is_sub_mask(&self, other: &Self) -> bool {
+        (self.0 & other.0) == self.0
     }
 }
 
@@ -695,6 +750,23 @@ impl Arbitrary for BitMask {
     type Strategy = prop::strategy::Map<std::ops::Range<u32>, fn(u32) -> BitMask>;
     fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
         (0..Mask::FULL.into_bit_mask().0 + 1).prop_map(BitMask)
+    }
+}
+
+#[cfg(test)]
+impl Arbitrary for Mask {
+    type Parameters = ();
+    type Strategy = prop::arbitrary::Mapped<[bool; 17], Mask>;
+    #[rustfmt::skip]
+    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+        any::<[bool; _]>().prop_map(
+            |[flags, r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13, r14, r15]| {
+                Mask {
+                    flags,
+                    registers: [r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13, r14, r15],
+                }
+            },
+        )
     }
 }
 
@@ -792,6 +864,20 @@ impl<W> Masked<W> {
             .into_mask()
             .singleton_sub_masks()
             .map(move |m| self & m)
+    }
+
+    pub fn sub_states(self) -> impl Iterator<Item = Self> + Clone
+    where
+        W: Copy + Default,
+    {
+        self.mask.into_mask().sub_masks().map(move |m| self & m)
+    }
+
+    pub fn is_sub_state(&self, other: &Self) -> bool
+    where
+        W: Word,
+    {
+        self.mask().is_sub_mask(&other.mask()) && *self == *other & self.mask().into_mask()
     }
 
     /// TODO: Move to a new 'Effect' type?
@@ -898,5 +984,35 @@ mod tests {
         let mask = mask.into_mask();
         let count = (if mask.flags { 1 } else { 0 }) + mask.registers().count();
         prop_assert_eq!(mask.sub_masks().count(), 2usize.pow(count as _));
+    }
+
+    #[property_test]
+    fn sub_masks_acsending_order(mask: BitMask) {
+        let sub_masks = mask.into_mask().sub_masks();
+        let lengths = sub_masks.map(|m| m.len());
+        prop_assert!(lengths.is_sorted() /* Ascending order */);
+    }
+
+    #[property_test]
+    fn mask_or_spec(a: Mask, b: Mask) {
+        println!("a {a}  b {b}");
+        let c = a | b;
+        println!("c {c}");
+        prop_assert_eq!(c.flags, a.flags || b.flags);
+        for r in Register::ALL {
+            prop_assert_eq!(c[r], a[r] || b[r]);
+        }
+        let d = (a.into_bit_mask() | b.into_bit_mask()).into_mask();
+        prop_assert_eq!(c, d);
+    }
+
+    #[property_test]
+    fn mask_to_bit_mask(a: Mask) {
+        prop_assert_eq!(a, a.into_bit_mask().into_mask());
+    }
+
+    #[property_test]
+    fn bit_mask_to_mask(a: BitMask) {
+        prop_assert_eq!(a, a.into_mask().into_bit_mask());
     }
 }

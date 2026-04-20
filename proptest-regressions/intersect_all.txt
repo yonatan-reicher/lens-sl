@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 516e0c7e97ecc87ac5d6b62fec1f964132ffd78d0ec59dfa86042a2771c9e425 # shrinks to ContainsAllArgs = ContainsAllArgs { sets: [{1, 0}, {1, 235}] }
+cc 9d73d1014f2ee8945215a4abf1e76f608008d00d53594405de5924085b4030c5 # shrinks to TwoSetsArgs = TwoSetsArgs { x: {1, 2}, y: {2, 3} }
+cc 9482d6c351c406d023db794ed13fd806efd48831e7d7799c324840cb9ef1d1c5 # shrinks to ContainsAllArgs = ContainsAllArgs { sets: [{0, 2}, {1, 2}] }
