@@ -216,6 +216,7 @@ where
                     }
                 }
                 // The red code.
+                let do_discard = direction == Forward;
                 let mut discarded = FxHashSet::<Inst<W>>::default();
                 for mask in top_mask.sub_masks() {
                     for inst in insts_with_precondtion(bank, &states, mask) {
@@ -233,6 +234,9 @@ where
                         // Did we succeed?
                         if other_side_seen.contains(&next_states) {
                             let prog = prog.clone().mutate(|p| p.push(inst));
+                            todo!(
+                                "we need to look for the actual program here. that is, construct it from a prefix and postfix."
+                            );
                             match oracle.verify(&prog) {
                                 // Continue(()) => todo!("what do we do here? '{prog:?}'"),
                                 Continue(()) => (),
@@ -241,20 +245,24 @@ where
                             }
                         }
                         if seen.contains(&next_states) {
-                            discarded.insert(inst);
+                            if do_discard {
+                                discarded.insert(inst);
+                            }
                             continue;
                         }
                         seen.insert(next_states.clone());
                         // Extend Hila's discard set. Extend it by all the instructions which do the
                         // exact same thing as this instruction on the current inputs.
-                        discarded.extend(insts_with_same_effect(
-                            top_mask,
-                            bank,
-                            mask,
-                            states.as_slice(),
-                            next_states.as_slice(),
-                            &mut stats,
-                        ));
+                        if do_discard {
+                            discarded.extend(insts_with_same_effect(
+                                top_mask,
+                                bank,
+                                mask,
+                                states.as_slice(),
+                                next_states.as_slice(),
+                                &mut stats,
+                            ));
+                        }
                         // TODO: you know how to solve this memory allocation...
                         next_frontier.push((next_states, prog.clone().mutate(|p| p.push(inst))));
                     }
