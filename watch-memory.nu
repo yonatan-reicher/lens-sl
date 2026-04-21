@@ -6,7 +6,7 @@ loop {
     let x = ps
         | sort-by mem --reverse
         # | where name in [lens-sl, cvc5]
-        | where name in [lens-sl]
+        | where name in [lens-sl, benchmark]
         | group-by name
         | update cells { reject name ppid virtual }
     clear
