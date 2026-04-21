@@ -485,18 +485,31 @@ impl<W: Word + HasBitWord> Inst<W> {
 
     pub fn run_backward_masked<'a>(
         &self,
-        _output: state::Masked<W>,
-        _bm: &'a BackwardMap<W>,
-    ) -> impl IntoIterator<Item = &'a state::Masked<W>> + use<'a, W> {
-        // let unmasked_outputs = output.mask().;
-        // self.run_backward(*output.state(), bm)
-        //     .into_iter()
-        //     .map(|input| {
-        //         todo!()
-        //     })
-        todo!();
-        #[allow(unreachable_code)]
-        []
+        output: state::Masked<W>,
+        bm: &'a BackwardMap<W>,
+    ) -> impl Iterator<Item = state::Masked<W>> + use<'a, W> {
+        let inst = *self;
+        inst.run_backward(*output.state(), bm)
+            .into_iter()
+            .filter_map(move |inp| {
+                let read_mask = inst.read_mask(&inp);
+                let inp_masked = inp.masked(read_mask);
+                match inst.run_masked(inp_masked) {
+                    Some(out_again) => {
+                        if out_again.mask().is_sub_mask(&output.mask()) {
+                            debug_assert!(out_again.is_sub_state(&output));
+                            let missing_bit_mask = output.mask() & !out_again.mask();
+                            Some(inp_masked | (output & missing_bit_mask.into_mask()))
+                        } else
+                        /* Not a sub-mask */
+                        {
+                            // The output we got wrote to registers we don't have!
+                            None
+                        }
+                    }
+                    None => None,
+                }
+            })
     }
 
     pub fn reduce<WSmall: Word, WShiftSmall: Word>(
@@ -1019,5 +1032,55 @@ mod tests {
         let w = inst.write_mask(&state);
         prop_assert_eq!(r, inst.potential_read_mask());
         prop_assert_eq!(w, inst.potential_write_mask());
+    }
+
+    static BM: std::sync::LazyLock<BackwardMap<Word4>> = std::sync::LazyLock::new(|| {
+        BackwardMap::new(&[Register(0), Register(1), Register(2)]).unwrap()
+    });
+
+    #[property_test]
+    fn run_backward_masked_same_as_run_backward(
+        inst: Inst<Word4>,
+        state: State<Word4>,
+        mask: Mask,
+    ) {
+        let state = state.masked(mask);
+        println!("------------------------------");
+        println!("inst {inst}  state {state}");
+        let inputs = inst
+            .run_backward(*state.state(), &BM)
+            .into_iter()
+            .collect::<Vec<_>>();
+        println!("inputs");
+        inputs.iter().for_each(|i| println!("  {i}"));
+        for inp in inst.run_backward_masked(state, &BM) {
+            prop_assert!(
+                inputs.contains(inp.state()),
+                "{inp} was not contained in the inputs."
+            );
+        }
+    }
+
+    #[property_test]
+    fn run_backward_masked_no_missing_inputs(
+        inst: Inst<Word4>,
+        state: State<Word4>,
+        mask: Mask,
+    ) {
+        let state = state.masked(mask);
+        println!("------------------------------");
+        println!("inst {inst}  state {state}");
+        let inputs = inst
+            .run_backward(*state.state(), &BM)
+            .into_iter()
+            .collect::<Vec<_>>();
+        println!("inputs");
+        inputs.iter().for_each(|i| println!("  {i}"));
+        let masked_inputs = inst.
+            run_backward_masked(state, &BM)
+            .collect::<Vec<_>>();
+        println!("masked inputs");
+        masked_inputs.iter().for_each(|i| println!("  {i}"));
+        prop_assert_eq!(inst.run_backward_masked(state, &BM).count(), inputs.len());
     }
 }

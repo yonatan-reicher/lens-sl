@@ -1,4 +1,4 @@
-use lens_sl::{Algorithm, Config, NoTui, Word4, Word64, inst, optimize};
+use lens_sl::{inst, optimize, Algorithm, Config, NoTui, Word4, Word64};
 
 // These are ignored because they take a long time.
 
