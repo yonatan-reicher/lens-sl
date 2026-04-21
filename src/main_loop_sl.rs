@@ -12,12 +12,13 @@ use crate::oracle::{Oracle, SmtOracle};
 use crate::reduce_bit_width::{ImmediateInfo, Reducer};
 use crate::tui::TuiHook;
 use crate::word::prelude::*;
-use crate::{Cancelled, ShouldCancel, graph};
-use crate::{Config, programs};
+use crate::{graph, OptimizeOutcome, OptimizeResult, ShouldCancel};
+use crate::{programs, Config};
 
 // std imports
 use std::cell::{Ref, RefCell};
 use std::ops::ControlFlow::{self, Break, Continue};
+use std::time::{Duration, Instant};
 
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::de::DeserializeOwned;
@@ -46,13 +47,16 @@ type Graph<W> = graph::Graph<State<W>, Programs<W>>;
 pub fn optimize<WT: Word + HasBitWord, WS: Word + HasBitWord + serde::de::DeserializeOwned>(
     c: Config<WT>,
     tui: &impl for<'g> TuiHook<&'g Graph<WS>, State<WS>>,
-) -> Result<Option<Program<WT>>, Cancelled>
+) -> OptimizeResult<WT>
 where
     BitWord<WS>: DeserializeOwned,
     <WS as All>::Iter: Clone,
 {
     if c.program.is_empty() {
-        return Ok(None);
+        return OptimizeResult {
+            outcome: OptimizeOutcome::NoProgram,
+            elapsed: Duration::ZERO,
+        };
     }
 
     let mut reducer = Reducer::<WT, WS>::default();
@@ -110,7 +114,7 @@ fn synthesize<WT, W>(
     should_cancel: ShouldCancel,
     tui: &impl for<'g> TuiHook<&'g Graph<W>, State<W>>,
     c: Config<WT>,
-) -> Result<Option<Program<WT>>, Cancelled>
+) -> OptimizeResult<WT>
 where
     WT: Word + HasBitWord,
     W: Word + HasBitWord + DeserializeOwned,
@@ -147,6 +151,8 @@ where
     } else {
         BackwardMap::default()
     };
+    let started_at = Instant::now();
+    let should_cancel = should_cancel.resolve_timeout(started_at);
     let mut stats = Stats {
         n_instructions: Inst::enumerate(*enumeration_info).count(),
         ..Stats::default()
@@ -160,7 +166,12 @@ where
     // We must start with at least one input...
     match oracle.verify(&[]) {
         Continue(()) => todo!(""),
-        Break(ProgramOrRetry::Program(p)) => return Ok(Some(p)),
+        Break(ProgramOrRetry::Program(p)) => {
+            return OptimizeResult {
+                outcome: OptimizeOutcome::Program(p),
+                elapsed: started_at.elapsed(),
+            };
+        }
         Break(ProgramOrRetry::Retry) => (),
     }
     'restart: loop {
@@ -210,7 +221,10 @@ where
                 tui.progress(i, len);
                 // Should we stop?
                 if should_cancel.check() {
-                    return Err(Cancelled);
+                    return OptimizeResult {
+                        outcome: OptimizeOutcome::Cancelled,
+                        elapsed: started_at.elapsed(),
+                    };
                 }
                 // First we need to check that all the states are properly represented in the bank.
                 for s in states.iter().cloned() {
@@ -255,7 +269,12 @@ where
                             match oracle.verify(&prog) {
                                 // Continue(()) => todo!("what do we do here? '{prog:?}'"),
                                 Continue(()) => (),
-                                Break(ProgramOrRetry::Program(p)) => return Ok(Some(p)),
+                                Break(ProgramOrRetry::Program(p)) => {
+                                    return OptimizeResult {
+                                        outcome: OptimizeOutcome::Program(p),
+                                        elapsed: started_at.elapsed(),
+                                    };
+                                }
                                 Break(ProgramOrRetry::Retry) => continue 'restart,
                             }
                         }
@@ -302,7 +321,10 @@ where
         //     .join("\n");
         // println!("Progs");
         // println!("{}", lengths);
-        return Ok(None);
+        return OptimizeResult {
+            outcome: OptimizeOutcome::NoProgram,
+            elapsed: started_at.elapsed(),
+        };
     }
 }
 

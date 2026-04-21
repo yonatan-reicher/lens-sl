@@ -92,6 +92,19 @@ impl ShouldCancel {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OptimizeOutcome<W, WShift = crate::word::BitWord<W>> {
+    Program(Vec<Inst<W, WShift>>),
+    NoProgram,
+    Cancelled,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OptimizeResult<W, WShift = crate::word::BitWord<W>> {
+    pub outcome: OptimizeOutcome<W, WShift>,
+    pub elapsed: std::time::Duration,
+}
+
 // Let's expose just the necessary items.
 
 pub use arm::parse;
@@ -108,7 +121,7 @@ pub fn optimize<WT, WS>(
         &'g crate::graph::Graph<State<WS>, crate::programs::Programs<Inst<WS>>>,
         State<WS>,
     >,
-) -> Result<Option<Vec<Inst<WT>>>, Cancelled>
+) -> OptimizeResult<WT>
 where
     WT: Word + HasBitWord,
     WS: Word + HasBitWord + serde::de::DeserializeOwned,

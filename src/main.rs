@@ -1,7 +1,7 @@
 #[allow(unused_imports)]
 use lens_sl::{
-    Algorithm, Cancelled, Config, LiveValue, NoTui, Register, ShouldCancel, Tui, Word4, Word8,
-    Word64, inst, optimize,
+    inst, optimize, Algorithm, Config, LiveValue, NoTui, OptimizeOutcome, Register, ShouldCancel,
+    Tui, Word4, Word64, Word8,
 };
 
 fn main() {
@@ -86,14 +86,14 @@ fn main() {
     } else {
         optimize::<Word64, Word4>(config, &NoTui)
     };
-    match p {
-        Err(Cancelled) => {
+    match p.outcome {
+        OptimizeOutcome::Cancelled => {
             println!("Cancelled!");
         }
-        Ok(None) => {
+        OptimizeOutcome::NoProgram => {
             println!("No equivalent program found");
         }
-        Ok(Some(p)) => {
+        OptimizeOutcome::Program(p) => {
             println!("Optimized program:");
             for inst in p {
                 println!("{inst}");
