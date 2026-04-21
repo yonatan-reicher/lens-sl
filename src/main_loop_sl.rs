@@ -4,7 +4,7 @@
 use crate::all::All;
 use crate::arm::enumerate::{EnumerationInfo, EnumerationInfoOptions};
 use crate::arm::state::{Mask, Masked as MaskedState, State};
-use crate::arm::{BackwardMap, Inst, Register};
+use crate::arm::{BackwardMap, Inst};
 use crate::collect_registers::Collector;
 use crate::direction::Direction::{self, Backward, Forward};
 use crate::intersect_all::intersect_all;
@@ -235,12 +235,13 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
             for _length in 0..self.original_reduced.len() {
                 self.tui.searching();
                 self.tui.progress(0, self.stats.n_instructions);
-                let direction =
-                    if self.config.forward_only || self.forward_frontier.len() < self.backward_frontier.len() {
-                        Forward
-                    } else {
-                        Backward
-                    };
+                let direction = if self.config.forward_only
+                    || self.forward_frontier.len() < self.backward_frontier.len()
+                {
+                    Forward
+                } else {
+                    Backward
+                };
                 if direction == Backward {
                     todo!();
                 }
@@ -256,20 +257,26 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                     }
                     // First we need to check that all the states are properly represented in the bank.
                     for s in states.iter().cloned() {
-                        if !bank.contains_key(&s.masked(top_mask)) {
-                            init_bank(bank, s.masked(top_mask), *enumeration_info, direction, &bm);
+                        if !self.bank.contains_key(&s.masked(self.top_mask)) {
+                            init_bank(
+                                &mut self.bank,
+                                s.masked(self.top_mask),
+                                self.enumeration_info,
+                                direction,
+                                &self.bm,
+                            );
                         }
                     }
                     // The red code.
                     let do_discard = false && direction == Forward;
                     let mut discarded = FxHashSet::<Inst<W>>::default();
-                    for mask in top_mask.sub_masks() {
-                        for inst in insts_with_precondtion(bank, &states, mask) {
+                    for mask in self.top_mask.sub_masks() {
+                        for inst in insts_with_precondtion(&self.bank, &states, mask) {
                             // We can't do this filtering as part of the selecting the instructions
                             // because the discard set changes through the loop.
                             if discarded.contains(&inst) {
-                                stats.n_discarded += 1;
-                                stats.last_discard_size = discarded.len();
+                                self.stats.n_discarded += 1;
+                                self.stats.last_discard_size = discarded.len();
                                 continue;
                             }
                             let next_states = states
@@ -277,69 +284,63 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                                 .map(|s| (*s).mutate(|s| inst.run(s)))
                                 .collect::<Vec<_>>();
                             // Did we succeed?
-                            if other_side_seen.contains(&next_states) {
-                                // Find the full program!
-                                let mut prog = prog.clone().mutate(|p| p.push(inst)).mutate(|p| {
-                                    p.extend(
-                                        other_side_frontier
-                                            .iter()
-                                            .find_map(|(s, p)| (*s == next_states).then_some(p))
-                                            .unwrap()
-                                            .iter()
-                                            .cloned()
-                                            .rev(),
-                                    )
-                                });
-                                match direction {
-                                    Forward => (),
-                                    Backward => prog.reverse(),
-                                }
-                                match oracle.verify(&prog) {
+                            {
+                                let prefixes = prog.clone().concat(inst);
+                                match self.try_each_matching_postfixes(&next_states, |postfix| {
+                                    prefixes.try_each(|prefix| {
+                                        // Find the full program!
+                                        let prog =
+                                            prefix.mutate(|p| p.extend(postfix.iter().rev()));
+                                        self.oracle.verify(&prog)
+                                    })
+                                }) {
                                     // Continue(()) => todo!("what do we do here? '{prog:?}'"),
                                     Continue(()) => (),
                                     Break(ProgramOrRetry::Program(p)) => {
                                         return OptimizeResult {
                                             outcome: OptimizeOutcome::Program(p),
-                                            elapsed: started_at.elapsed(),
+                                            elapsed: self.started_at.elapsed(),
                                         };
                                     }
                                     Break(ProgramOrRetry::Retry) => continue 'restart,
-                                }
+                                };
                             }
-                            if seen.contains(&next_states) {
+                            if self.forward_seen.contains(&next_states) {
                                 if do_discard {
                                     discarded.insert(inst);
                                 }
                                 continue;
                             }
-                            seen.insert(next_states.clone());
+                            self.forward_seen.insert(next_states.clone());
                             // Extend Hila's discard set. Extend it by all the instructions which do the
                             // exact same thing as this instruction on the current inputs.
                             if do_discard {
                                 discarded.extend(insts_with_same_effect(
-                                    top_mask,
-                                    bank,
+                                    self.top_mask,
+                                    &self.bank,
                                     mask,
                                     states.as_slice(),
                                     next_states.as_slice(),
-                                    &mut stats,
+                                    &mut self.stats,
                                 ));
                             }
                             // TODO: you know how to solve this memory allocation...
-                            next_frontier
-                                .push((next_states, prog.clone().mutate(|p| p.push(inst))));
+                            self.next_forward_frontier
+                                .entry(next_states)
+                                .or_default()
+                                .extend(&prog.clone().concat(inst));
                         }
                     }
                     if do_discard {
-                        assert_eq!(discarded.len(), stats.n_instructions);
+                        assert_eq!(discarded.len(), self.stats.n_instructions);
                     }
                 }
-                tui.progress(len, len);
+                self.tui.progress(len, len);
                 // ------------------------------ Expand Phase -----------------------------------------
-                tui.expanding(direction);
+                self.tui.expanding(direction);
                 //expand(&mut todo!(), g.tui);
-                frontier.clear();
-                std::mem::swap(next_frontier, frontier);
+                self.forward_frontier.clear();
+                std::mem::swap(&mut self.next_forward_frontier, &mut self.forward_frontier);
             } // end of length loop
             // let lengths = next_frontier
             //     .iter()
@@ -352,8 +353,44 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
             // println!("{}", lengths);
             return OptimizeResult {
                 outcome: OptimizeOutcome::NoProgram,
-                elapsed: started_at.elapsed(),
+                elapsed: self.started_at.elapsed(),
             };
+        }
+    }
+
+    /// Run on all postfixes that given the states to run from, output the same state as their
+    /// matching counter-example's output.
+    fn try_each_matching_postfixes<T>(
+        &self,
+        inputs: &[State<W>],
+        mut f: impl FnMut(&mut Self, Program<W>) -> ControlFlow<T>,
+    ) -> ControlFlow<T> {
+        match inputs {
+            [] => {
+                // No inputs! That means no counter-examples. Everything is correct, bob ross style.
+                debug_assert!(self.counter_examples.inputs().is_empty());
+                self.backward_frontier
+                    .values()
+                    .try_for_each(|postfixes| postfixes.try_each(|postfix| f(self, postfix)))
+            }
+            [first, rest @ ..] => {
+                let Some(good_on_first_input) = self.backward_frontier.get(first) else {
+                    return Continue(());
+                };
+                good_on_first_input.try_each(|postfix| {
+                    if !rest.iter().enumerate().any(|(ce, input)| {
+                        let output = postfix
+                            .iter()
+                            .rev()
+                            .fold(*input, |s, i| s.mutate(|s| i.run(s)));
+                        let expected_output = self.counter_examples.outputs()[ce];
+                        output != expected_output
+                    }) {
+                        return Continue(());
+                    }
+                    f(self, postfix)
+                })
+            }
         }
     }
 }
