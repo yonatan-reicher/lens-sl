@@ -13,11 +13,12 @@ use crate::reduce_bit_width::{ImmediateInfo, Reducer};
 use crate::tui::TuiHook;
 use crate::verify::{self, verify};
 use crate::word::prelude::*;
-use crate::{Cancelled, Config, ShouldCancel};
 use crate::{backward_graph, graph};
+use crate::{Cancelled, Config, OptimizeOutcome, OptimizeResult, ShouldCancel};
 
 // std imports
 use std::ops::ControlFlow::{self, Break, Continue};
+use std::time::{Duration, Instant};
 
 use rustc_hash::FxHashMap;
 use serde::de::DeserializeOwned;
@@ -43,13 +44,16 @@ type BackwardGraphPath<'a, W> = backward_graph::BackwardGraphPath<'a, State<W>, 
 pub fn optimize<WT: Word + HasBitWord, WS: Word + HasBitWord + serde::de::DeserializeOwned>(
     c: Config<WT>,
     tui: &impl for<'g> TuiHook<&'g Graph<WS>, State<WS>>,
-) -> Result<Option<Program<WT>>, Cancelled>
+) -> OptimizeResult<WT>
 where
     BitWord<WS>: DeserializeOwned,
     <WS as All>::Iter: Clone,
 {
     if c.program.is_empty() {
-        return Ok(None);
+        return OptimizeResult {
+            outcome: OptimizeOutcome::NoProgram,
+            elapsed: Duration::ZERO,
+        };
     }
 
     let mut reducer = Reducer::<WT, WS>::default();
@@ -105,7 +109,7 @@ fn synthesize<WT: Word + HasBitWord, W: Word + HasBitWord + serde::de::Deseriali
     oracle_reduced: impl Oracle<[Inst<W>], State<W>>,
     reducer: Reducer<WT, W>,
     tui: &impl for<'a> TuiHook<&'a Graph<W>, State<W>>,
-) -> Result<Option<Program<WT>>, Cancelled>
+) -> OptimizeResult<WT>
 where
     BitWord<W>: DeserializeOwned,
     <W as All>::Iter: Clone,
@@ -120,6 +124,9 @@ where
         include_nop: false,
         skip_cond_code: false,
     };
+    let backward_map = BackwardMap::new(registers).unwrap();
+    let started_at = Instant::now();
+    let should_cancel = c.should_cancel.resolve_timeout(started_at);
     let mut globals = Globals {
         oracle,
         oracle_reduced,
@@ -129,14 +136,19 @@ where
         backward_length: 0,
         extender: reducer,
         tui,
-        backward_map: BackwardMap::new(registers).unwrap(),
+        backward_map,
         total_instructions: Inst::enumerate(*enumeration_info).count(),
         enumeration_info: *enumeration_info,
     };
     // Generate a first input
     match globals.oracle_reduced.check_program(&[]) {
         // TODO: What if the reduced program is equivalent but not the unreduced?
-        Ok(()) => return Ok(Some(vec![])), // Turns out it's actually the empty program 🤷
+        Ok(()) => {
+            return OptimizeResult {
+                outcome: OptimizeOutcome::Program(vec![]),
+                elapsed: started_at.elapsed(),
+            };
+        } // Turns out it's actually the empty program 🤷
         Err((inp, out)) => {
             tui.found_counter_example(inp, out);
             globals.inputs.push(inp);
@@ -158,7 +170,7 @@ where
             tui.progress(i, globals.total_instructions);
             let res = connect_and_refine::<WT, W>(
                 &mut globals,
-                &c.should_cancel,
+                &should_cancel,
                 &mut forward_graph,
                 &mut backward_graph.root(),
                 inst,
@@ -167,10 +179,18 @@ where
             match res {
                 ConnectAndRefineResult::Found(prog) => {
                     println!("Found program of length {}", prog.len());
-                    return Ok(Some(prog));
+                    return OptimizeResult {
+                        outcome: OptimizeOutcome::Program(prog),
+                        elapsed: started_at.elapsed(),
+                    };
                 }
                 ConnectAndRefineResult::Continue => {}
-                ConnectAndRefineResult::Cancel => return Err(Cancelled),
+                ConnectAndRefineResult::Cancel => {
+                    return OptimizeResult {
+                        outcome: OptimizeOutcome::Cancelled,
+                        elapsed: started_at.elapsed(),
+                    };
+                }
             }
         }
         // ------------------------------ Expand Phase --------------------------------------------
@@ -178,7 +198,10 @@ where
         tui.report_graph(Direction::Forward, &forward_graph);
         // tui.report_graph(Direction::Backward, &backward_graph);
         if globals.forward_length + globals.backward_length + 1 == c.program.len() - 1 {
-            return Ok(None);
+            return OptimizeResult {
+                outcome: OptimizeOutcome::NoProgram,
+                elapsed: started_at.elapsed(),
+            };
         }
         let should_expand_forward =
             c.forward_only || 2 * globals.backward_length >= globals.forward_length;
@@ -190,7 +213,7 @@ where
                 enumeration_info,
                 globals.tui,
                 globals.total_instructions,
-                &c.should_cancel,
+                &should_cancel,
             );
             globals.forward_length += 1;
             tui.report_graph(Direction::Forward, &forward_graph);
@@ -201,7 +224,7 @@ where
                 enumeration_info,
                 globals.tui,
                 &globals.backward_map,
-                &c.should_cancel,
+                &should_cancel,
                 &globals.outputs,
                 globals.backward_length + 1,
             );
@@ -210,7 +233,12 @@ where
             ret
         };
         match ret {
-            Break(Cancelled) => return Err(Cancelled),
+            Break(Cancelled) => {
+                return OptimizeResult {
+                    outcome: OptimizeOutcome::Cancelled,
+                    elapsed: started_at.elapsed(),
+                };
+            }
             Continue(()) => (),
         }
         // print_stats(&forward_graph, &backward_graph);

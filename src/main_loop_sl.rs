@@ -4,21 +4,21 @@
 use crate::all::All;
 use crate::arm::enumerate::{EnumerationInfo, EnumerationInfoOptions};
 use crate::arm::state::{Mask, Masked as MaskedState, State};
-use crate::arm::{Inst, Register};
+use crate::arm::{BackwardMap, Inst, Register};
 use crate::collect_registers::Collector;
-use crate::direction::Direction;
+use crate::direction::Direction::{self, Backward, Forward};
 use crate::intersect_all::intersect_all;
 use crate::oracle::{Oracle, SmtOracle};
 use crate::reduce_bit_width::{ImmediateInfo, Reducer};
 use crate::tui::TuiHook;
 use crate::word::prelude::*;
-use crate::{Cancelled, ShouldCancel, graph};
-use crate::{Config, programs};
+use crate::{graph, OptimizeOutcome, OptimizeResult, ShouldCancel};
+use crate::{programs, Config};
 
 // std imports
 use std::cell::{Ref, RefCell};
 use std::ops::ControlFlow::{self, Break, Continue};
-use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::de::DeserializeOwned;
@@ -47,13 +47,16 @@ type Graph<W> = graph::Graph<State<W>, Programs<W>>;
 pub fn optimize<WT: Word + HasBitWord, WS: Word + HasBitWord + serde::de::DeserializeOwned>(
     c: Config<WT>,
     tui: &impl for<'g> TuiHook<&'g Graph<WS>, State<WS>>,
-) -> Result<Option<Program<WT>>, Cancelled>
+) -> OptimizeResult<WT>
 where
     BitWord<WS>: DeserializeOwned,
     <WS as All>::Iter: Clone,
 {
     if c.program.is_empty() {
-        return Ok(None);
+        return OptimizeResult {
+            outcome: OptimizeOutcome::NoProgram,
+            elapsed: Duration::ZERO,
+        };
     }
 
     let mut reducer = Reducer::<WT, WS>::default();
@@ -94,18 +97,11 @@ where
         reduced_program,
         c.should_cancel,
         tui,
+        c,
     )
 }
 
 type Bank<W> = FxHashMap<MaskedState<W>, FxHashMap<MaskedState<W>, FxHashSet<Inst<W>>>>;
-type BackwardBank<W> = FxHashMap<
-    /* output */ MaskedState<W>,
-    /* one input */
-    FxHashMap<
-        MaskedState<W>,
-        FxHashMap</* the command */ Inst<W>, Rc<FxHashSet<MaskedState<W> /* all inputs */>>>,
-    >,
->;
 
 #[allow(clippy::too_many_arguments)]
 fn synthesize<WT, W>(
@@ -117,7 +113,8 @@ fn synthesize<WT, W>(
     original_reduced: Program<W>,
     should_cancel: ShouldCancel,
     tui: &impl for<'g> TuiHook<&'g Graph<W>, State<W>>,
-) -> Result<Option<Program<WT>>, Cancelled>
+    c: Config<WT>,
+) -> OptimizeResult<WT>
 where
     WT: Word + HasBitWord,
     W: Word + HasBitWord + DeserializeOwned,
@@ -131,10 +128,16 @@ where
         include_nop: false,
         skip_cond_code: false,
     };
-    let mut seen = FxHashSet::default();
-    let mut frontier = vec![];
-    let mut next_frontier = vec![];
-    let mut bank = Bank::default();
+    let mut forward_seen = FxHashSet::default();
+    let mut backward_seen = FxHashSet::default();
+    // The frontier is the set of discovered-but-unvisited states. Kind of like the current layer in
+    // a BFS.
+    let mut forward_frontier = vec![];
+    let mut next_forward_frontier = vec![];
+    let mut backward_frontier = vec![];
+    let mut next_backward_frontier = vec![];
+    let mut forward_bank = Bank::default();
+    let mut backward_bank = Bank::default();
     let counter_examples = &CounterExamplesCell::default();
     let mut oracle = ReducedProgramOracle {
         oracle: &mut oracle,
@@ -143,6 +146,13 @@ where
         tui,
         counter_examples,
     };
+    let bm = if !c.forward_only {
+        BackwardMap::new(registers).unwrap()
+    } else {
+        BackwardMap::default()
+    };
+    let started_at = Instant::now();
+    let should_cancel = should_cancel.resolve_timeout(started_at);
     let mut stats = Stats {
         n_instructions: Inst::enumerate(*enumeration_info).count(),
         ..Stats::default()
@@ -156,119 +166,200 @@ where
     // We must start with at least one input...
     match oracle.verify(&[]) {
         Continue(()) => todo!(""),
-        Break(ProgramOrRetry::Program(p)) => return Ok(Some(p)),
+        Break(ProgramOrRetry::Program(p)) => {
+            return OptimizeResult {
+                outcome: OptimizeOutcome::Program(p),
+                elapsed: started_at.elapsed(),
+            };
+        }
         Break(ProgramOrRetry::Retry) => (),
     }
     'restart: loop {
-        frontier.clear();
-        frontier.push((counter_examples.inputs().to_vec(), vec![]));
-        next_frontier.clear();
-        seen.clear();
+        // forward
+        forward_seen.clear();
+        forward_seen.insert(counter_examples.inputs().to_vec());
+        forward_frontier.clear();
+        forward_frontier.push((counter_examples.inputs().to_vec(), vec![]));
+        next_forward_frontier.clear();
+        // backward
+        backward_seen.clear();
+        backward_seen.insert(counter_examples.outputs().to_vec());
+        backward_frontier.clear();
+        backward_frontier.push((counter_examples.outputs().to_vec(), vec![]));
+        next_backward_frontier.clear();
+        //
         tui.reset_lengths();
-        // ----- Reachability - Bfs loop to reach outputs ----------------------------------------
         for _length in 0..original_reduced.len() {
             tui.searching();
             tui.progress(0, stats.n_instructions);
+            let direction = if c.forward_only || forward_frontier.len() < backward_frontier.len() {
+                Forward
+            } else {
+                Backward
+            };
+            let (bank, seen, other_side_seen, frontier, next_frontier, other_side_frontier) =
+                match direction {
+                    Forward => (
+                        &mut forward_bank,
+                        &mut forward_seen,
+                        &backward_seen,
+                        &mut forward_frontier,
+                        &mut next_forward_frontier,
+                        &backward_frontier,
+                    ),
+                    Backward => (
+                        &mut backward_bank,
+                        &mut backward_seen,
+                        &forward_seen,
+                        &mut backward_frontier,
+                        &mut next_backward_frontier,
+                        &forward_frontier,
+                    ),
+                };
             let len = frontier.len();
-            for (i, (inputs, prog)) in frontier.iter().cloned().enumerate() {
+            for (i, (states, prog)) in frontier.iter().cloned().enumerate() {
                 tui.progress(i, len);
                 // Should we stop?
                 if should_cancel.check() {
-                    return Err(Cancelled);
+                    return OptimizeResult {
+                        outcome: OptimizeOutcome::Cancelled,
+                        elapsed: started_at.elapsed(),
+                    };
                 }
                 // First we need to check that all the states are properly represented in the bank.
-                for inp in inputs.iter().cloned() {
-                    if !bank.contains_key(&inp.masked(top_mask)) {
-                        init_bank(&mut bank, inp.masked(top_mask), *enumeration_info);
+                for s in states.iter().cloned() {
+                    if !bank.contains_key(&s.masked(top_mask)) {
+                        init_bank(bank, s.masked(top_mask), *enumeration_info, direction, &bm);
                     }
                 }
                 // The red code.
+                let do_discard = false && direction == Forward;
                 let mut discarded = FxHashSet::<Inst<W>>::default();
-                for sub_input_mask in top_mask.sub_masks() {
-                    for inst in insts_with_inputs(&bank, &inputs, sub_input_mask) {
-                        // We can't do this filtering as part of the intersection above because the
-                        // discard set changes through the loop.
+                for mask in top_mask.sub_masks() {
+                    for inst in insts_with_precondtion(bank, &states, mask) {
+                        // We can't do this filtering as part of the selecting the instructions
+                        // because the discard set changes through the loop.
                         if discarded.contains(&inst) {
                             stats.n_discarded += 1;
                             stats.last_discard_size = discarded.len();
                             continue;
                         }
-                        let outputs = inputs
+                        let next_states = states
                             .iter()
                             .map(|s| (*s).mutate(|s| inst.run(s)))
                             .collect::<Vec<_>>();
                         // Did we succeed?
-                        if outputs == *counter_examples.outputs() {
-                            let prog = prog.clone().mutate(|p| p.push(inst));
+                        if other_side_seen.contains(&next_states) {
+                            // Find the full program!
+                            let mut prog = prog.clone().mutate(|p| p.push(inst)).mutate(|p| {
+                                p.extend(
+                                    other_side_frontier
+                                        .iter()
+                                        .find_map(|(s, p)| (*s == next_states).then_some(p))
+                                        .unwrap()
+                                        .iter()
+                                        .cloned()
+                                        .rev(),
+                                )
+                            });
+                            match direction {
+                                Forward => (),
+                                Backward => prog.reverse(),
+                            }
                             match oracle.verify(&prog) {
                                 // Continue(()) => todo!("what do we do here? '{prog:?}'"),
                                 Continue(()) => (),
-                                Break(ProgramOrRetry::Program(p)) => return Ok(Some(p)),
+                                Break(ProgramOrRetry::Program(p)) => {
+                                    return OptimizeResult {
+                                        outcome: OptimizeOutcome::Program(p),
+                                        elapsed: started_at.elapsed(),
+                                    };
+                                }
                                 Break(ProgramOrRetry::Retry) => continue 'restart,
                             }
                         }
-                        if seen.contains(&outputs) {
-                            discarded.insert(inst);
+                        if seen.contains(&next_states) {
+                            if do_discard {
+                                discarded.insert(inst);
+                            }
                             continue;
                         }
-                        seen.insert(outputs.clone());
+                        seen.insert(next_states.clone());
                         // Extend Hila's discard set. Extend it by all the instructions which do the
                         // exact same thing as this instruction on the current inputs.
-                        discarded.extend(insts_with_same_effect(
-                            top_mask,
-                            &bank,
-                            sub_input_mask,
-                            inputs.as_slice(),
-                            outputs.as_slice(),
-                            &mut stats,
-                        ));
+                        if do_discard {
+                            discarded.extend(insts_with_same_effect(
+                                top_mask,
+                                bank,
+                                mask,
+                                states.as_slice(),
+                                next_states.as_slice(),
+                                &mut stats,
+                            ));
+                        }
                         // TODO: you know how to solve this memory allocation...
-                        next_frontier.push((outputs, prog.clone().mutate(|p| p.push(inst))));
+                        next_frontier.push((next_states, prog.clone().mutate(|p| p.push(inst))));
                     }
                 }
-                assert_eq!(discarded.len(), stats.n_instructions);
+                if do_discard {
+                    assert_eq!(discarded.len(), stats.n_instructions);
+                }
             }
             tui.progress(len, len);
             // ------------------------------ Expand Phase -----------------------------------------
-            let direction = Direction::Forward;
             tui.expanding(direction);
             //expand(&mut todo!(), g.tui);
             frontier.clear();
-            std::mem::swap(&mut next_frontier, &mut frontier);
+            std::mem::swap(next_frontier, frontier);
         } // end of length loop
-        let lengths = next_frontier
-            .iter()
-            .map(|(_, p)| p)
-            .chunk_by(|p| p.len())
-            .into_iter()
-            .map(|(len, progs)| format!("{len}: {}", progs.count()))
-            .join("\n");
-        println!("Progs");
-        println!("{}", lengths);
-        return Ok(None);
+        // let lengths = next_frontier
+        //     .iter()
+        //     .map(|(_, p)| p)
+        //     .chunk_by(|p| p.len())
+        //     .into_iter()
+        //     .map(|(len, progs)| format!("{len}: {}", progs.count()))
+        //     .join("\n");
+        // println!("Progs");
+        // println!("{}", lengths);
+        return OptimizeResult {
+            outcome: OptimizeOutcome::NoProgram,
+            elapsed: started_at.elapsed(),
+        };
     }
 }
 
 fn init_bank<W: Word + HasBitWord>(
     bank: &mut Bank<W>,
-    inp: MaskedState<W>,
+    state: MaskedState<W>,
     ei: EnumerationInfo<W>,
+    dir: Direction,
+    bm: &BackwardMap<W>,
 ) {
-    debug_assert!(!bank.contains_key(&inp));
+    use itertools::Either;
+    debug_assert!(!bank.contains_key(&state));
     // Make sure we don't re-initialize this state or a sub-state for no reason by making sure
     // they're already created.
-    for s in inp.sub_states() {
+    for s in state.sub_states() {
         bank.entry(s).or_default();
     }
     // Now to the thing!
     for inst in Inst::enumerate(ei) {
-        let Some(out) = inst.run_masked(inp) else {
-            continue;
+        let next_states = match dir {
+            Forward => Either::Left(inst.run_masked(state)),
+            Backward => Either::Right(inst.run_backward_masked(state, bm)),
         };
-        let inp = inp & inst.potential_read_mask();
-        let out = out & inst.potential_write_mask();
-        let class = bank.get_mut(&inp).unwrap().entry(out).or_default();
-        class.insert(inst);
+        for next_state in next_states.into_iter() {
+            let (state_mask, next_state_mask) = match dir {
+                Forward => (inst.potential_read_mask(), inst.potential_write_mask()),
+                Backward => (
+                    inst.potential_write_mask(),
+                    inst.potential_read_mask() | inst.potential_write_mask(), /* Why both? Well, basically, we can't have the second index be smaller than the first, it must contain it. I don't remember why. */
+                ),
+            };
+            let (state, next_state) = (state & state_mask, next_state & next_state_mask);
+            let class = bank.get_mut(&state).unwrap().entry(next_state).or_default();
+            class.insert(inst);
+        }
     }
 }
 
@@ -276,7 +367,7 @@ fn init_bank<W: Word + HasBitWord>(
 /// Find all instructions (and their effects!) that can run from the current states.
 /// Instead of doing this by iterating all instructions, do this by intersection of equivalence
 /// classes that can run from the states.
-fn insts_with_inputs<'a, W: Word + HasBitWord>(
+fn insts_with_precondtion<'a, W: Word + HasBitWord>(
     bank: &'a Bank<W>,
     inputs: &'a [State<W>],
     input_mask: Mask,

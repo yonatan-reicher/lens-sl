@@ -68,16 +68,41 @@ pub enum ShouldCancel {
     #[default]
     Never,
     At(std::time::Instant),
+    Timeout(std::time::Duration),
 }
 
 impl ShouldCancel {
+    pub fn resolve_timeout(&self, now: std::time::Instant) -> Self {
+        use ShouldCancel::*;
+        match self {
+            Timeout(d) => At(now.checked_add(*d).unwrap_or(now)),
+            _ => *self,
+        }
+    }
+
     pub fn check(&self) -> bool {
         use ShouldCancel::*;
         match self {
             Never => false,
             At(t) => std::time::Instant::now() >= *t,
+            Timeout(_) => panic!(
+                "ShouldCancel::Timeout must be resolved before checking with resolve_timeout"
+            ),
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OptimizeOutcome<W, WShift = crate::word::BitWord<W>> {
+    Program(Vec<Inst<W, WShift>>),
+    NoProgram,
+    Cancelled,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OptimizeResult<W, WShift = crate::word::BitWord<W>> {
+    pub outcome: OptimizeOutcome<W, WShift>,
+    pub elapsed: std::time::Duration,
 }
 
 // Let's expose just the necessary items.
@@ -96,7 +121,7 @@ pub fn optimize<WT, WS>(
         &'g crate::graph::Graph<State<WS>, crate::programs::Programs<Inst<WS>>>,
         State<WS>,
     >,
-) -> Result<Option<Vec<Inst<WT>>>, Cancelled>
+) -> OptimizeResult<WT>
 where
     WT: Word + HasBitWord,
     WS: Word + HasBitWord + serde::de::DeserializeOwned,

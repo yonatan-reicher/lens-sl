@@ -1,4 +1,4 @@
-use lens_sl::{Algorithm, Config, NoTui, Word4, Word64, inst, optimize};
+use lens_sl::{inst, optimize, Algorithm, Config, NoTui, OptimizeOutcome, Word4, Word64};
 
 // These are ignored because they take a long time.
 
@@ -17,7 +17,6 @@ fn bad_case() {
             ..Config::default()
         },
         &NoTui,
-    )
-    .unwrap();
-    assert_eq!(p, None);
+    );
+    assert_eq!(p.outcome, OptimizeOutcome::NoProgram);
 }

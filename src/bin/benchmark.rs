@@ -1,5 +1,5 @@
 use functionality::Pipe;
-use lens_sl::{Algorithm, Cancelled, Config, Inst, ShouldCancel, Word4, Word32, optimize};
+use lens_sl::{optimize, Algorithm, Config, Inst, OptimizeOutcome, ShouldCancel, Word32, Word4};
 use std::env;
 use std::fs::{self, File};
 use std::hint::black_box;
@@ -8,11 +8,10 @@ use std::ops::ControlFlow::{self, Break, Continue};
 use std::panic;
 use std::path::Path;
 use std::process::exit;
-use std::sync::Mutex;
 use std::sync::mpsc;
+use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
-use std::time::Instant;
 
 #[derive(Default)]
 struct Options {
@@ -106,10 +105,11 @@ fn run(b: &Benchmark) -> BenchmarkResult {
                 Continue(())
             };
 
-            let started_at = Instant::now();
             let ret = b.optimize::<()>(callback);
-            let elapsed = started_at.elapsed();
-            let timeout = ret == Break(Err(Cancelled));
+            let (elapsed, timeout) = match ret {
+                Continue((elapsed, timeout)) => (elapsed, timeout),
+                Break(()) => unreachable!("benchmark callback never breaks"),
+            };
             let success = !timeout
                 && !found.is_empty()
                 && found
@@ -290,7 +290,7 @@ impl Benchmark {
     pub fn optimize<T>(
         &self,
         mut f: impl FnMut(Vec<Inst<W>>) -> ControlFlow<T>,
-    ) -> ControlFlow<Result<T, Cancelled>> {
+    ) -> ControlFlow<T, (Duration, bool)> {
         let algorithm = if O.sl {
             Algorithm::LensSl
         } else {
@@ -298,9 +298,9 @@ impl Benchmark {
         };
         let should_cancel = match O.timeout {
             None => ShouldCancel::Never,
-            Some(d) => ShouldCancel::At(Instant::now() + d),
+            Some(d) => ShouldCancel::Timeout(d),
         };
-        match optimize::<W, Word4>(
+        let result = optimize::<W, Word4>(
             Config {
                 algorithm,
                 program: &self.input,
@@ -310,12 +310,17 @@ impl Benchmark {
                 forward_only: O.forward_only,
             },
             &lens_sl::NoTui,
-        ) {
-            Ok(None) => (),
-            Ok(Some(p)) => f(p).map_break(Ok)?,
-            Err(Cancelled) => return Break(Err(Cancelled)),
-        }
-        Continue(())
+        );
+        let elapsed = result.elapsed;
+        let timeout = match result.outcome {
+            OptimizeOutcome::Cancelled => true,
+            OptimizeOutcome::NoProgram => false,
+            OptimizeOutcome::Program(p) => {
+                f(p)?;
+                false
+            }
+        };
+        Continue((elapsed, timeout))
     }
 }
 

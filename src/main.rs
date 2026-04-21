@@ -1,17 +1,21 @@
 #[allow(unused_imports)]
 use lens_sl::{
-    Algorithm, Cancelled, Config, LiveValue, NoTui, Register, ShouldCancel, Tui, Word4, Word8,
-    Word64, inst, optimize,
+    inst, optimize, Algorithm, Config, LiveValue, NoTui, OptimizeOutcome, Register, ShouldCancel,
+    Tui, Word4, Word64, Word8,
 };
 
 fn main() {
     let args: &mut Vec<String> = &mut std::env::args().collect();
     let sl = parse_flag(args, "--sl");
     let forward_only = parse_flag(args, "--forward-only");
+    let no_tui = parse_flag(args, "--no-tui");
     let h = parse_flag(args, "--help") || parse_flag(args, "-h");
 
     if args.len() > 2 || h {
-        eprintln!("Usage: {} [--sl] [--forward-only] [PROGRAM_PATH]", args[0]);
+        eprintln!(
+            "Usage: {} [--sl] [--forward-only] [--no-tui] [PROGRAM_PATH]",
+            args[0]
+        );
         std::process::exit(1);
     }
 
@@ -74,19 +78,22 @@ fn main() {
         forward_only,
     };
 
-    let tui = Tui::default();
-    let p = optimize::<Word64, Word4>(
-        config, &tui, // */ &NoTui,
-    );
-    tui.close();
-    match p {
-        Err(Cancelled) => {
+    let p = if !no_tui {
+        let tui = Tui::default();
+        let p = optimize::<Word64, Word4>(config, &tui);
+        tui.close();
+        p
+    } else {
+        optimize::<Word64, Word4>(config, &NoTui)
+    };
+    match p.outcome {
+        OptimizeOutcome::Cancelled => {
             println!("Cancelled!");
         }
-        Ok(None) => {
+        OptimizeOutcome::NoProgram => {
             println!("No equivalent program found");
         }
-        Ok(Some(p)) => {
+        OptimizeOutcome::Program(p) => {
             println!("Optimized program:");
             for inst in p {
                 println!("{inst}");
