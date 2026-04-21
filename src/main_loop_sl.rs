@@ -286,14 +286,19 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                             // Did we succeed?
                             {
                                 let prefixes = prog.clone().concat(inst);
-                                match self.try_each_matching_postfixes(&next_states, |postfix| {
-                                    prefixes.try_each(|prefix| {
-                                        // Find the full program!
-                                        let prog =
-                                            prefix.mutate(|p| p.extend(postfix.iter().rev()));
-                                        self.oracle.verify(&prog)
-                                    })
-                                }) {
+                                match Self::try_each_matching_postfixes(
+                                    &self.backward_frontier,
+                                    self.counter_examples,
+                                    &next_states,
+                                    |postfix| {
+                                        prefixes.try_each(|prefix| {
+                                            // Find the full program!
+                                            let prog =
+                                                prefix.mutate(|p| p.extend(postfix.iter().rev()));
+                                            self.oracle.verify(&prog)
+                                        })
+                                    },
+                                ) {
                                     // Continue(()) => todo!("what do we do here? '{prog:?}'"),
                                     Continue(()) => (),
                                     Break(ProgramOrRetry::Program(p)) => {
@@ -361,20 +366,21 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
     /// Run on all postfixes that given the states to run from, output the same state as their
     /// matching counter-example's output.
     fn try_each_matching_postfixes<T>(
-        &self,
+        backward_frontier: &FxHashMap<State<W>, Programs<W>>,
+        counter_examples: &CounterExamplesCell<W>,
         inputs: &[State<W>],
-        mut f: impl FnMut(&mut Self, Program<W>) -> ControlFlow<T>,
+        mut f: impl FnMut(Program<W>) -> ControlFlow<T>,
     ) -> ControlFlow<T> {
         match inputs {
             [] => {
                 // No inputs! That means no counter-examples. Everything is correct, bob ross style.
-                debug_assert!(self.counter_examples.inputs().is_empty());
-                self.backward_frontier
+                debug_assert!(counter_examples.inputs().is_empty());
+                backward_frontier
                     .values()
-                    .try_for_each(|postfixes| postfixes.try_each(|postfix| f(self, postfix)))
+                    .try_for_each(|postfixes| postfixes.try_each(|postfix| f(postfix)))
             }
             [first, rest @ ..] => {
-                let Some(good_on_first_input) = self.backward_frontier.get(first) else {
+                let Some(good_on_first_input) = backward_frontier.get(first) else {
                     return Continue(());
                 };
                 good_on_first_input.try_each(|postfix| {
@@ -383,12 +389,12 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                             .iter()
                             .rev()
                             .fold(*input, |s, i| s.mutate(|s| i.run(s)));
-                        let expected_output = self.counter_examples.outputs()[ce];
+                        let expected_output = counter_examples.outputs()[ce];
                         output != expected_output
                     }) {
                         return Continue(());
                     }
-                    f(self, postfix)
+                    f(postfix)
                 })
             }
         }
