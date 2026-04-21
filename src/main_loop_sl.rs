@@ -271,7 +271,7 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                     let do_discard = direction == Forward;
                     let mut discarded = FxHashSet::<Inst<W>>::default();
                     for mask in self.top_mask.sub_masks() {
-                        for inst in insts_with_precondtion(&self.bank, &states, mask) {
+                        for inst in insts_with_precondtion(&self.bank, states, mask) {
                             // We can't do this filtering as part of the selecting the instructions
                             // because the discard set changes through the loop.
                             if discarded.contains(&inst) {
