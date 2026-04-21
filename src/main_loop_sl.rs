@@ -134,10 +134,9 @@ where
     // a BFS.
     let mut forward_frontier = vec![];
     let mut next_forward_frontier = vec![];
-    let mut backward_frontier = vec![];
-    let mut next_backward_frontier = vec![];
-    let mut forward_bank = Bank::default();
-    let mut backward_bank = Bank::default();
+    let mut bank = Bank::default();
+    // The backward frontier only stores input states for the first counter-example's output.
+    let mut backward_frontier = FxHashMap::<State<W>, Programs<W>>::default();
     let counter_examples = &CounterExamplesCell::default();
     let mut oracle = ReducedProgramOracle {
         oracle: &mut oracle,
@@ -174,6 +173,9 @@ where
         }
         Break(ProgramOrRetry::Retry) => (),
     }
+    // initialize the backward frontier.
+    backward_frontier.insert(counter_examples.outputs()[0], Programs::empty_program());
+    backward_seen.insert(counter_examples.outputs()[0]);
     'restart: loop {
         // forward
         forward_seen.clear();
@@ -181,44 +183,23 @@ where
         forward_frontier.clear();
         forward_frontier.push((counter_examples.inputs().to_vec(), vec![]));
         next_forward_frontier.clear();
-        // backward
-        backward_seen.clear();
-        backward_seen.insert(counter_examples.outputs().to_vec());
-        backward_frontier.clear();
-        backward_frontier.push((counter_examples.outputs().to_vec(), vec![]));
-        next_backward_frontier.clear();
         //
         tui.report_length(Direction::Forward, 0);
-        tui.report_length(Direction::Backward, 0);
         for _length in 0..original_reduced.len() {
             tui.searching();
             tui.progress(0, stats.n_instructions);
-            let direction = if c.forward_only || forward_frontier.len() < backward_frontier.len() {
+            let direction = if c.forward_only || forward_frontier.len() <= backward_frontier.len() {
                 Forward
             } else {
                 Backward
             };
-            let (bank, seen, other_side_seen, frontier, next_frontier, other_side_frontier) =
-                match direction {
-                    Forward => (
-                        &mut forward_bank,
-                        &mut forward_seen,
-                        &backward_seen,
-                        &mut forward_frontier,
-                        &mut next_forward_frontier,
-                        &backward_frontier,
-                    ),
-                    Backward => (
-                        &mut backward_bank,
-                        &mut backward_seen,
-                        &forward_seen,
-                        &mut backward_frontier,
-                        &mut next_backward_frontier,
-                        &forward_frontier,
-                    ),
-                };
-            let len = frontier.len();
-            for (i, (states, prog)) in frontier.iter().cloned().enumerate() {
+            // Backward expand
+            if direction == Backward {
+                return todo!();
+            }
+            // Forward search
+            let len = forward_frontier.len();
+            for (i, (states, prog)) in forward_frontier.iter().cloned().enumerate() {
                 tui.progress(i, len);
                 // Should we stop?
                 if should_cancel.check() {
@@ -230,14 +211,14 @@ where
                 // First we need to check that all the states are properly represented in the bank.
                 for s in states.iter().cloned() {
                     if !bank.contains_key(&s.masked(top_mask)) {
-                        init_bank(bank, s.masked(top_mask), *enumeration_info, direction, &bm);
+                        init_bank(&mut bank, s.masked(top_mask), *enumeration_info, direction, &bm);
                     }
                 }
                 // The red code.
-                let do_discard = false && direction == Forward;
+                let do_discard = direction == Forward;
                 let mut discarded = FxHashSet::<Inst<W>>::default();
                 for mask in top_mask.sub_masks() {
-                    for inst in insts_with_precondtion(bank, &states, mask) {
+                    for inst in insts_with_precondtion(&bank, &states, mask) {
                         // We can't do this filtering as part of the selecting the instructions
                         // because the discard set changes through the loop.
                         if discarded.contains(&inst) {
@@ -250,7 +231,7 @@ where
                             .map(|s| (*s).mutate(|s| inst.run(s)))
                             .collect::<Vec<_>>();
                         // Did we succeed?
-                        if other_side_seen.contains(&next_states) {
+                        if backward_frontier.contains_key(&next_states) {
                             // Find the full program!
                             let mut prog = prog.clone().mutate(|p| p.push(inst)).mutate(|p| {
                                 p.extend(
