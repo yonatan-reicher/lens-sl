@@ -268,7 +268,7 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                         }
                     }
                     // The red code.
-                    let do_discard = false && direction == Forward;
+                    let do_discard = direction == Forward;
                     let mut discarded = FxHashSet::<Inst<W>>::default();
                     for mask in self.top_mask.sub_masks() {
                         for inst in insts_with_precondtion(&self.bank, &states, mask) {
