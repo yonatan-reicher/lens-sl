@@ -221,11 +221,6 @@ impl<State> IoThreadState<State> {
             self.iteration += 1;
         }
     }
-
-    fn reset_lengths(&mut self) {
-        self.forward_len = 0;
-        self.backward_len = 0;
-    }
 }
 
 impl<State> Default for IoThreadState<State> {

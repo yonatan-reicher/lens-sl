@@ -377,7 +377,7 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                 debug_assert!(counter_examples.inputs().is_empty());
                 backward_frontier
                     .values()
-                    .try_for_each(|postfixes| postfixes.try_each(|postfix| f(postfix)))
+                    .try_for_each(|postfixes| postfixes.try_each(&mut f))
             }
             [first, rest @ ..] => {
                 let Some(good_on_first_input) = backward_frontier.get(first) else {
