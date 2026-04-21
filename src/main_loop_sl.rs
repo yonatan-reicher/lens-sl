@@ -12,8 +12,8 @@ use crate::oracle::{Oracle, SmtOracle};
 use crate::reduce_bit_width::{ImmediateInfo, Reducer};
 use crate::tui::TuiHook;
 use crate::word::prelude::*;
-use crate::{graph, OptimizeOutcome, OptimizeResult, ShouldCancel};
-use crate::{programs, Config};
+use crate::{Config, programs};
+use crate::{OptimizeOutcome, OptimizeResult, ShouldCancel, graph};
 
 // std imports
 use std::cell::{Ref, RefCell};
@@ -85,20 +85,63 @@ where
         .mutate(|r| r.sort())
         .mutate(|r| r.dedup());
 
-    let oracle = SmtOracle::new(c.program.to_vec());
-    let oracle_reduced = SmtOracle::new(reduced_program.clone());
+    let oracle = &mut SmtOracle::new(c.program.to_vec());
+    let oracle_reduced = &mut SmtOracle::new(reduced_program.clone());
 
-    synthesize::<WT, WS>(
-        &registers,
-        &immediates,
-        oracle,
-        oracle_reduced,
-        reducer,
-        reduced_program,
-        c.should_cancel,
+    let counter_examples = &CounterExamplesCell::default();
+
+    let bm = if !c.forward_only {
+        BackwardMap::new(&registers).unwrap()
+    } else {
+        BackwardMap::default()
+    };
+
+    let enumeration_info = EnumerationInfo {
+        registers: EnumerationInfoOptions::Limited(&registers),
+        immediates: EnumerationInfoOptions::Limited(&immediates),
+        include_nop: false,
+        skip_cond_code: false,
+    };
+
+    let n_instructions = Inst::enumerate(enumeration_info).count();
+
+    // This should (obviously) be the very last thing initialized.
+    let started_at = Instant::now();
+
+    let optimizer = Optimizer {
+        config: c,
+        original_reduced: reduced_program,
+        enumeration_info,
+        forward_seen: default(),
+        backward_seen: default(),
+        forward_frontier: default(),
+        backward_frontier: default(),
+        next_forward_frontier: default(),
+        next_backward_frontier: default(),
+        bank: default(),
+        counter_examples,
+        oracle: &mut ReducedProgramOracle {
+            counter_examples,
+            oracle,
+            oracle_reduced,
+            reducer: &reducer,
+            tui,
+        },
+        bm,
+        started_at,
+        should_cancel: c.should_cancel.resolve_timeout(started_at),
+        stats: Stats {
+            n_instructions,
+            ..Stats::default()
+        },
+        top_mask: registers
+            .iter()
+            .cloned()
+            .fold(Mask::JUST_FLAGS, |m, r| m | Mask::just_register(r)),
         tui,
-        c,
-    )
+    };
+
+    optimizer.optimize()
 }
 
 type Bank<W> = FxHashMap<MaskedState<W>, FxHashMap<MaskedState<W>, FxHashSet<Inst<W>>>>;
@@ -122,22 +165,6 @@ where
     <W as All>::Iter: Clone,
 {
     // ----- Initialization ------------------------------------------------------------------------
-    let enumeration_info = &EnumerationInfo::<W> {
-        registers: EnumerationInfoOptions::Limited(registers),
-        immediates: EnumerationInfoOptions::Limited(immediates),
-        include_nop: false,
-        skip_cond_code: false,
-    };
-    let mut forward_seen = FxHashSet::default();
-    let mut backward_seen = FxHashSet::default();
-    // The frontier is the set of discovered-but-unvisited states. Kind of like the current layer in
-    // a BFS.
-    let mut forward_frontier = vec![];
-    let mut next_forward_frontier = vec![];
-    let mut backward_frontier = vec![];
-    let mut next_backward_frontier = vec![];
-    let mut forward_bank = Bank::default();
-    let mut backward_bank = Bank::default();
     let counter_examples = &CounterExamplesCell::default();
     let mut oracle = ReducedProgramOracle {
         oracle: &mut oracle,
@@ -326,6 +353,218 @@ where
             outcome: OptimizeOutcome::NoProgram,
             elapsed: started_at.elapsed(),
         };
+    }
+}
+
+struct Optimizer<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> {
+    /// The configuration this optimizer was started with.
+    config: Config<'a, WBig>,
+    /// The original program, but bit-width reduced.
+    original_reduced: Program<W>,
+    // TODO: This should be a method.
+    enumeration_info: EnumerationInfo<'a, W>,
+    /// The set of state vectors we've already visited, and don't want to visit again.
+    forward_seen: FxHashSet<Vec<State<W>>>,
+    /// Set of states visited in the backward postfix expansion that we don't want to visit again.
+    /// This one is on states and not state vectors, because we only search backwards on the first
+    /// counter-example's output.
+    backward_seen: FxHashSet<State<W>>,
+    /// Set of discovered-but-unvisited state vectors and their corresponding prefixes. Kind of like
+    /// the current layer in Breadth-First-Search.
+    forward_frontier: FxHashMap<Vec<State<W>>, Programs<W>>,
+    /// Set of reached-but-not-visited states in the backward search, and their corresponding programs.
+    /// This is only on the first counter-example.
+    backward_frontier: FxHashMap<State<W>, Programs<W>>,
+    /// Swapping buffer for the forward frontier.
+    next_forward_frontier: FxHashMap<Vec<State<W>>, Programs<W>>,
+    /// Swapping buffer for the backward frontier.
+    next_backward_frontier: FxHashMap<Vec<State<W>>, Programs<W>>,
+    /// Computes equivalence classes in a semi-lazy way.
+    bank: Bank<W>,
+    /// List of counter-examples generated by the oracle. Updated mutably by the oracle.
+    counter_examples: &'a CounterExamplesCell<W>,
+    /// The oracle! Tells us whether or not a program is correct.
+    oracle: &'a mut ReducedProgramOracle<'a, WBig, W>,
+    /// This is needed to run instructions backwards in time.
+    bm: BackwardMap<W>,
+    /// When did the search actually start? We need this to return an elapsed time at the end.
+    started_at: Instant,
+    /// A condition on when to stop the search and give up. Note that the config already contains a
+    /// 'should cancel' field, but this one is what should be used instead.
+    should_cancel: ShouldCancel,
+    /// Various things. Might do something with this later.
+    stats: Stats,
+    /// The mask containing everything we care about in the search. It is the ⊤ (top) of the
+    /// lattice of masks that are relevant to the search.
+    top_mask: Mask,
+    tui: &'a dyn TuiHook<&'a Graph<W>, State<W>>,
+}
+
+impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
+    pub fn optimize(mut self) -> OptimizeResult<WBig> {
+        // ----- The Actual Loop -----------------------------------------------------------------------
+        // We must start with at least one input...
+        match self.oracle.verify(&[]) {
+            Continue(()) => todo!(""),
+            Break(ProgramOrRetry::Program(p)) => {
+                return OptimizeResult {
+                    outcome: OptimizeOutcome::Program(p),
+                    elapsed: self.started_at.elapsed(),
+                };
+            }
+            Break(ProgramOrRetry::Retry) => (),
+        }
+        if self.counter_examples.inputs().is_empty() {
+            unimplemented!(
+                "we do not deal with the case where the oracle does not give a counter-example for the empty program."
+            );
+        }
+        'restart: loop {
+            let empty_program = Programs::empty_program();
+            // forward
+            self.forward_seen.clear();
+            self.forward_seen
+                .insert(self.counter_examples.inputs().to_vec());
+            self.forward_frontier.clear();
+            self.forward_frontier.insert(
+                self.counter_examples.inputs().to_vec(),
+                empty_program.clone(),
+            );
+            self.next_forward_frontier.clear();
+            // backward
+            self.backward_seen.clear();
+            self.backward_seen
+                .insert(self.counter_examples.outputs()[0]);
+            self.backward_frontier.clear();
+            self.backward_frontier
+                .insert(self.counter_examples.outputs()[0], empty_program);
+            self.next_backward_frontier.clear();
+            //
+            self.tui.report_length(Direction::Forward, 0);
+            self.tui.report_length(Direction::Backward, 0);
+            for _length in 0..self.original_reduced.len() {
+                self.tui.searching();
+                self.tui.progress(0, self.stats.n_instructions);
+                let direction =
+                    if self.config.forward_only || self.forward_frontier.len() < self.backward_frontier.len() {
+                        Forward
+                    } else {
+                        Backward
+                    };
+                if direction == Backward {
+                    todo!();
+                }
+                let len = self.forward_frontier.len();
+                for (i, (states, prog)) in self.forward_frontier.iter().enumerate() {
+                    self.tui.progress(i, len);
+                    // Should we stop?
+                    if self.should_cancel.check() {
+                        return OptimizeResult {
+                            outcome: OptimizeOutcome::Cancelled,
+                            elapsed: self.started_at.elapsed(),
+                        };
+                    }
+                    // First we need to check that all the states are properly represented in the bank.
+                    for s in states.iter().cloned() {
+                        if !bank.contains_key(&s.masked(top_mask)) {
+                            init_bank(bank, s.masked(top_mask), *enumeration_info, direction, &bm);
+                        }
+                    }
+                    // The red code.
+                    let do_discard = false && direction == Forward;
+                    let mut discarded = FxHashSet::<Inst<W>>::default();
+                    for mask in top_mask.sub_masks() {
+                        for inst in insts_with_precondtion(bank, &states, mask) {
+                            // We can't do this filtering as part of the selecting the instructions
+                            // because the discard set changes through the loop.
+                            if discarded.contains(&inst) {
+                                stats.n_discarded += 1;
+                                stats.last_discard_size = discarded.len();
+                                continue;
+                            }
+                            let next_states = states
+                                .iter()
+                                .map(|s| (*s).mutate(|s| inst.run(s)))
+                                .collect::<Vec<_>>();
+                            // Did we succeed?
+                            if other_side_seen.contains(&next_states) {
+                                // Find the full program!
+                                let mut prog = prog.clone().mutate(|p| p.push(inst)).mutate(|p| {
+                                    p.extend(
+                                        other_side_frontier
+                                            .iter()
+                                            .find_map(|(s, p)| (*s == next_states).then_some(p))
+                                            .unwrap()
+                                            .iter()
+                                            .cloned()
+                                            .rev(),
+                                    )
+                                });
+                                match direction {
+                                    Forward => (),
+                                    Backward => prog.reverse(),
+                                }
+                                match oracle.verify(&prog) {
+                                    // Continue(()) => todo!("what do we do here? '{prog:?}'"),
+                                    Continue(()) => (),
+                                    Break(ProgramOrRetry::Program(p)) => {
+                                        return OptimizeResult {
+                                            outcome: OptimizeOutcome::Program(p),
+                                            elapsed: started_at.elapsed(),
+                                        };
+                                    }
+                                    Break(ProgramOrRetry::Retry) => continue 'restart,
+                                }
+                            }
+                            if seen.contains(&next_states) {
+                                if do_discard {
+                                    discarded.insert(inst);
+                                }
+                                continue;
+                            }
+                            seen.insert(next_states.clone());
+                            // Extend Hila's discard set. Extend it by all the instructions which do the
+                            // exact same thing as this instruction on the current inputs.
+                            if do_discard {
+                                discarded.extend(insts_with_same_effect(
+                                    top_mask,
+                                    bank,
+                                    mask,
+                                    states.as_slice(),
+                                    next_states.as_slice(),
+                                    &mut stats,
+                                ));
+                            }
+                            // TODO: you know how to solve this memory allocation...
+                            next_frontier
+                                .push((next_states, prog.clone().mutate(|p| p.push(inst))));
+                        }
+                    }
+                    if do_discard {
+                        assert_eq!(discarded.len(), stats.n_instructions);
+                    }
+                }
+                tui.progress(len, len);
+                // ------------------------------ Expand Phase -----------------------------------------
+                tui.expanding(direction);
+                //expand(&mut todo!(), g.tui);
+                frontier.clear();
+                std::mem::swap(next_frontier, frontier);
+            } // end of length loop
+            // let lengths = next_frontier
+            //     .iter()
+            //     .map(|(_, p)| p)
+            //     .chunk_by(|p| p.len())
+            //     .into_iter()
+            //     .map(|(len, progs)| format!("{len}: {}", progs.count()))
+            //     .join("\n");
+            // println!("Progs");
+            // println!("{}", lengths);
+            return OptimizeResult {
+                outcome: OptimizeOutcome::NoProgram,
+                elapsed: started_at.elapsed(),
+            };
+        }
     }
 }
 
