@@ -1,7 +1,7 @@
 #[allow(unused_imports)]
 use lens_sl::{
-    inst, optimize, Algorithm, Config, LiveValue, NoTui, OptimizeOutcome, Register, ShouldCancel,
-    Tui, Word4, Word64, Word8,
+    Algorithm, Config, LiveValue, NoTui, OptimizeOutcome, Register, ShouldCancel, Tui, Word4,
+    Word8, Word64, inst, optimize,
 };
 
 fn main() {

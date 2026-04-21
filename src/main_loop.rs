@@ -13,8 +13,8 @@ use crate::reduce_bit_width::{ImmediateInfo, Reducer};
 use crate::tui::TuiHook;
 use crate::verify::{self, verify};
 use crate::word::prelude::*;
-use crate::{backward_graph, graph};
 use crate::{Cancelled, Config, OptimizeOutcome, OptimizeResult, ShouldCancel};
+use crate::{backward_graph, graph};
 
 // std imports
 use std::ops::ControlFlow::{self, Break, Continue};

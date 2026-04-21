@@ -12,8 +12,8 @@ use crate::oracle::{Oracle, SmtOracle};
 use crate::reduce_bit_width::{ImmediateInfo, Reducer};
 use crate::tui::TuiHook;
 use crate::word::prelude::*;
-use crate::{graph, OptimizeOutcome, OptimizeResult, ShouldCancel};
-use crate::{programs, Config};
+use crate::{Config, programs};
+use crate::{OptimizeOutcome, OptimizeResult, ShouldCancel, graph};
 
 // std imports
 use std::cell::{Ref, RefCell};
