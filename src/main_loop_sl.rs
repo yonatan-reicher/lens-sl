@@ -188,7 +188,8 @@ where
         backward_frontier.push((counter_examples.outputs().to_vec(), vec![]));
         next_backward_frontier.clear();
         //
-        tui.reset_lengths();
+        tui.report_length(Direction::Forward, 0);
+        tui.report_length(Direction::Backward, 0);
         for _length in 0..original_reduced.len() {
             tui.searching();
             tui.progress(0, stats.n_instructions);
