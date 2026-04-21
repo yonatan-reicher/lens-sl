@@ -68,14 +68,26 @@ pub enum ShouldCancel {
     #[default]
     Never,
     At(std::time::Instant),
+    Timeout(std::time::Duration),
 }
 
 impl ShouldCancel {
+    pub fn resolve_timeout(&self, now: std::time::Instant) -> Self {
+        use ShouldCancel::*;
+        match self {
+            Timeout(d) => At(now.checked_add(*d).unwrap_or(now)),
+            _ => *self,
+        }
+    }
+
     pub fn check(&self) -> bool {
         use ShouldCancel::*;
         match self {
             Never => false,
             At(t) => std::time::Instant::now() >= *t,
+            Timeout(_) => panic!(
+                "ShouldCancel::Timeout must be resolved before checking with resolve_timeout"
+            ),
         }
     }
 }
