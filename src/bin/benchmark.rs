@@ -1,5 +1,5 @@
 use functionality::Pipe;
-use lens_sl::{Algorithm, Cancelled, Config, Inst, ShouldCancel, Word4, Word32, optimize};
+use lens_sl::{optimize, Algorithm, Cancelled, Config, Inst, ShouldCancel, Word32, Word4};
 use std::env;
 use std::fs::{self, File};
 use std::hint::black_box;
@@ -8,8 +8,8 @@ use std::ops::ControlFlow::{self, Break, Continue};
 use std::panic;
 use std::path::Path;
 use std::process::exit;
-use std::sync::Mutex;
 use std::sync::mpsc;
+use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
