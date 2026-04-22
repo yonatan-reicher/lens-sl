@@ -141,6 +141,7 @@ where
             .cloned()
             .fold(Mask::JUST_FLAGS, |m, r| m | Mask::just_register(r)),
         tui,
+        postfix_len: 0,
     };
 
     optimizer.optimize()
@@ -192,6 +193,7 @@ struct Optimizer<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> {
     /// lattice of masks that are relevant to the search.
     top_mask: Mask,
     tui: &'a dyn TuiHook<&'a Graph<W>, State<W>>,
+    postfix_len: usize,
 }
 
 impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
@@ -213,8 +215,13 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                 "we do not deal with the case where the oracle does not give a counter-example for the empty program."
             );
         }
+        let empty_program = Programs::empty_program();
+        self.backward_seen
+            .insert(self.counter_examples.outputs()[0]);
+        self.backward_frontier
+            .insert(self.counter_examples.outputs()[0], empty_program.clone());
+        self.next_backward_frontier.clear();
         'restart: loop {
-            let empty_program = Programs::empty_program();
             // forward
             self.forward_seen.clear();
             self.forward_seen
@@ -229,17 +236,9 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                 .insert(self.counter_examples.inputs()[0], empty_program.clone());
             self.next_forward_frontier.clear();
             self.next_forward_frontier_ce_0.clear();
-            // backward
-            self.backward_seen.clear();
-            self.backward_seen
-                .insert(self.counter_examples.outputs()[0]);
-            self.backward_frontier.clear();
-            self.backward_frontier
-                .insert(self.counter_examples.outputs()[0], empty_program);
-            self.next_backward_frontier.clear();
             //
             self.tui.report_length(Direction::Forward, 0);
-            self.tui.report_length(Direction::Backward, 0);
+            self.tui.report_length(Direction::Backward, self.postfix_len);
             for _length in 0..self.original_reduced.len() {
                 self.tui.searching();
                 self.tui.progress(0, self.stats.n_instructions);
@@ -253,7 +252,10 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                 self.tui.expanding(direction);
                 if direction == Backward {
                     match self.expand_backward() {
-                        Continue(()) => continue,
+                        Continue(()) => {
+                            self.postfix_len += 1;
+                            continue;
+                        },
                         Break(Err(Cancelled)) => {
                             return OptimizeResult {
                                 outcome: OptimizeOutcome::Cancelled,
@@ -418,6 +420,10 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                         continue;
                     }
                     self.backward_seen.insert(next_state);
+                    self.next_backward_frontier
+                        .entry(next_state)
+                        .or_default()
+                        .extend(&next_postfixes);
                     // And if it's a winner, we may be done!
                     match next_postfixes.try_each(|mut postfix| {
                         postfix.reverse();
@@ -434,12 +440,18 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                         )
                     }) {
                         Continue(()) => (),
-                        Break(program_or_retry) => return Break(Ok(program_or_retry)),
+                        Break(ProgramOrRetry::Program(p)) => {
+                            return Break(Ok(ProgramOrRetry::Program(p)));
+                        }
+                        Break(ProgramOrRetry::Retry) => {
+                            // This is a tough one. We need to add the counter-example, reset the
+                            // forward search, but keep the state of this backward search.
+                            // We actually can't do that, for a number of reasons. So we must sort
+                            // of restart this backward search too.
+                            self.next_backward_frontier.clear();
+                            return Break(Ok(ProgramOrRetry::Retry));
+                        }
                     }
-                    self.next_backward_frontier
-                        .entry(next_state)
-                        .or_default()
-                        .extend(&next_postfixes);
                 }
             }
         }
@@ -475,7 +487,8 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                     return Continue(());
                 };
                 good_on_first_input.try_each(|postfix| {
-                    if !rest.iter().enumerate().any(|(ce, input)| {
+                    if rest.iter().enumerate().any(|(i, input)| {
+                        let ce = i + 1; // Because we skipped the first one.
                         let output = postfix
                             .iter()
                             .rev()
@@ -719,7 +732,9 @@ where
                 self.tui.found_counter_example(inp, out);
                 assert!(
                     !self.counter_examples.contains(&inp, &out),
-                    "Counter-example from reduced oracle should not have been seen before."
+                    "Counter-example from reduced oracle should not have been seen before.
+                    Program: {}",
+                    prog.iter().map(|i| format!("{i:?}")).join("\n")
                 );
                 self.counter_examples.push(inp, out);
                 Break(ProgramOrRetry::Retry)
