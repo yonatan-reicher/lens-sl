@@ -254,135 +254,32 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                     Backward
                 };
                 self.tui.expanding(direction);
-                if direction == Backward {
-                    match self.expand_backward() {
-                        Continue(()) => {
-                            self.postfix_len += 1;
-                            continue;
-                        },
-                        Break(Err(Cancelled)) => {
-                            return OptimizeResult {
-                                outcome: OptimizeOutcome::Cancelled,
-                                elapsed: self.started_at.elapsed(),
-                            };
+                let ret = match direction {
+                    Forward => self.expand_forward(),
+                    Backward => self.expand_backward(),
+                };
+                match ret {
+                    Continue(()) => {
+                        match direction {
+                            Forward => self.prefix_len += 1,
+                            Backward => self.postfix_len += 1,
                         }
-                        Break(Ok(ProgramOrRetry::Program(p))) => {
-                            return OptimizeResult {
-                                outcome: OptimizeOutcome::Program(p),
-                                elapsed: self.started_at.elapsed(),
-                            };
-                        }
-                        Break(Ok(ProgramOrRetry::Retry)) => continue 'restart,
+                        continue;
                     }
-                }
-                let len = self.forward_frontier.len();
-                for (i, (states, prog)) in self.forward_frontier.iter().enumerate() {
-                    self.tui.progress(i, len);
-                    // Should we stop?
-                    if self.should_cancel.check() {
+                    Break(Err(Cancelled)) => {
                         return OptimizeResult {
                             outcome: OptimizeOutcome::Cancelled,
                             elapsed: self.started_at.elapsed(),
                         };
                     }
-                    // First we need to check that all the states are properly represented in the bank.
-                    for s in states.iter().cloned() {
-                        if !self.bank.contains_key(&s.masked(self.top_mask)) {
-                            init_bank(
-                                &mut self.bank,
-                                s.masked(self.top_mask),
-                                self.enumeration_info,
-                                direction,
-                                &self.bm,
-                            );
-                        }
+                    Break(Ok(ProgramOrRetry::Program(p))) => {
+                        return OptimizeResult {
+                            outcome: OptimizeOutcome::Program(p),
+                            elapsed: self.started_at.elapsed(),
+                        };
                     }
-                    // The red code.
-                    let do_discard = direction == Forward;
-                    let mut discarded = FxHashSet::<Inst<W>>::default();
-                    for mask in self.top_mask.sub_masks() {
-                        for inst in insts_with_precondtion(&self.bank, states, mask) {
-                            // We can't do this filtering as part of the selecting the instructions
-                            // because the discard set changes through the loop.
-                            if discarded.contains(&inst) {
-                                self.stats.n_discarded += 1;
-                                self.stats.last_discard_size = discarded.len();
-                                continue;
-                            }
-                            let next_states = states
-                                .iter()
-                                .map(|s| (*s).mutate(|s| inst.run(s)))
-                                .collect::<Vec<_>>();
-                            // Did we succeed?
-                            {
-                                let prefixes = prog.clone().concat(inst);
-                                match Self::try_each_matching_postfix(
-                                    &self.backward_frontier,
-                                    self.counter_examples,
-                                    &next_states,
-                                    |postfix| {
-                                        prefixes.try_each(|prefix| {
-                                            // Find the full program!
-                                            let prog =
-                                                prefix.mutate(|p| p.extend(postfix.iter().rev()));
-                                            self.oracle.verify(&prog)
-                                        })
-                                    },
-                                ) {
-                                    // Continue(()) => todo!("what do we do here? '{prog:?}'"),
-                                    Continue(()) => (),
-                                    Break(ProgramOrRetry::Program(p)) => {
-                                        return OptimizeResult {
-                                            outcome: OptimizeOutcome::Program(p),
-                                            elapsed: self.started_at.elapsed(),
-                                        };
-                                    }
-                                    Break(ProgramOrRetry::Retry) => continue 'restart,
-                                };
-                            }
-                            if self.forward_seen.contains(&next_states) {
-                                if do_discard {
-                                    discarded.insert(inst);
-                                }
-                                continue;
-                            }
-                            self.forward_seen.insert(next_states.clone());
-                            // Extend Hila's discard set. Extend it by all the instructions which do the
-                            // exact same thing as this instruction on the current inputs.
-                            if do_discard {
-                                discarded.extend(insts_with_same_effect(
-                                    self.top_mask,
-                                    &self.bank,
-                                    mask,
-                                    states.as_slice(),
-                                    next_states.as_slice(),
-                                    &mut self.stats,
-                                ));
-                            }
-                            let prog = prog.clone().concat(inst);
-                            self.next_forward_frontier_ce_0
-                                .entry(next_states[0])
-                                .or_default()
-                                .extend(&prog);
-                            self.next_forward_frontier
-                                .entry(next_states)
-                                .or_default()
-                                .extend(&prog);
-                        }
-                    }
-                    if do_discard {
-                        assert_eq!(discarded.len(), self.stats.n_instructions);
-                    }
+                    Break(Ok(ProgramOrRetry::Retry)) => continue 'restart,
                 }
-                self.tui.progress(len, len);
-                self.forward_frontier.clear();
-                std::mem::swap(&mut self.next_forward_frontier, &mut self.forward_frontier);
-                self.forward_frontier_ce_0.clear();
-                std::mem::swap(
-                    &mut self.next_forward_frontier_ce_0,
-                    &mut self.forward_frontier_ce_0,
-                );
-                self.prefix_len += 1;
             } // end of length loop
             // let lengths = next_frontier
             //     .iter()
@@ -398,6 +295,105 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                 elapsed: self.started_at.elapsed(),
             };
         }
+    }
+
+    fn expand_forward(&mut self) -> ControlFlow<Result<ProgramOrRetry<WBig>, Cancelled>> {
+        let len = self.forward_frontier.len();
+        for (i, (states, prog)) in self.forward_frontier.iter().enumerate() {
+            self.tui.progress(i, len);
+            // Should we stop?
+            if self.should_cancel.check() {
+                return Break(Err(Cancelled));
+            }
+            // First we need to check that all the states are properly represented in the bank.
+            for s in states.iter().cloned() {
+                if !self.bank.contains_key(&s.masked(self.top_mask)) {
+                    init_bank(
+                        &mut self.bank,
+                        s.masked(self.top_mask),
+                        self.enumeration_info,
+                        Direction::Forward,
+                        &self.bm,
+                    );
+                }
+            }
+            // The red code.
+            let do_discard = true;
+            let mut discarded = FxHashSet::<Inst<W>>::default();
+            for mask in self.top_mask.sub_masks() {
+                for inst in insts_with_precondtion(&self.bank, states, mask) {
+                    // We can't do this filtering as part of the selecting the instructions
+                    // because the discard set changes through the loop.
+                    if discarded.contains(&inst) {
+                        self.stats.n_discarded += 1;
+                        self.stats.last_discard_size = discarded.len();
+                        continue;
+                    }
+                    let next_states = states
+                        .iter()
+                        .map(|s| (*s).mutate(|s| inst.run(s)))
+                        .collect::<Vec<_>>();
+                    // Did we succeed?
+                    {
+                        let prefixes = prog.clone().concat(inst);
+                        Self::try_each_matching_postfix(
+                            &self.backward_frontier,
+                            self.counter_examples,
+                            &next_states,
+                            |postfix| {
+                                prefixes.try_each(|prefix| {
+                                    // Find the full program!
+                                    let prog = prefix.mutate(|p| p.extend(postfix.iter().rev()));
+                                    self.oracle.verify(&prog)
+                                })
+                            },
+                        )
+                        .map_break(Ok)?;
+                    }
+                    if self.forward_seen.contains(&next_states) {
+                        if do_discard {
+                            discarded.insert(inst);
+                        }
+                        continue;
+                    }
+                    self.forward_seen.insert(next_states.clone());
+                    // Extend Hila's discard set. Extend it by all the instructions which do the
+                    // exact same thing as this instruction on the current inputs.
+                    if do_discard {
+                        discarded.extend(insts_with_same_effect(
+                            self.top_mask,
+                            &self.bank,
+                            mask,
+                            states.as_slice(),
+                            next_states.as_slice(),
+                            &mut self.stats,
+                        ));
+                    }
+                    let prog = prog.clone().concat(inst);
+                    self.next_forward_frontier_ce_0
+                        .entry(next_states[0])
+                        .or_default()
+                        .extend(&prog);
+                    self.next_forward_frontier
+                        .entry(next_states)
+                        .or_default()
+                        .extend(&prog);
+                }
+            }
+            if do_discard {
+                assert_eq!(discarded.len(), self.stats.n_instructions);
+            }
+        }
+        self.tui.progress(len, len);
+        self.forward_frontier.clear();
+        std::mem::swap(&mut self.next_forward_frontier, &mut self.forward_frontier);
+        self.forward_frontier_ce_0.clear();
+        std::mem::swap(
+            &mut self.next_forward_frontier_ce_0,
+            &mut self.forward_frontier_ce_0,
+        );
+        self.prefix_len += 1;
+        Continue(())
     }
 
     /// Expands the backward frontier by one more instruction. When reaches an state that looks fit
