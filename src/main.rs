@@ -100,6 +100,7 @@ fn main() {
             }
         }
     }
+    println!("Time: {}", humantime::Duration::from(p.elapsed));
 }
 
 fn parse_flag(args: &mut Vec<String>, flag: &str) -> bool {

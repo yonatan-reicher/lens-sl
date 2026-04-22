@@ -8,7 +8,7 @@ default-run = "lens-sl"
 [dependencies]
 bitflags = { version = "2.10.0", features = ["serde"] }
 derive_more = { version = "2.1.1", features = ["full"] }
-functionality = "1.0.0"
+functionality = "1.0.1"
 humantime = "2.3"
 itertools = "0.14"
 postcard = { version = "1.1", features = ["use-std"] } # A should-be-quick-enough binary format
@@ -19,6 +19,9 @@ smtlib = "0.3.0"
 [dev-dependencies]
 proptest = { version = "1.9.0", features = ["attr-macro"] }
 proptest-derive = "0.7.0"
+
+[profile.release]
+panic = "unwind"
 
 [profile.test.package.proptest]
 opt-level = 3
