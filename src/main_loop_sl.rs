@@ -142,6 +142,7 @@ where
             .fold(Mask::JUST_FLAGS, |m, r| m | Mask::just_register(r)),
         tui,
         postfix_len: 0,
+        prefix_len: 0,
     };
 
     optimizer.optimize()
@@ -194,6 +195,7 @@ struct Optimizer<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> {
     top_mask: Mask,
     tui: &'a dyn TuiHook<&'a Graph<W>, State<W>>,
     postfix_len: usize,
+    prefix_len: usize,
 }
 
 impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
@@ -236,10 +238,11 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                 .insert(self.counter_examples.inputs()[0], empty_program.clone());
             self.next_forward_frontier.clear();
             self.next_forward_frontier_ce_0.clear();
+            self.prefix_len = 0;
             //
-            self.tui.report_length(Direction::Forward, 0);
+            self.tui.report_length(Direction::Forward, self.prefix_len);
             self.tui.report_length(Direction::Backward, self.postfix_len);
-            for _length in 0..self.original_reduced.len() {
+            while self.postfix_len + self.prefix_len + 1 < self.original_reduced.len() {
                 self.tui.searching();
                 self.tui.progress(0, self.stats.n_instructions);
                 let direction = if self.config.forward_only
@@ -378,6 +381,7 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                     &mut self.next_forward_frontier_ce_0,
                     &mut self.forward_frontier_ce_0,
                 );
+                self.prefix_len += 1;
             } // end of length loop
             // let lengths = next_frontier
             //     .iter()
