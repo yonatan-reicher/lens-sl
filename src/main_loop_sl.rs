@@ -246,13 +246,10 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
             while self.postfix_len + self.prefix_len + 1 < self.original_reduced.len() {
                 self.tui.searching();
                 self.tui.progress(0, self.stats.n_instructions);
-                let direction = if self.config.forward_only
-                    || self.forward_frontier_ce_0.len() <= self.backward_frontier.len()
-                {
-                    Forward
-                } else {
-                    Backward
-                };
+                let direction = Direction::from_is_forward(
+                    self.config.forward_only
+                        || self.forward_frontier_ce_0.len() <= self.backward_frontier.len(),
+                );
                 self.tui.expanding(direction);
                 let ret = match direction {
                     Forward => self.expand_forward(),
