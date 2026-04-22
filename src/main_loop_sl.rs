@@ -12,8 +12,8 @@ use crate::oracle::{Oracle, SmtOracle};
 use crate::reduce_bit_width::{ImmediateInfo, Reducer};
 use crate::tui::TuiHook;
 use crate::word::prelude::*;
+use crate::{Cancelled, OptimizeOutcome, OptimizeResult, ShouldCancel, graph};
 use crate::{Config, programs};
-use crate::{OptimizeOutcome, OptimizeResult, ShouldCancel, graph};
 
 // std imports
 use std::cell::{Ref, RefCell};
@@ -118,6 +118,7 @@ where
         forward_frontier_ce_0: default(),
         backward_frontier: default(),
         next_forward_frontier: default(),
+        next_forward_frontier_ce_0: default(),
         next_backward_frontier: default(),
         bank: default(),
         counter_examples,
@@ -169,6 +170,7 @@ struct Optimizer<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> {
     forward_frontier_ce_0: FxHashMap<State<W>, Programs<W>>,
     /// Swapping buffer for the forward frontier.
     next_forward_frontier: FxHashMap<Vec<State<W>>, Programs<W>>,
+    next_forward_frontier_ce_0: FxHashMap<State<W>, Programs<W>>,
     /// Swapping buffer for the backward frontier.
     next_backward_frontier: FxHashMap<State<W>, Programs<W>>,
     /// Computes equivalence classes in a semi-lazy way.
@@ -222,7 +224,11 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                 self.counter_examples.inputs().to_vec(),
                 empty_program.clone(),
             );
+            self.forward_frontier_ce_0.clear();
+            self.forward_frontier_ce_0
+                .insert(self.counter_examples.inputs()[0], empty_program.clone());
             self.next_forward_frontier.clear();
+            self.next_forward_frontier_ce_0.clear();
             // backward
             self.backward_seen.clear();
             self.backward_seen
@@ -238,14 +244,30 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                 self.tui.searching();
                 self.tui.progress(0, self.stats.n_instructions);
                 let direction = if self.config.forward_only
-                    || self.forward_frontier.len() < self.backward_frontier.len()
+                    || self.forward_frontier_ce_0.len() <= self.backward_frontier.len()
                 {
                     Forward
                 } else {
                     Backward
                 };
+                self.tui.expanding(direction);
                 if direction == Backward {
-                    self.expand_backward();
+                    match self.expand_backward() {
+                        Continue(()) => continue,
+                        Break(Err(Cancelled)) => {
+                            return OptimizeResult {
+                                outcome: OptimizeOutcome::Cancelled,
+                                elapsed: self.started_at.elapsed(),
+                            };
+                        }
+                        Break(Ok(ProgramOrRetry::Program(p))) => {
+                            return OptimizeResult {
+                                outcome: OptimizeOutcome::Program(p),
+                                elapsed: self.started_at.elapsed(),
+                            };
+                        }
+                        Break(Ok(ProgramOrRetry::Retry)) => continue 'restart,
+                    }
                 }
                 let len = self.forward_frontier.len();
                 for (i, (states, prog)) in self.forward_frontier.iter().enumerate() {
@@ -331,11 +353,15 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                                     &mut self.stats,
                                 ));
                             }
-                            // TODO: you know how to solve this memory allocation...
+                            let prog = prog.clone().concat(inst);
+                            self.next_forward_frontier_ce_0
+                                .entry(next_states[0])
+                                .or_default()
+                                .extend(&prog);
                             self.next_forward_frontier
                                 .entry(next_states)
                                 .or_default()
-                                .extend(&prog.clone().concat(inst));
+                                .extend(&prog);
                         }
                     }
                     if do_discard {
@@ -343,11 +369,13 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                     }
                 }
                 self.tui.progress(len, len);
-                // ------------------------------ Expand Phase -----------------------------------------
-                self.tui.expanding(direction);
-                //expand(&mut todo!(), g.tui);
                 self.forward_frontier.clear();
                 std::mem::swap(&mut self.next_forward_frontier, &mut self.forward_frontier);
+                self.forward_frontier_ce_0.clear();
+                std::mem::swap(
+                    &mut self.next_forward_frontier_ce_0,
+                    &mut self.forward_frontier_ce_0,
+                );
             } // end of length loop
             // let lengths = next_frontier
             //     .iter()
@@ -365,10 +393,19 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
         }
     }
 
-    fn expand_backward(&mut self) -> ControlFlow<OptimizeResult<WBig>> {
+    /// Expands the backward frontier by one more instruction. When reaches an state that looks fit
+    /// for it, it builds a program and sends to the verifier, which means this can add counter
+    /// examples or end the search, or do nothing.
+    /// I am still not sure what to do if we added a counter-example, need to see how we will handle
+    /// it.
+    /// TODO: above.
+    fn expand_backward(&mut self) -> ControlFlow<Result<ProgramOrRetry<WBig>, Cancelled>> {
         // For each instruction,
         for (i_inst, inst) in Inst::enumerate(self.enumeration_info).enumerate() {
             self.tui.progress(i_inst, self.stats.n_instructions);
+            if self.should_cancel.check() {
+                return Break(Err(Cancelled));
+            }
             // And for each state,
             for (state, postfixes) in self.backward_frontier.iter() {
                 // Calculate the next state, and add it!
@@ -380,28 +417,28 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                     }
                     self.backward_seen.insert(next_state);
                     // And if it's a winner, we may be done!
-                    Self::try_each_matching_prefix(
-                        &self.forward_frontier_ce_0,
-                        self.counter_examples,
-                        &[next_state],
-                        |prefix| {
-                            postfixes.try_each(|postfix| {
-                                let prog = prefix
-                                    .iter()
-                                    .cloned()
-                                    .chain(std::iter::once(inst))
-                                    .chain(postfix.iter().rev().cloned())
-                                    .collect::<Vec<_>>();
+                    match next_postfixes.try_each(|mut postfix| {
+                        postfix.reverse();
+                        Self::try_each_matching_prefix(
+                            &self.forward_frontier_ce_0,
+                            self.counter_examples,
+                            &next_state,
+                            &postfix,
+                            |prefix| {
+                                // Here we already reversed the postfix, so we don't again.
+                                let prog = prefix.mutate(|p| p.extend(&postfix));
                                 self.oracle.verify(&prog)
-                            })
-                        },
-                    );
+                            },
+                        )
+                    }) {
+                        Continue(()) => (),
+                        Break(program_or_retry) => return Break(Ok(program_or_retry)),
+                    }
                     self.next_backward_frontier
                         .entry(next_state)
                         .or_default()
                         .extend(&next_postfixes);
                 }
-                todo!()
             }
         }
         self.tui
