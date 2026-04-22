@@ -403,6 +403,8 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
         // For each instruction,
         for (i_inst, inst) in Inst::enumerate(self.enumeration_info).enumerate() {
             self.tui.progress(i_inst, self.stats.n_instructions);
+            // TODO: Move should_cancel checks more inside to make sure we don't do slow down the
+            // testing process
             if self.should_cancel.check() {
                 return Break(Err(Cancelled));
             }
