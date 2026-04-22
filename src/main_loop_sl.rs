@@ -365,6 +365,56 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
         }
     }
 
+    fn expand_backward(&mut self) -> ControlFlow<OptimizeResult<WBig>> {
+        // For each instruction,
+        for (i_inst, inst) in Inst::enumerate(self.enumeration_info).enumerate() {
+            self.tui.progress(i_inst, self.stats.n_instructions);
+            // And for each state,
+            for (state, postfixes) in self.backward_frontier.iter() {
+                // Calculate the next state, and add it!
+                let next_postfixes = postfixes.clone().concat(inst);
+                for next_state in inst.run_backward(*state, &self.bm) {
+                    // First gotta make sure we haven't see it
+                    if self.backward_seen.contains(&next_state) {
+                        continue;
+                    }
+                    self.backward_seen.insert(next_state);
+                    // And if it's a winner, we may be done!
+                    Self::try_each_matching_prefix(
+                        &self.forward_frontier_ce_0,
+                        self.counter_examples,
+                        &[next_state],
+                        |prefix| {
+                            postfixes.try_each(|postfix| {
+                                let prog = prefix
+                                    .iter()
+                                    .cloned()
+                                    .chain(std::iter::once(inst))
+                                    .chain(postfix.iter().rev().cloned())
+                                    .collect::<Vec<_>>();
+                                self.oracle.verify(&prog)
+                            })
+                        },
+                    );
+                    self.next_backward_frontier
+                        .entry(next_state)
+                        .or_default()
+                        .extend(&next_postfixes);
+                }
+                todo!()
+            }
+        }
+        self.tui
+            .progress(self.stats.n_instructions, self.stats.n_instructions);
+        // Done! Switch the buffers.
+        self.backward_frontier.clear();
+        std::mem::swap(
+            &mut self.next_backward_frontier,
+            &mut self.backward_frontier,
+        );
+        Continue(())
+    }
+
     /// Run on all postfixes that given the states to run from, output the same state as their
     /// matching counter-example's output.
     fn try_each_matching_postfix<T>(
@@ -400,6 +450,37 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                 })
             }
         }
+    }
+
+    /// Given a postfix, and a state that when ran the postfix on it gives the output of the first
+    /// counter-example, run a function on each prefix that that when combined with the postfix
+    /// gives the correct output on all counter-examples.
+    /// The postfix should be in normal order, not reversed.
+    fn try_each_matching_prefix<T>(
+        forward_frontier: &FxHashMap<State<W>, Programs<W>>,
+        counter_examples: &CounterExamplesCell<W>,
+        state: &State<W>,
+        postfix: &[Inst<W>],
+        mut f: impl FnMut(Program<W>) -> ControlFlow<T>,
+    ) -> ControlFlow<T> {
+        debug_assert_eq!(
+            postfix.iter().fold(*state, |s, i| s.mutate(|s| i.run(s))),
+            counter_examples.outputs()[0]
+        );
+        let Some(prefixes) = forward_frontier.get(state) else {
+            return Continue(());
+        };
+        prefixes.try_each(|prefix| {
+            let (inputs, outputs) = (counter_examples.inputs(), counter_examples.outputs());
+            let (other_inputs, expected_outputs) = (&inputs[1..], &outputs[1..]);
+            let prog = prefix.iter().chain(postfix);
+            let other_outputs = other_inputs
+                .iter()
+                .map(|input| prog.clone().fold(*input, |s, i| s.mutate(|s| i.run(s))));
+            let good = other_outputs.zip(expected_outputs).all(|(a, b)| a == *b);
+            std::mem::drop((inputs, outputs)); // Must drop these before calling the function.
+            if good { f(prefix) } else { Continue(()) }
+        })
     }
 }
 
