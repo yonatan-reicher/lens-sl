@@ -7,6 +7,7 @@ use crate::arm::enumerate::EnumerationInfoOptions;
 use crate::bool::all_eq;
 use crate::bool::prelude::*;
 use crate::collect_registers;
+use crate::len::Len;
 use crate::reduce_bit_width::Reducer;
 use crate::word::prelude::*;
 use std::fmt::{self, Debug, Display, Formatter};
@@ -607,12 +608,16 @@ impl Mask {
 
     /// This is the power-set!
     pub fn sub_masks(self) -> impl Iterator<Item = Mask> + Clone {
-        self.singleton_sub_masks().powerset().map(|singletons| {
-            singletons
-                .into_iter()
-                .reduce(|x, y| x | y)
-                .unwrap_or_default()
-        })
+        self.into_bit_mask()
+            .sub_masks_ascending_len()
+            .map(|b| b.into())
+    }
+
+    /// Other must contain self.
+    pub fn masks_between(self, other: Self) -> impl Iterator<Item = Self> + Clone {
+        assert!(self.is_sub_mask(&other));
+        let diff = self ^ other;
+        diff.sub_masks().map(move |m| self | m)
     }
 
     pub fn len(&self) -> usize {
@@ -657,6 +662,7 @@ impl<'st> BoolEq<SmtBool<'st>> for Mask<SmtBool<'st>> {
 
 impl BitMask {
     pub const EMPTY: BitMask = BitMask(0);
+    pub const FULL: BitMask = BitMask(0b1_1111_1111_1111_1111 /* 17 ones */);
 
     pub fn into_mask(self) -> Mask {
         self.into()
@@ -668,6 +674,81 @@ impl BitMask {
 
     pub const fn is_sub_mask(&self, other: &Self) -> bool {
         (self.0 & other.0) == self.0
+    }
+
+    /// Returns all sub-masks with the given length.
+    pub fn sub_masks_with_len(self, len: u16) -> impl Iterator<Item = BitMask> + Clone {
+        // This is called Gosper's Hack
+        fn next_int_with_same_amount_bits(n: u32) -> u32 {
+            let n = n as i32;
+            let c = n & -n;
+            let r = n + c;
+            ((((r ^ n) >> 2) / c) | r) as u32
+        }
+        let self_len = self.len();
+        let lowest_len_bits_set = (1 << len) - 1; // For `len` = 3, this is 0b111.
+        let all_bits_set = (1 << self_len) - 1;
+        // This variable holds holds `len` active bits out of the first `self_len` bits.
+        let mut next = Some(lowest_len_bits_set);
+        let stop_after = all_bits_set;
+        std::iter::from_fn(move || {
+            // Edge case: empty!
+            if len == 0 {
+                return match next {
+                    Some(_) => {
+                        next = None;
+                        Some(BitMask::EMPTY)
+                    }
+                    None => None,
+                };
+            }
+            let current = next?;
+            next = Some(next_int_with_same_amount_bits(current)).filter(|i| *i <= stop_after);
+            // Now map the `self_len` bits from current to the bits in self.
+            let mut ret = BitMask::EMPTY;
+            let mut next_bit_index = 0;
+            for i in 0..BitMask::FULL.len() {
+                let bit_set_in_self = ((self.0 >> i) % 2) == 1;
+                if !bit_set_in_self {
+                    continue;
+                };
+                let bit_set_in_current = ((current >> next_bit_index) % 2) == 1;
+                ret.0 |= (1 & bit_set_in_current as u32) << i;
+                next_bit_index += 1;
+            }
+            Some(ret)
+        })
+    }
+
+    pub fn sub_masks_shachar(self) -> impl Iterator<Item = BitMask> + Clone {
+        let mut next = Some(self);
+        std::iter::from_fn(move || {
+            let current = next?;
+            next = match current {
+                BitMask(0) => None,
+                BitMask(x) => Some(BitMask((x - 1) & self.0)),
+            };
+            Some(current)
+        })
+    }
+
+    pub fn sub_masks_descending_len(self) -> impl Iterator<Item = BitMask> + Clone {
+        (0..=self.len() as u16)
+            .rev()
+            .flat_map(move |l| self.sub_masks_with_len(l))
+    }
+
+    pub fn sub_masks_ascending_len(self) -> impl Iterator<Item = BitMask> + Clone {
+        (0..=self.len() as u16).flat_map(move |l| self.sub_masks_with_len(l))
+    }
+}
+
+impl Len for BitMask {
+    fn len(&self) -> usize {
+        self.0.count_ones() as usize
+    }
+    fn is_empty(&self) -> bool {
+        *self == BitMask::EMPTY
     }
 }
 
@@ -1008,11 +1089,74 @@ mod tests {
 
     #[property_test]
     fn mask_to_bit_mask(a: Mask) {
+        println!("a {a}");
         prop_assert_eq!(a, a.into_bit_mask().into_mask());
     }
 
     #[property_test]
     fn bit_mask_to_mask(a: BitMask) {
+        println!("a {a}");
         prop_assert_eq!(a, a.into_mask().into_bit_mask());
+    }
+
+    #[test]
+    fn bit_mask_full_len_is_17() {
+        assert_eq!(BitMask::FULL.len(), 17);
+    }
+
+    #[property_test]
+    fn sub_masks_descending_len_len_descending(m: BitMask) {
+        println!("m {m}");
+        prop_assert!(
+            m.sub_masks_descending_len()
+                .is_sorted_by(|a, b| a.len() >= b.len())
+        );
+    }
+
+    #[property_test]
+    fn sub_masks_descending_len_all_unique(m: BitMask) {
+        println!("m {m}");
+        prop_assert_eq!(
+            m.sub_masks_descending_len().duplicates().count(),
+            0,
+            "should have no duplicates!"
+        );
+    }
+
+    #[property_test(config = ProptestConfig { cases: 100, .. ProptestConfig::default() })]
+    fn sub_masks_descending_len_count(m: BitMask) {
+        println!("m {m}");
+        prop_assert_eq!(
+            m.sub_masks_descending_len().count(),
+            2usize.pow(m.len() as u32)
+        );
+    }
+
+    #[test]
+    fn mask_full_matches_bit_mask_full() {
+        assert_eq!(Mask::FULL.into_bit_mask(), BitMask::FULL);
+        assert_eq!(Mask::FULL, BitMask::FULL.into_mask());
+    }
+
+    #[property_test]
+    fn sub_masks_shachars_algorithm_count(m: BitMask) {
+        println!("m {m}");
+        prop_assert_eq!(m.sub_masks_shachar().count(), 2usize.pow(m.len() as u32));
+    }
+
+    #[property_test]
+    fn sub_masks_shachars_algorithm_all_unique(m: BitMask) {
+        println!("m {m}");
+        prop_assert_eq!(m.sub_masks_shachar().duplicates().count(), 0);
+    }
+
+    #[property_test]
+    fn sub_masks_shachar_gosper_same(m: BitMask) {
+        use std::collections::HashSet;
+        println!("m {m}");
+        prop_assert_eq!(
+            m.sub_masks_shachar().collect::<HashSet<_>>(),
+            m.sub_masks_ascending_len().collect::<HashSet<_>>(),
+        );
     }
 }
