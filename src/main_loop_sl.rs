@@ -319,7 +319,7 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
             // The red code.
             let do_discard = true;
             let mut discarded = FxHashSet::<Inst<W>>::default();
-            for mask in self.top_mask.sub_masks() {
+            for mask in Self::input_sub_masks(self.top_mask) {
                 for inst in insts_with_precondtion(&self.bank, states, mask) {
                     // We can't do this filtering as part of the selecting the instructions
                     // because the discard set changes through the loop.
@@ -549,6 +549,34 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
             let good = other_outputs.zip(expected_outputs).all(|(a, b)| a == *b);
             std::mem::drop((inputs, outputs)); // Must drop these before calling the function.
             if good { f(prefix) } else { Continue(()) }
+        })
+    }
+
+    fn input_sub_masks(mask: Mask) -> impl Iterator<Item = Mask> {
+        let flags = mask.flags;
+        let bit_mask_no_flags = Mask {
+            flags: false,
+            ..mask
+        }
+        .into_bit_mask();
+        (0..=2).flat_map(move |n_regs| {
+            if flags {
+                [false, true].as_slice()
+            } else {
+                [false].as_slice()
+            }
+            .iter()
+            .flat_map(move |&include_flags| {
+                bit_mask_no_flags
+                    .sub_masks_with_len(n_regs)
+                    .map(|m| m.into_mask())
+                    .map(move |m| {
+                        m | Mask {
+                            flags: include_flags,
+                            ..Mask::EMPTY
+                        }
+                    })
+            })
         })
     }
 }
