@@ -132,9 +132,9 @@ fn io_thread_main<State: Debug + Display>(channel: Receiver<Msg<State>>) -> impl
         let mut state = IoThreadState::default();
         let mut msg_queue = vec![];
         loop {
-            get_all_messages_or_block(&channel, &mut msg_queue).unwrap_or_else(|err| {
-                panic!("{err}");
-            });
+            if get_all_messages_or_block(&channel, &mut msg_queue).is_err() {
+                break;
+            }
             for msg in msg_queue.drain(..) {
                 msg.run(&mut state)
             }
