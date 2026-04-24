@@ -1,8 +1,8 @@
 use functionality::Pipe;
 use lens_sl::{Algorithm, Config, Inst, OptimizeOutcome, ShouldCancel, Word4, Word32, optimize};
 use serde::{Deserialize, Serialize};
-use std::ffi::c_int;
 use std::env;
+use std::ffi::c_int;
 use std::fs::{self, File};
 use std::hint::black_box;
 use std::io::{Read, Write};
