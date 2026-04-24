@@ -628,9 +628,8 @@ fn insts_with_same_effect<W: Word + HasBitWord>(
     let stats = &*std::cell::UnsafeCell::from_mut(stats);
     // Look at super-masks of the input
     // TODO: We can do this more efficiently
-    top_mask
-        .sub_masks()
-        .filter(move |m| sub_input_mask.is_sub_mask(m))
+    sub_input_mask
+        .masks_between(top_mask)
         .flat_map(move |sub_input_mask| {
             let sub_inputs = inputs
                 .iter()
