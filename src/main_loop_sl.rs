@@ -596,7 +596,7 @@ fn insts_with_precondtion<'a, W: Word + HasBitWord>(
     bank: &'a Bank<W>,
     inputs: &'a [State<W>],
     input_mask: Mask,
-) -> impl Iterator<Item = Inst<W>> + use<'a, W> {
+) -> impl IntoIterator<Item = Inst<W>> + use<'a, W> {
     let empty = Default::default();
     inputs
         .iter()
@@ -612,10 +612,7 @@ fn insts_with_precondtion<'a, W: Word + HasBitWord>(
         .collect::<Vec<_>>()
         // Intersect!
         .as_slice()
-        .pipe(|a| intersect_all(a.iter()))
-        .cloned()
-        .collect::<Vec<_>>()
-        .into_iter()
+        .pipe(|a| intersect_all(a.iter())) // TODO: Change this with a syntactic lookup
 }
 
 /// Gets instructions which have the same effect on the input state
@@ -680,8 +677,12 @@ fn insts_with_same_effect<W: Word + HasBitWord>(
                             .collect::<Vec<_>>()
                             .into_iter(),
                     )
-                    .cloned()
-                    .inspect(|_| stats.total_intersection_output_sizes += 1)
+                    .pipe(|s| {
+                        let _ = s
+                            .iter()
+                            .inspect(|_| stats.total_intersection_output_sizes += 1);
+                        s
+                    })
                 })
         })
 }
