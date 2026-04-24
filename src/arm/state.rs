@@ -24,8 +24,6 @@ use smtlib::terms::Const;
 use proptest::prelude::*;
 #[cfg(test)]
 use proptest_derive::*;
-// other
-use itertools::Itertools;
 
 // ========================================== Traits ==============================================
 
