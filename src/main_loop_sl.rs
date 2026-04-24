@@ -114,8 +114,6 @@ where
         original_reduced: reduced_program,
         enumeration_info,
         forward_seen: default(),
-        backward_seen: default(),
-        add_to_backward_seen: default(),
         forward_frontier: default(),
         forward_frontier_ce_0: default(),
         backward_frontier: default(),
@@ -161,11 +159,6 @@ struct Optimizer<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> {
     enumeration_info: EnumerationInfo<'a, W>,
     /// The set of state vectors we've already visited, and don't want to visit again.
     forward_seen: FxHashSet<Vec<State<W>>>,
-    /// Set of states visited in the backward postfix expansion that we don't want to visit again.
-    /// This one is on states and not state vectors, because we only search backwards on the first
-    /// counter-example's output.
-    backward_seen: FxHashSet<State<W>>,
-    add_to_backward_seen: FxHashSet<State<W>>,
     /// Set of discovered-but-unvisited state vectors and their corresponding prefixes. Kind of like
     /// the current layer in Breadth-First-Search.
     forward_frontier: FxHashMap<Vec<State<W>>, Programs<W>>,
@@ -221,8 +214,6 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
             );
         }
         let empty_program = Programs::empty_program();
-        self.backward_seen
-            .insert(self.counter_examples.outputs()[0]);
         self.backward_frontier
             .insert(self.counter_examples.outputs()[0], empty_program.clone());
         self.next_backward_frontier.clear();
@@ -428,13 +419,6 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                 // Calculate the next state, and add it!
                 let next_postfixes = postfixes.clone().concat(inst);
                 for next_state in inst.run_backward(*state, &self.bm) {
-                    // First gotta make sure we haven't see it
-                    if self.backward_seen.contains(&next_state)
-                        || self.add_to_backward_seen.contains(&next_state)
-                    {
-                        continue;
-                    }
-                    self.add_to_backward_seen.insert(next_state);
                     self.next_backward_frontier
                         .entry(next_state)
                         .or_default()
@@ -464,7 +448,6 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                             // We actually can't do that, for a number of reasons. So we must sort
                             // of restart this backward search too.
                             self.next_backward_frontier.clear();
-                            self.add_to_backward_seen.clear();
                             return Break(Ok(ProgramOrRetry::Retry));
                         }
                     }
@@ -479,7 +462,6 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
             &mut self.next_backward_frontier,
             &mut self.backward_frontier,
         );
-        self.backward_seen.extend(self.add_to_backward_seen.drain());
         Continue(())
     }
 
