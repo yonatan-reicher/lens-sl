@@ -358,15 +358,28 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                     self.forward_seen.insert(next_states.clone());
                     // Extend Hila's discard set. Extend it by all the instructions which do the
                     // exact same thing as this instruction on the current inputs.
+                    let do_subsumption = true;
                     if do_discard {
-                        discarded.extend(insts_with_same_effect(
-                            self.top_mask,
-                            &self.bank,
-                            mask,
-                            states.as_slice(),
-                            next_states.as_slice(),
-                            &mut self.stats,
-                        ));
+                        if do_subsumption {
+                            discarded.extend(insts_with_same_effect(
+                                self.top_mask,
+                                &self.bank,
+                                mask,
+                                states.as_slice(),
+                                next_states.as_slice(),
+                                &mut self.stats,
+                            ));
+                        } else {
+                            discarded.extend(intersect_all(states.iter().zip(&next_states).map(
+                                |(s, next_s)| {
+                                    self.bank
+                                        .get(&s.masked(mask))
+                                        .unwrap()
+                                        .get(&next_s.masked(inst.potential_write_mask()))
+                                        .unwrap()
+                                },
+                            )));
+                        }
                     }
                     let prog = prog.clone().concat(inst);
                     self.next_forward_frontier_ce_0
