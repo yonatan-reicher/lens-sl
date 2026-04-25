@@ -109,7 +109,8 @@ where
     };
 
     let enumeration_info = EnumerationInfo {
-        registers: EnumerationInfoOptions::Limited(&registers),
+        inp_registers: EnumerationInfoOptions::Limited(&registers),
+        out_registers: EnumerationInfoOptions::Limited(&registers),
         immediates: EnumerationInfoOptions::Limited(&immediates),
         include_nop: false,
         skip_cond_code: false,

@@ -4,7 +4,7 @@ use functionality::Pipe;
 use itertools::Either;
 
 use crate::all::All;
-use crate::arm::{ArgType, CondCode, Inst, OpCode, Register, ShiftCode};
+use crate::arm::{ArgType, CondCode, Inst, OpCode, RegArgType, Register, ShiftCode};
 use crate::word::prelude::*;
 use std::fmt::Debug;
 
@@ -28,8 +28,10 @@ pub struct Enumerator<'a, W, WShift = BitWord<W>> {
 /// multiple enumerators using the same configuration.
 #[derive(Clone, Copy, derive_more::Debug)]
 pub struct EnumerationInfo<'a, W> {
-    /// The registers to use. Must not be empty.
-    pub registers: EnumerationInfoOptions<'a, Register>,
+    /// Input registers to use. Input-output registers are taken from this set.
+    pub inp_registers: EnumerationInfoOptions<'a, Register>,
+    /// Output registers to use.
+    pub out_registers: EnumerationInfoOptions<'a, Register>,
     /// The immediates to use. Must not be empty.
     pub immediates: EnumerationInfoOptions<'a, W>,
     pub include_nop: bool,
@@ -67,7 +69,11 @@ impl<'a, W: Word + HasBitWord> Enumerator<'a, W> {
         // Take the index, and index into the correct array.
         let i = self.arg_indices[arg];
         match self.arg_types()[arg] {
-            ArgType::Reg(..) => match &ei.registers {
+            ArgType::Reg(RegArgType::Inp | RegArgType::InpOut) => match &ei.inp_registers {
+                EnumerationInfoOptions::Limited(r) => r.get(i).map(|r| Word8::from(*r).into_word()),
+                EnumerationInfoOptions::Unlimited => Some(i.into()),
+            },
+            ArgType::Reg(RegArgType::Out) => match &ei.out_registers {
                 EnumerationInfoOptions::Limited(r) => r.get(i).map(|r| Word8::from(*r).into_word()),
                 EnumerationInfoOptions::Unlimited => Some(i.into()),
             },
@@ -82,7 +88,11 @@ impl<'a, W: Word + HasBitWord> Enumerator<'a, W> {
     /// Returns the length of the array that the given argument index indexes into.
     fn try_arg_max(&self, arg: usize, ei: &EnumerationInfo<W>) -> Option<usize> {
         match self.arg_types()[arg] {
-            ArgType::Reg(..) => match &ei.registers {
+            ArgType::Reg(RegArgType::Inp | RegArgType::InpOut) => match &ei.inp_registers {
+                EnumerationInfoOptions::Limited(r) => r.len().checked_sub(1),
+                EnumerationInfoOptions::Unlimited => Some(Register::COUNT as usize - 1),
+            },
+            ArgType::Reg(RegArgType::Out) => match &ei.out_registers {
                 EnumerationInfoOptions::Limited(r) => r.len().checked_sub(1),
                 EnumerationInfoOptions::Unlimited => Some(Register::COUNT as usize - 1),
             },
@@ -227,7 +237,8 @@ impl<'a, W, WShift> Default for Enumerator<'a, W, WShift> {
 impl<'a, W> Default for EnumerationInfo<'a, W> {
     fn default() -> Self {
         Self {
-            registers: Default::default(),
+            inp_registers: Default::default(),
+            out_registers: Default::default(),
             immediates: Default::default(),
             include_nop: false,
             skip_cond_code: false,
@@ -294,7 +305,8 @@ mod tests {
     fn does_not_repeat() {
         assert!(
             Enumerator::new(EnumerationInfo::<Word8> {
-                registers: EnumerationInfoOptions::Limited(&[Register(2)]),
+                inp_registers: EnumerationInfoOptions::Limited(&[Register(2)]),
+                out_registers: EnumerationInfoOptions::Limited(&[Register(2)]),
                 immediates: EnumerationInfoOptions::Limited(&[42.into()]),
                 ..Default::default()
             })
@@ -308,7 +320,8 @@ mod tests {
     fn include_nop_false() {
         assert!(
             Enumerator::new(EnumerationInfo {
-                registers: EnumerationInfoOptions::Limited(&[Register(5)]),
+                inp_registers: EnumerationInfoOptions::Limited(&[Register(5)]),
+                out_registers: EnumerationInfoOptions::Limited(&[Register(5)]),
                 immediates: EnumerationInfoOptions::<Word8>::Limited(&[69.into()]),
                 include_nop: false,
                 ..Default::default()
@@ -321,7 +334,8 @@ mod tests {
     fn include_nop_true() {
         assert!(
             Enumerator::new(EnumerationInfo {
-                registers: EnumerationInfoOptions::Limited(&[Register(5)]),
+                inp_registers: EnumerationInfoOptions::Limited(&[Register(5)]),
+                out_registers: EnumerationInfoOptions::Limited(&[Register(5)]),
                 immediates: EnumerationInfoOptions::<Word4>::Limited(&[69.into()]),
                 include_nop: true,
                 ..Default::default()
@@ -333,7 +347,8 @@ mod tests {
     #[test]
     pub fn test_count() {
         let c = Enumerator::new(EnumerationInfo::<Word8> {
-            registers: EnumerationInfoOptions::Limited(&[Register(2)]),
+            inp_registers: EnumerationInfoOptions::Limited(&[Register(2)]),
+            out_registers: EnumerationInfoOptions::Limited(&[Register(2)]),
             immediates: EnumerationInfoOptions::Limited(&[5.into()]),
             include_nop: true,
             skip_cond_code: false,
@@ -349,7 +364,8 @@ mod tests {
     pub fn test_count_no_shift_if_no_shift_args() {
         assert!(
             Enumerator::new(EnumerationInfo::<Word8> {
-                registers: EnumerationInfoOptions::Limited(&[Register(2)]),
+                inp_registers: EnumerationInfoOptions::Limited(&[Register(2)]),
+                out_registers: EnumerationInfoOptions::Limited(&[Register(2)]),
                 immediates: EnumerationInfoOptions::Limited(&[105.into(), 202.into()]),
                 include_nop: false,
                 skip_cond_code: true,
@@ -367,10 +383,10 @@ mod tests {
     ) {
         prop_assume!(!registers.is_empty());
         prop_assume!(!immediates.is_empty());
+        let regs = registers.iter().copied().collect::<Box<[_]>>();
         let ei = EnumerationInfo::<Word8> {
-            registers: EnumerationInfoOptions::Limited(
-                &registers.iter().copied().collect::<Box<[_]>>(),
-            ),
+            inp_registers: EnumerationInfoOptions::Limited(&regs),
+            out_registers: EnumerationInfoOptions::Limited(&regs),
             immediates: EnumerationInfoOptions::Limited(
                 &immediates.iter().copied().collect::<Box<[_]>>(),
             ),
@@ -416,7 +432,8 @@ mod tests {
     #[test]
     fn enumeration_info_unlimited_range_is_full() {
         let v = to_vec(&EnumerationInfo::<Word4> {
-            registers: EnumerationInfoOptions::Unlimited,
+            inp_registers: EnumerationInfoOptions::Unlimited,
+            out_registers: EnumerationInfoOptions::Unlimited,
             immediates: EnumerationInfoOptions::Unlimited,
             include_nop: false,
             skip_cond_code: true,
@@ -451,7 +468,8 @@ mod tests {
     #[test]
     fn commutatives_are_half_trimmed() {
         let mut v = Enumerator::new(EnumerationInfo::<Word4> {
-            registers: EnumerationInfoOptions::Unlimited,
+            inp_registers: EnumerationInfoOptions::Unlimited,
+            out_registers: EnumerationInfoOptions::Unlimited,
             immediates: EnumerationInfoOptions::Unlimited,
             include_nop: false,
             skip_cond_code: true,
@@ -463,7 +481,8 @@ mod tests {
     #[test]
     fn empty_registers() {
         for inst in Enumerator::new(EnumerationInfo::<Word4> {
-            registers: EnumerationInfoOptions::Limited(&[]),
+            inp_registers: EnumerationInfoOptions::Limited(&[]),
+            out_registers: EnumerationInfoOptions::Limited(&[]),
             immediates: EnumerationInfoOptions::Limited(&[1.into()]),
             include_nop: false,
             skip_cond_code: false,
@@ -481,7 +500,8 @@ mod tests {
     fn ror_shift_code_appears() {
         assert_eq!(
             Enumerator::new(EnumerationInfo::<Word4> {
-                registers: EnumerationInfoOptions::Limited(&[Register(4)]),
+                inp_registers: EnumerationInfoOptions::Limited(&[Register(4)]),
+                out_registers: EnumerationInfoOptions::Limited(&[Register(4)]),
                 immediates: EnumerationInfoOptions::Limited(&[1.into(), 2.into(), 3.into()]),
                 include_nop: false,
                 skip_cond_code: true,
@@ -498,7 +518,8 @@ mod tests {
     fn skip_cond_code_no_cc() {
         assert!(
             Enumerator::new(EnumerationInfo {
-                registers: EnumerationInfoOptions::Limited(&[Register(4)]),
+                inp_registers: EnumerationInfoOptions::Limited(&[Register(4)]),
+                out_registers: EnumerationInfoOptions::Limited(&[Register(4)]),
                 immediates: EnumerationInfoOptions::<Word64>::Limited(&[
                     1.into(),
                     2.into(),
@@ -515,7 +536,8 @@ mod tests {
     fn no_skip_cond_code_has_cc() {
         assert!(
             Enumerator::new(EnumerationInfo {
-                registers: EnumerationInfoOptions::Limited(&[Register(4)]),
+                inp_registers: EnumerationInfoOptions::Limited(&[Register(4)]),
+                out_registers: EnumerationInfoOptions::Limited(&[Register(4)]),
                 immediates: EnumerationInfoOptions::<Word64>::Limited(&[
                     1.into(),
                     2.into(),
