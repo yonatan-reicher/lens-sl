@@ -29,6 +29,17 @@ use functionality::prelude::*;
 use itertools::Itertools;
 
 // =================================================================================================
+//                                            Explanation
+// =================================================================================================
+
+/*
+ * How does this work?
+ * This is an incremental search algorithm, similar to Lens. The key differences are:
+ * 1. A flat data-structure.
+ * 2. Pruning instructions that produce the same effect on the current inputs.
+ */
+
+// =================================================================================================
 //                                          Short-hands
 // =================================================================================================
 
@@ -238,6 +249,7 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
             self.tui
                 .report_length(Direction::Backward, self.postfix_len);
             while self.postfix_len + self.prefix_len < self.original_reduced.len() {
+                let length = self.postfix_len + self.prefix_len;
                 self.tui.progress(0, self.stats.n_instructions);
                 let direction = Direction::from_is_forward(
                     self.config.forward_only
