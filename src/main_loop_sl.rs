@@ -25,8 +25,8 @@ use std::time::{Duration, Instant};
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::de::DeserializeOwned;
 
-use functionality::prelude::*;
 use functionality::RefIter;
+use functionality::prelude::*;
 
 use itertools::Itertools;
 
@@ -209,10 +209,13 @@ struct Optimizer<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> {
 
 impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
     pub fn optimize(mut self) -> OptimizeResult<WBig> {
-        // ----- The Actual Loop -----------------------------------------------------------------------
-        // We must start with at least one input...
+        // Plan: Do some setup, then start the optimization loop.
+        // We have to start the optimization with at least one counter-example, so we deal with that
+        // first.
         match self.oracle.verify(&[]) {
-            Continue(()) => todo!(""),
+            Continue(()) => unimplemented!(
+                "we do not deal with the case where the empty program is correct on the reduced oracle."
+            ),
             Break(ProgramOrRetry::Program(p)) => {
                 return OptimizeResult {
                     outcome: OptimizeOutcome::Program(p),
@@ -221,84 +224,80 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
             }
             Break(ProgramOrRetry::Retry) => (),
         }
-        if self.counter_examples.inputs().is_empty() {
-            unimplemented!(
-                "we do not deal with the case where the oracle does not give a counter-example for the empty program."
-            );
-        }
+        assert_eq!(self.counter_examples.inputs().len(), 1);
+        // ------ Initialization -------------------------------------------------------------------
         let empty_program = Programs::empty_program();
+        // backwards
         self.backward_frontier
             .insert(self.counter_examples.outputs()[0], empty_program.clone());
         self.next_backward_frontier.clear();
-        {
-            // forward
-            self.forward_seen.clear();
-            self.forward_seen
-                .insert(self.counter_examples.inputs().to_vec());
-            self.forward_frontier.clear();
-            self.forward_frontier.insert(
-                self.counter_examples.inputs().to_vec(),
-                empty_program.clone(),
+        self.postfix_len = 0;
+        // forward
+        self.forward_seen.clear();
+        self.forward_seen
+            .insert(self.counter_examples.inputs().to_vec());
+        self.forward_frontier.clear();
+        self.forward_frontier.insert(
+            self.counter_examples.inputs().to_vec(),
+            empty_program.clone(),
+        );
+        self.forward_frontier_ce_0.clear();
+        self.forward_frontier_ce_0
+            .insert(self.counter_examples.inputs()[0], empty_program.clone());
+        self.next_forward_frontier.clear();
+        self.next_forward_frontier_ce_0.clear();
+        self.prefix_len = 0;
+        // ------ Main Loop ------------------------------------------------------------------------
+        while self.postfix_len + self.prefix_len < self.original_reduced.len() {
+            self.tui.report_length(Forward, self.prefix_len);
+            self.tui.report_length(Backward, self.postfix_len);
+            let _length = self.postfix_len + self.prefix_len;
+            self.tui.progress(0, self.stats.n_instructions);
+            let direction = Direction::from_is_forward(
+                self.config.forward_only
+                    || 5 * self.forward_frontier_ce_0.len() <= self.backward_frontier.len(),
             );
-            self.forward_frontier_ce_0.clear();
-            self.forward_frontier_ce_0
-                .insert(self.counter_examples.inputs()[0], empty_program.clone());
-            self.next_forward_frontier.clear();
-            self.next_forward_frontier_ce_0.clear();
-            self.prefix_len = 0;
-            //
-            self.tui.report_length(Direction::Forward, self.prefix_len);
-            self.tui
-                .report_length(Direction::Backward, self.postfix_len);
-            while self.postfix_len + self.prefix_len < self.original_reduced.len() {
-                let _length = self.postfix_len + self.prefix_len;
-                self.tui.progress(0, self.stats.n_instructions);
-                let direction = Direction::from_is_forward(
-                    self.config.forward_only
-                        || 5 * self.forward_frontier_ce_0.len() <= self.backward_frontier.len(),
-                );
-                self.tui.expanding(direction);
-                let ret = match direction {
-                    Forward => self.expand_forward(),
-                    Backward => self.expand_backward(),
-                };
-                match ret {
-                    Continue(()) => {
-                        match direction {
-                            Forward => self.prefix_len += 1,
-                            Backward => self.postfix_len += 1,
-                        }
-                        continue;
-                    }
-                    Break(Err(Cancelled)) => {
-                        return OptimizeResult {
-                            outcome: OptimizeOutcome::Cancelled,
-                            elapsed: self.started_at.elapsed(),
-                        };
-                    }
-                    Break(Ok(ProgramOrRetry::Program(p))) => {
-                        return OptimizeResult {
-                            outcome: OptimizeOutcome::Program(p),
-                            elapsed: self.started_at.elapsed(),
-                        };
-                    }
-                    Break(Ok(ProgramOrRetry::Retry)) => continue 'restart,
-                }
-            } // end of length loop
-            // let lengths = next_frontier
-            //     .iter()
-            //     .map(|(_, p)| p)
-            //     .chunk_by(|p| p.len())
-            //     .into_iter()
-            //     .map(|(len, progs)| format!("{len}: {}", progs.count()))
-            //     .join("\n");
-            // println!("Progs");
-            // println!("{}", lengths);
-            return OptimizeResult {
-                outcome: OptimizeOutcome::NoProgram,
-                elapsed: self.started_at.elapsed(),
+            self.tui.expanding(direction);
+            let ret = match direction {
+                Forward => self.expand_forward(),
+                Backward => self.expand_backward(),
             };
-        }
+            match ret {
+                Continue(()) => {
+                    match direction {
+                        Forward => self.prefix_len += 1,
+                        Backward => self.postfix_len += 1,
+                    }
+                    continue;
+                }
+                Break(Err(Cancelled)) => {
+                    return OptimizeResult {
+                        outcome: OptimizeOutcome::Cancelled,
+                        elapsed: self.started_at.elapsed(),
+                    };
+                }
+                Break(Ok(ProgramOrRetry::Program(p))) => {
+                    return OptimizeResult {
+                        outcome: OptimizeOutcome::Program(p),
+                        elapsed: self.started_at.elapsed(),
+                    };
+                }
+                Break(Ok(ProgramOrRetry::Retry)) => continue 'restart,
+            }
+        } // end of length loop
+        // let lengths = next_frontier
+        //     .iter()
+        //     .map(|(_, p)| p)
+        //     .chunk_by(|p| p.len())
+        //     .into_iter()
+        //     .map(|(len, progs)| format!("{len}: {}", progs.count()))
+        //     .join("\n");
+        // println!("Progs");
+        // println!("{}", lengths);
+        return OptimizeResult {
+            outcome: OptimizeOutcome::NoProgram,
+            elapsed: self.started_at.elapsed(),
+        };
     }
 
     fn expand_forward(&mut self) -> ControlFlow<Result<ProgramOrRetry<WBig>, Cancelled>> {
@@ -645,7 +644,7 @@ fn insts_with_same_effect<W: Word + HasBitWord>(
                             .map(|((_, bucket), sub_output)| bucket.get(&sub_output).borrow())
                             .inspect(|s| stats.total_intersection_input_sizes += s.len())
                             .collect::<Vec<_>>()
-                            .into_iter()
+                            .into_iter(),
                     )
                     .pipe(|s| {
                         let _ = s
