@@ -259,6 +259,7 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
             );
             self.tui.expanding(direction);
             let ret = match direction {
+                // This is where the magic actually happens.
                 Forward => self.expand_forward(),
                 Backward => self.expand_backward(),
             };
