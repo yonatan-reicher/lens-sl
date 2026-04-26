@@ -277,13 +277,12 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                         elapsed: self.started_at.elapsed(),
                     };
                 }
-                Break(Ok(ProgramOrRetry::Program(p))) => {
+                Break(Ok(p)) => {
                     return OptimizeResult {
                         outcome: OptimizeOutcome::Program(p),
                         elapsed: self.started_at.elapsed(),
                     };
                 }
-                Break(Ok(ProgramOrRetry::Retry)) => continue 'restart,
             }
         } // end of length loop
         // let lengths = next_frontier
@@ -301,7 +300,7 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
         };
     }
 
-    fn expand_forward(&mut self) -> ControlFlow<Result<ProgramOrRetry<WBig>, Cancelled>> {
+    fn expand_forward(&mut self) -> ControlFlow<Result<Program<WBig>, Cancelled>> {
         let len = self.forward_frontier.len();
         for (i, (states, prog)) in self.forward_frontier.iter().enumerate() {
             self.tui.progress(i, len);
@@ -403,7 +402,7 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
     /// I am still not sure what to do if we added a counter-example, need to see how we will handle
     /// it.
     /// TODO: above.
-    fn expand_backward(&mut self) -> ControlFlow<Result<ProgramOrRetry<WBig>, Cancelled>> {
+    fn expand_backward(&mut self) -> ControlFlow<Result<Program<WBig>, Cancelled>> {
         // For each instruction,
         for (i_inst, inst) in Inst::enumerate(self.enumeration_info).enumerate() {
             self.tui.progress(i_inst, self.stats.n_instructions);
