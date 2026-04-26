@@ -181,9 +181,9 @@ checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
 
 [[package]]
 name = "functionality"
-version = "1.0.1"
+version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3cbea1028da1c0e84e2aee90d4385e9df7b43bfe9b8ccb0f79de8128ffa0a766"
+checksum = "bd33c18706fdabd891fe7693e5b3f8cfdbd0a4f69cf154ed9efe71b9729a655b"
 dependencies = [
  "pipe-trait",
 ]
