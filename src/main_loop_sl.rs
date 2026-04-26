@@ -298,27 +298,57 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
             }
             // The red code.
             let do_discard = true;
+            let do_subsumption = false;
             let mut discarded = FxHashSet::<Inst<W>>::default();
             for mask in Self::input_sub_masks(self.top_mask) {
                 for inst in insts_with_precondtion(&self.bank, states, mask) {
+                    let mut equivalent_insts = FxHashSet::<Inst<W>>::default();
                     // We can't do this filtering as part of the selecting the instructions
                     // because the discard set changes through the loop.
-                    if discarded.contains(&inst) {
+                    if do_discard && discarded.contains(&inst) {
                         self.stats.n_discarded += 1;
-                        self.stats.last_discard_size = discarded.len();
+                        self.stats.last_discard_size = equivalent_insts.len();
                         continue;
                     }
                     let next_states = states
                         .iter()
                         .map(|s| (*s).mutate(|s| inst.run(s)))
                         .collect::<Vec<_>>();
+                    // Extend Hila's discard set. Extend it by all the instructions which do the
+                    // exact same thing as this instruction on the current inputs.
+                    if do_discard {
+                        if do_subsumption {
+                            equivalent_insts.extend(insts_with_same_effect(
+                                self.top_mask,
+                                &self.bank,
+                                mask,
+                                states.as_slice(),
+                                next_states.as_slice(),
+                                &mut self.stats,
+                            ));
+                        } else {
+                            equivalent_insts.extend(intersect_all(
+                                states.iter().zip(&next_states).map(|(s, next_s)| {
+                                    self.bank
+                                        .get(&s.masked(mask))
+                                        .get(&next_s.masked(inst.potential_write_mask()))
+                                        .borrow()
+                                }),
+                            ));
+                        }
+                    } else {
+                        equivalent_insts.insert(inst);
+                    }
+                    discarded.extend(&equivalent_insts);
+                    debug_assert!(equivalent_insts.contains(&inst));
                     Self::split_prefix_class(
                         &mut self.splitting_buffer,
                         self.counter_examples,
                         self.oracle,
                         &self.backward_frontier,
                         self.should_cancel,
-                        prog.clone().concat(inst),
+                        prog.clone()
+                            .concat_many(equivalent_insts.iter().cloned().collect()),
                         next_states.clone(),
                         |next_states, progs| {
                             self.next_forward_frontier_ce_0
@@ -331,30 +361,6 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                                 .extend(&progs);
                         },
                     )?;
-                    // Extend Hila's discard set. Extend it by all the instructions which do the
-                    // exact same thing as this instruction on the current inputs.
-                    let do_subsumption = true;
-                    if do_discard {
-                        if do_subsumption {
-                            discarded.extend(insts_with_same_effect(
-                                self.top_mask,
-                                &self.bank,
-                                mask,
-                                states.as_slice(),
-                                next_states.as_slice(),
-                                &mut self.stats,
-                            ));
-                        } else {
-                            discarded.extend(intersect_all(states.iter().zip(&next_states).map(
-                                |(s, next_s)| {
-                                    self.bank
-                                        .get(&s.masked(mask))
-                                        .get(&next_s.masked(inst.potential_write_mask()))
-                                        .borrow()
-                                },
-                            )));
-                        }
-                    }
                 }
             }
         }
