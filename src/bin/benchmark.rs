@@ -357,7 +357,8 @@ fn run_in_forked_child(b: &Benchmark) -> BenchmarkResult {
                 1
             }
         };
-        // SAFETY: child exits immediately after sending result; no parent cleanup should run here.
+        // SAFETY: after `fork`, use `_exit` (not `std::process::exit`) so the child terminates
+        // without running parent-side teardown/flush/destructor logic.
         unsafe { _exit(status) };
     }
     drop(writer);
