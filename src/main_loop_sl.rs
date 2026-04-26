@@ -285,15 +285,6 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                 }
             }
         } // end of length loop
-        // let lengths = next_frontier
-        //     .iter()
-        //     .map(|(_, p)| p)
-        //     .chunk_by(|p| p.len())
-        //     .into_iter()
-        //     .map(|(len, progs)| format!("{len}: {}", progs.count()))
-        //     .join("\n");
-        // println!("Progs");
-        // println!("{}", lengths);
         return OptimizeResult {
             outcome: OptimizeOutcome::NoProgram,
             elapsed: self.started_at.elapsed(),
