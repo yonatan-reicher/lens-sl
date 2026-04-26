@@ -1,14 +1,16 @@
 use functionality::prelude::*;
 use std::collections::HashSet;
 use std::hash::{BuildHasher, Hash};
+use std::ops::Deref;
 
-pub fn intersect_all<'a, T, S>(mut sets: impl Iterator<Item = &'a HashSet<T, S>>) -> HashSet<T, S>
+pub fn intersect_all<'a, R, T, S>(mut sets: impl Iterator<Item = R>) -> HashSet<T, S>
 where
     HashSet<T, S>: Clone + Default,
+    R: Deref<Target = HashSet<T,S>>,
     T: Eq + Hash + 'a,
     S: BuildHasher + 'a,
 {
-    let Some(mut current) = sets.next().cloned() else {
+    let Some(mut current) = sets.next().map(|s| s.clone()) else {
         return default();
     };
     for s in sets {
@@ -34,7 +36,7 @@ mod tests {
     fn f<T: Clone + Eq + Hash>(
         inputs: impl IntoIterator<Item: IntoIterator<Item = T>>,
     ) -> HashSet<T> {
-        intersect_all::<T, RandomState>(
+        intersect_all::<&_, T, RandomState>(
             inputs
                 .into_iter()
                 .map(|x| x.into_iter().collect())
