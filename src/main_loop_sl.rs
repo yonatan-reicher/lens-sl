@@ -128,7 +128,6 @@ where
         config: c,
         original_reduced: reduced_program,
         enumeration_info,
-        forward_seen: default(),
         forward_frontier: default(),
         forward_frontier_ce_0: default(),
         backward_frontier: default(),
@@ -170,8 +169,6 @@ struct Optimizer<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> {
     original_reduced: Program<W>,
     // TODO: This should be a method.
     enumeration_info: EnumerationInfo<'a, W>,
-    /// The set of state vectors we've already visited, and don't want to visit again.
-    forward_seen: FxHashSet<Vec<State<W>>>,
     /// Set of discovered-but-unvisited state vectors and their corresponding prefixes. Kind of like
     /// the current layer in Breadth-First-Search.
     forward_frontier: FxHashMap<Vec<State<W>>, Programs<W>>,
@@ -233,9 +230,6 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
         self.next_backward_frontier.clear();
         self.postfix_len = 0;
         // forward
-        self.forward_seen.clear();
-        self.forward_seen
-            .insert(self.counter_examples.inputs().to_vec());
         self.forward_frontier.clear();
         self.forward_frontier.insert(
             self.counter_examples.inputs().to_vec(),
@@ -332,13 +326,6 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                         )
                         .map_break(Ok)?;
                     }
-                    if self.forward_seen.contains(&next_states) {
-                        if do_discard {
-                            discarded.insert(inst);
-                        }
-                        continue;
-                    }
-                    self.forward_seen.insert(next_states.clone());
                     // Extend Hila's discard set. Extend it by all the instructions which do the
                     // exact same thing as this instruction on the current inputs.
                     let do_subsumption = true;
