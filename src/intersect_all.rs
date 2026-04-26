@@ -1,23 +1,29 @@
 use functionality::prelude::*;
-use itertools::Either;
 use std::collections::HashSet;
 use std::hash::{BuildHasher, Hash};
+use std::ops::Deref;
 
-pub fn intersect_all<'a, T, S>(
-    sets: impl Iterator<Item = &'a HashSet<T, S>> + Clone,
-) -> impl Iterator<Item = &'a T>
+pub fn intersect_all<'a, R, T, S>(mut sets: impl Iterator<Item = R>) -> HashSet<T, S>
 where
-    HashSet<T, S>: Default,
+    HashSet<T, S>: Clone + Default,
+    R: Deref<Target = HashSet<T,S>>,
     T: Eq + Hash + 'a,
     S: BuildHasher + 'a,
 {
-    let Some(smallest) = sets.clone().min_by_key(|s| s.len()) else {
-        return Either::Left(std::iter::empty());
+    let Some(mut current) = sets.next().map(|s| s.clone()) else {
+        return default();
     };
-    smallest
-        .iter()
-        .filter(move |x| sets.clone().all(|s| s.contains(x)))
-        .pipe(Either::Right)
+    for s in sets {
+        if current.is_empty() || s.is_empty() {
+            return default();
+        }
+        current
+            // Remove any element that is not in the new set.
+            .extract_if(|x| !s.contains(x))
+            // Run through the entire set.
+            .for_each(|_| ());
+    }
+    current
 }
 
 #[cfg(test)]
@@ -30,15 +36,13 @@ mod tests {
     fn f<T: Clone + Eq + Hash>(
         inputs: impl IntoIterator<Item: IntoIterator<Item = T>>,
     ) -> HashSet<T> {
-        intersect_all::<T, RandomState>(
+        intersect_all::<&_, T, RandomState>(
             inputs
                 .into_iter()
                 .map(|x| x.into_iter().collect())
                 .collect::<Vec<_>>()
                 .iter(),
         )
-        .cloned()
-        .collect()
     }
 
     #[test]
@@ -74,7 +78,7 @@ mod tests {
         for s in sets.iter() {
             println!("  {s:?}");
         }
-        let s = intersect_all(sets.iter()).copied().collect::<Vec<_>>();
+        let s = intersect_all(sets.iter()).into_iter().collect::<Vec<_>>();
         println!("Intersection: \n{s:?}");
         for x in s {
             for s1 in sets.iter() {

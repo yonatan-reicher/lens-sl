@@ -106,7 +106,8 @@ impl<W: Word + HasBitWord> BackwardMap<W, BitWord<W>> {
         let mut ret = FxHashMap::default();
 
         let ei = EnumerationInfo {
-            registers: EnumerationInfoOptions::Limited(registers),
+            inp_registers: EnumerationInfoOptions::Limited(registers),
+            out_registers: EnumerationInfoOptions::Limited(registers),
             immediates: EnumerationInfoOptions::Unlimited,
             include_nop: false,
             skip_cond_code: true,
@@ -493,7 +494,8 @@ mod tests {
             .into(),
         );
         let ei = EnumerationInfo {
-            registers: EnumerationInfoOptions::Limited(&[Register(0), Register(1)]),
+            inp_registers: EnumerationInfoOptions::Limited(&[Register(0), Register(1)]),
+            out_registers: EnumerationInfoOptions::Limited(&[Register(0), Register(1)]),
             immediates: EnumerationInfoOptions::Limited(&[0.into(), 1.into(), 5.into()]),
             ..EnumerationInfo::default()
         };
@@ -532,7 +534,8 @@ mod tests {
         };
 
         let ei = EnumerationInfo {
-            registers: EnumerationInfoOptions::Limited(&[Register(0), Register(1)]),
+            inp_registers: EnumerationInfoOptions::Limited(&[Register(0), Register(1)]),
+            out_registers: EnumerationInfoOptions::Limited(&[Register(0), Register(1)]),
             immediates: EnumerationInfoOptions::Limited(&[
                 0.into(),
                 1.into(),
@@ -550,7 +553,7 @@ mod tests {
             width = width.max(inst_str.len());
             print!("\rInst {inst_str:width$} [{} / {total}]:", i + 1);
             flush();
-            State::all_each(&ei.registers, |state| {
+            State::all_each(&ei.inp_registers, |state| {
                 // Check ⊆
                 {
                     let inp = *state;

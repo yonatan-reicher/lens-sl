@@ -1,7 +1,7 @@
 #[allow(unused_imports)]
 use lens_sl::{
-    inst, optimize, Algorithm, Config, LiveValue, NoTui, OptimizeOutcome, Register, ShouldCancel,
-    Tui, Word4, Word64, Word8,
+    Algorithm, Config, LiveValue, NoTui, OptimizeOutcome, Register, ShouldCancel, Tui, Word4,
+    Word8, Word32, inst, optimize,
 };
 
 fn main() {
@@ -80,11 +80,11 @@ fn main() {
 
     let p = if !no_tui {
         let tui = Tui::default();
-        let p = optimize::<Word64, Word4>(config, &tui);
+        let p = optimize::<Word32, Word4>(config, &tui);
         tui.close();
         p
     } else {
-        optimize::<Word64, Word4>(config, &NoTui)
+        optimize::<Word32, Word4>(config, &NoTui)
     };
     match p.outcome {
         OptimizeOutcome::Cancelled => {
@@ -100,6 +100,7 @@ fn main() {
             }
         }
     }
+    println!("Time: {}", humantime::Duration::from(p.elapsed));
 }
 
 fn parse_flag(args: &mut Vec<String>, flag: &str) -> bool {

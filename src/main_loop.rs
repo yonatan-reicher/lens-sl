@@ -13,8 +13,8 @@ use crate::reduce_bit_width::{ImmediateInfo, Reducer};
 use crate::tui::TuiHook;
 use crate::verify::{self, verify};
 use crate::word::prelude::*;
-use crate::{backward_graph, graph};
 use crate::{Cancelled, Config, OptimizeOutcome, OptimizeResult, ShouldCancel};
+use crate::{backward_graph, graph};
 
 // std imports
 use std::ops::ControlFlow::{self, Break, Continue};
@@ -119,7 +119,8 @@ where
     let mut forward_graph = Graph::Leaf(empty_program.clone());
     let mut backward_graph = BackwardGraph::default();
     let enumeration_info = &EnumerationInfo::<W> {
-        registers: EnumerationInfoOptions::Limited(registers),
+        inp_registers: EnumerationInfoOptions::Limited(registers),
+        out_registers: EnumerationInfoOptions::Limited(registers),
         immediates: EnumerationInfoOptions::Limited(immediates),
         include_nop: false,
         skip_cond_code: false,

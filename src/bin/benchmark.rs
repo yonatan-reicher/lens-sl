@@ -1,17 +1,26 @@
 use functionality::Pipe;
-use lens_sl::{optimize, Algorithm, Config, Inst, OptimizeOutcome, ShouldCancel, Word32, Word4};
+use lens_sl::{Algorithm, Config, Inst, OptimizeOutcome, ShouldCancel, Word4, Word32, optimize};
+use serde::{Deserialize, Serialize};
 use std::env;
+use std::ffi::c_int;
 use std::fs::{self, File};
 use std::hint::black_box;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::ops::ControlFlow::{self, Break, Continue};
+use std::os::unix::net::UnixStream;
 use std::panic;
 use std::path::Path;
 use std::process::exit;
-use std::sync::mpsc;
 use std::sync::Mutex;
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
+
+unsafe extern "C" {
+    fn fork() -> c_int;
+    fn waitpid(pid: c_int, status: *mut c_int, options: c_int) -> c_int;
+    fn _exit(status: c_int) -> !;
+}
 
 #[derive(Default)]
 struct Options {
@@ -55,7 +64,7 @@ fn run_all_sequential(benchmarks: &[Benchmark]) {
         let b = black_box(b); // Don't let the compiler optimize the input
         print!("{} - ...\r", b.name);
         let _ = std::io::Write::flush(&mut std::io::stdout());
-        let result = run(b);
+        let result = run_in_forked_child(b);
         print_result(b, &result);
     }
 }
@@ -275,6 +284,7 @@ struct Benchmark {
     input: Vec<Inst<W>>,
 }
 
+#[derive(Serialize, Deserialize)]
 struct BenchmarkResult {
     success: bool,
     timeout: bool,
@@ -322,6 +332,116 @@ impl Benchmark {
         };
         Continue((elapsed, timeout))
     }
+}
+
+fn run_in_forked_child(b: &Benchmark) -> BenchmarkResult {
+    let (reader, writer) = match UnixStream::pair() {
+        Ok(pair) => pair,
+        Err(err) => return BenchmarkResult::failed(format!("failed to create IPC channel: {err}")),
+    };
+    // SAFETY: We intentionally fork to isolate benchmark panics/crashes from the parent process.
+    let pid = unsafe { fork() };
+    if pid < 0 {
+        return BenchmarkResult::failed(format!(
+            "failed to fork benchmark process: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    if pid == 0 {
+        drop(reader);
+        let result = run(b);
+        let status = match write_benchmark_result(&writer, &result) {
+            Ok(()) => 0,
+            Err(err) => {
+                eprintln!("error: child failed to send benchmark result: {err}");
+                1
+            }
+        };
+        // SAFETY: after `fork`, use `_exit` (not `std::process::exit`) so the child terminates
+        // without running parent-side teardown/flush/destructor logic.
+        unsafe { _exit(status) };
+    }
+    drop(writer);
+    let read_result = read_benchmark_result(&reader);
+    let exit_status = wait_for_child(pid);
+    match (exit_status, read_result) {
+        (Ok(ChildExitStatus::Exited(0)), Ok(result)) => result,
+        (Ok(ChildExitStatus::Exited(0)), Err(err)) => BenchmarkResult::failed(format!(
+            "child exited successfully but sent no result: {err}"
+        )),
+        (Ok(ChildExitStatus::Exited(code)), _) => {
+            BenchmarkResult::failed(format!("child exited with code {code}"))
+        }
+        (Ok(ChildExitStatus::Signaled(signal)), _) => {
+            BenchmarkResult::failed(format!("child terminated by signal {signal}"))
+        }
+        (Ok(ChildExitStatus::Other(status)), _) => {
+            BenchmarkResult::failed(format!("child exited with unexpected status {status}"))
+        }
+        (Err(err), _) => {
+            BenchmarkResult::failed(format!("failed waiting for child process: {err}"))
+        }
+    }
+}
+
+enum ChildExitStatus {
+    Exited(i32),
+    Signaled(i32),
+    Other(i32),
+}
+
+fn wait_for_child(pid: c_int) -> std::io::Result<ChildExitStatus> {
+    let mut status = 0;
+    // SAFETY: waitpid is called with a child PID returned by fork.
+    let ret = unsafe { waitpid(pid, &mut status, 0) };
+    if ret < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if wifexited(status) {
+        Ok(ChildExitStatus::Exited(wexitstatus(status)))
+    } else if wifsignaled(status) {
+        Ok(ChildExitStatus::Signaled(wtermsig(status)))
+    } else {
+        Ok(ChildExitStatus::Other(status))
+    }
+}
+
+fn wifexited(status: c_int) -> bool {
+    (status & 0x7f) == 0
+}
+
+fn wexitstatus(status: c_int) -> c_int {
+    (status >> 8) & 0xff
+}
+
+fn wifsignaled(status: c_int) -> bool {
+    let signal = status & 0x7f;
+    signal != 0 && signal != 0x7f
+}
+
+fn wtermsig(status: c_int) -> c_int {
+    status & 0x7f
+}
+
+fn write_benchmark_result(
+    mut writer: &UnixStream,
+    result: &BenchmarkResult,
+) -> std::io::Result<()> {
+    let payload = postcard::to_stdvec(result).map_err(std::io::Error::other)?;
+    let payload_len = u64::try_from(payload.len()).map_err(std::io::Error::other)?;
+    writer.write_all(&payload_len.to_le_bytes())?;
+    writer.write_all(&payload)?;
+    writer.flush()?;
+    Ok(())
+}
+
+fn read_benchmark_result(mut reader: &UnixStream) -> std::io::Result<BenchmarkResult> {
+    let mut len = [0_u8; std::mem::size_of::<u64>()];
+    reader.read_exact(&mut len)?;
+    let payload_len = usize::try_from(u64::from_le_bytes(len)).map_err(std::io::Error::other)?;
+    let mut payload = vec![0_u8; payload_len];
+    reader.read_exact(&mut payload)?;
+    postcard::from_bytes(&payload).map_err(std::io::Error::other)
 }
 
 fn parse_options() -> Options {
@@ -454,6 +574,19 @@ impl Filter {
             Filter::Ours => true, // TODO
             Filter::Lens => true, // TODO
             Filter::Name(s) => b.name.contains(s.as_str()),
+        }
+    }
+}
+
+impl BenchmarkResult {
+    fn failed(message: String) -> Self {
+        Self {
+            success: false,
+            timeout: false,
+            elapsed: Duration::ZERO,
+            std: Duration::ZERO,
+            found: vec![],
+            panic_message: Some(message),
         }
     }
 }

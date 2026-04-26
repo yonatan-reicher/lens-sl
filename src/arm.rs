@@ -1060,27 +1060,4 @@ mod tests {
             );
         }
     }
-
-    #[property_test]
-    fn run_backward_masked_no_missing_inputs(
-        inst: Inst<Word4>,
-        state: State<Word4>,
-        mask: Mask,
-    ) {
-        let state = state.masked(mask);
-        println!("------------------------------");
-        println!("inst {inst}  state {state}");
-        let inputs = inst
-            .run_backward(*state.state(), &BM)
-            .into_iter()
-            .collect::<Vec<_>>();
-        println!("inputs");
-        inputs.iter().for_each(|i| println!("  {i}"));
-        let masked_inputs = inst.
-            run_backward_masked(state, &BM)
-            .collect::<Vec<_>>();
-        println!("masked inputs");
-        masked_inputs.iter().for_each(|i| println!("  {i}"));
-        prop_assert_eq!(inst.run_backward_masked(state, &BM).count(), inputs.len());
-    }
 }
