@@ -39,6 +39,7 @@ use itertools::Itertools;
  * This is an incremental search algorithm, similar to Lens. The key differences are:
  * 1. A flat data-structure.
  * 2. Pruning instructions that produce the same effect on the current inputs.
+ * 3. Backwards search only considers the first counter-example.
  */
 
 // =================================================================================================
@@ -229,7 +230,7 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
         self.backward_frontier
             .insert(self.counter_examples.outputs()[0], empty_program.clone());
         self.next_backward_frontier.clear();
-        'restart: loop {
+        {
             // forward
             self.forward_seen.clear();
             self.forward_seen
