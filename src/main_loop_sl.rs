@@ -25,8 +25,8 @@ use std::time::{Duration, Instant};
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::de::DeserializeOwned;
 
-use functionality::prelude::*;
 use functionality::RefIter;
+use functionality::prelude::*;
 
 use itertools::Itertools;
 
@@ -246,9 +246,6 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
             self.next_forward_frontier_ce_0.clear();
             self.prefix_len = 0;
             //
-            self.tui.report_length(Direction::Forward, self.prefix_len);
-            self.tui
-                .report_length(Direction::Backward, self.postfix_len);
             while self.postfix_len + self.prefix_len < self.original_reduced.len() {
                 let _length = self.postfix_len + self.prefix_len;
                 self.tui.progress(0, self.stats.n_instructions);
@@ -257,6 +254,8 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                         || 5 * self.forward_frontier_ce_0.len() <= self.backward_frontier.len(),
                 );
                 self.tui.expanding(direction);
+                self.tui.report_length(Forward, self.prefix_len);
+                self.tui.report_length(Backward, self.postfix_len);
                 let ret = match direction {
                     Forward => self.expand_forward(),
                     Backward => self.expand_backward(),
@@ -392,7 +391,6 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
             &mut self.next_forward_frontier_ce_0,
             &mut self.forward_frontier_ce_0,
         );
-        self.prefix_len += 1;
         Continue(())
     }
 
@@ -644,7 +642,7 @@ fn insts_with_same_effect<W: Word + HasBitWord>(
                             .map(|((_, bucket), sub_output)| bucket.get(&sub_output).borrow())
                             .inspect(|s| stats.total_intersection_input_sizes += s.len())
                             .collect::<Vec<_>>()
-                            .into_iter()
+                            .into_iter(),
                     )
                     .pipe(|s| {
                         let _ = s
