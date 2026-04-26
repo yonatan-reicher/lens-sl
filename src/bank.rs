@@ -48,6 +48,7 @@ impl<'a, W: Word + HasBitWord> Bank<'a, W> {
         }
     }
 
+    #[allow(dead_code)]
     /// The difference between this and [Self::get] is that this doesn't create the bucket if it
     /// doesn't exist.
     pub fn try_get(&'a self, input: &Input<W>) -> Option<BucketRef<'a, W>> {
