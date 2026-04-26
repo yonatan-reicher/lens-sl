@@ -6,38 +6,75 @@ use crate::word::prelude::*;
 use functionality::prelude::*;
 use itertools::Itertools;
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::cell::{Ref, RefCell};
+use std::ops::Deref;
 
 type Input<W> = state::Masked<W>;
 type Output<W> = state::Masked<W>;
 
 #[derive(Debug, Clone)]
 pub struct Bank<'a, W, WShift = BitWord<W>> {
-    buckets: FxHashMap<Input<W>, Bucket<W, WShift>>,
+    inp_to_bucket: RefCell<FxHashMap<Input<W>, BucketId>>,
+    bucket_arena: RefCell<Vec<Bucket<W>>>,
+    insts_arena: RefCell<Vec<Insts<W, WShift>>>,
     ei: EnumerationInfo<'a, W>,
 }
 
+type BucketId = usize;
+
+type InstsId = usize;
+
 #[derive(Debug, Clone)]
-pub struct Bucket<W, WShift = BitWord<W>>(FxHashMap<Output<W>, FxHashSet<Inst<W, WShift>>>);
+struct Bucket<W>(FxHashMap<Output<W>, InstsId>);
 
 pub type Insts<W, WShift = BitWord<W>> = FxHashSet<Inst<W, WShift>>;
+
+#[derive(Debug, Clone)]
+pub struct BucketRef<'a, W, WShift = BitWord<W>>(&'a Bank<'a, W, WShift>, BucketId);
+
+#[derive(Debug, Clone)]
+pub struct InstsRef<'a, W, WShift = BitWord<W>>(&'a Bank<'a, W, WShift>, InstsId);
 
 impl<'a, W: Word + HasBitWord> Bank<'a, W> {
     pub fn new(ei: EnumerationInfo<'a, W>) -> Self {
         Bank {
-            buckets: FxHashMap::default(),
+            inp_to_bucket: default(),
+            bucket_arena: default(),
+            insts_arena: RefCell::new(vec![
+                // The 0th set is reserved for "no instructions", 0 is like a null pointer.
+                FxHashSet::default(),
+            ]),
             ei,
         }
     }
 
-    pub fn get(&mut self, input: &Input<W>) -> &mut Bucket<W> {
-        self.buckets
+    /// The difference between this and [Self::get] is that this doesn't create the bucket if it
+    /// doesn't exist.
+    pub fn try_get(&'a self, input: &Input<W>) -> Option<BucketRef<'a, W>> {
+        self.inp_to_bucket
+            .borrow()
+            .get(input)
+            .copied()
+            .map(|id| BucketRef(self, id))
+    }
+
+    pub fn get(&self, input: &Input<W>) -> BucketRef<'_, W> {
+        let id = *self
+            .inp_to_bucket
+            .borrow_mut()
             .entry(*input)
-            .or_insert_with(|| Bucket::new(input, self.ei))
+            .or_insert_with(|| {
+                let bucket = Bucket::new(input, self.ei, &mut self.insts_arena.borrow_mut());
+                let id = self.bucket_arena.borrow().len();
+                self.bucket_arena.borrow_mut().push(bucket);
+                id
+            });
+        BucketRef(self, id)
     }
 }
 
 impl<W: Word + HasBitWord> Bucket<W> {
-    pub fn new(input: &Input<W>, ei: EnumerationInfo<W>) -> Self {
+    fn new(input: &Input<W>, ei: EnumerationInfo<W>, insts_arena: &mut Vec<Insts<W>>) -> Self {
         // Initialize the bucket by running all instructions on the input and recording outputs.
         Inst::enumerate(EnumerationInfo {
             // Limit only to registers relevant to the input.
@@ -70,13 +107,69 @@ impl<W: Word + HasBitWord> Bucket<W> {
         // Group by output.
         .fold(Bucket(FxHashMap::default()), |bucket, (output, inst)| {
             bucket.mutate(|bucket| {
-                bucket.0.entry(output).or_default().insert(inst);
+                let id = *bucket.0.entry(output).or_insert_with(|| {
+                    let id = insts_arena.len();
+                    insts_arena.push(FxHashSet::default());
+                    id
+                });
+                let insts = &mut insts_arena[id];
+                insts.insert(inst);
             })
         })
     }
 
-    pub fn get(&mut self, output: &Output<W>) -> &Insts<W> {
-        self.0.entry(*output).or_default()
+    fn contains_key(&self, output: &Output<W>) -> bool {
+        self.0.contains_key(output)
+    }
+}
+
+impl<'a, W: Word + HasBitWord> BucketRef<'a, W> {
+    fn bucket(&self) -> Ref<'a, Bucket<W>> {
+        Ref::map(self.0.bucket_arena.borrow(), |a| &a[self.1])
+    }
+
+    pub fn contains_key(&self, output: &Output<W>) -> bool {
+        self.bucket().contains_key(output)
+    }
+
+    pub fn get(&self, output: &Output<W>) -> InstsRef<'a, W> {
+        let bucket = self.bucket();
+        let insts_id = bucket.0.get(output).copied().unwrap_or(0);
+        InstsRef(self.0, insts_id)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (Output<W>, InstsRef<'a, W>)> + 'a {
+        use std::collections::hash_map::Iter as HMIter;
+        struct I<'a, W: Word + HasBitWord> {
+            bank: &'a Bank<'a, W>,
+            _bucket: Ref<'a, Bucket<W>>,
+            iter: HMIter<'a, Output<W>, InstsId>,
+        }
+        let bucket: Ref<'a, Bucket<W>> = self.bucket();
+        // As long as we hold the Ref, references to the buckets are valid. That means we can safely
+        // have a reference to the bucket in the iterator, as long as the iterator doesn't outlive
+        // the Ref instance.
+        let evil_reference: &'a Bucket<W> = unsafe { &*(bucket.deref() as *const _) };
+        let iter = evil_reference.0.iter();
+        return I {
+            bank: self.0,
+            _bucket: bucket,
+            iter,
+        };
+
+        impl<'a, W: Word + HasBitWord> Iterator for I<'a, W> {
+            type Item = (Output<W>, InstsRef<'a, W>);
+            fn next(&mut self) -> Option<Self::Item> {
+                let (output, insts_id) = self.iter.next()?;
+                Some((*output, InstsRef(self.bank, *insts_id)))
+            }
+        }
+    }
+}
+
+impl<'a, W: Word + HasBitWord> InstsRef<'a, W> {
+    pub fn borrow(&self) -> Ref<'a, Insts<W>> {
+        Ref::map(self.0.insts_arena.borrow(), |a| &a[self.1])
     }
 }
 
@@ -88,7 +181,7 @@ mod tests {
 
     #[test]
     fn test_bank() {
-        let mut b = Bank::<Word4>::new(EnumerationInfo {
+        let b = Bank::<Word4>::new(EnumerationInfo {
             inp_registers: EnumerationInfoOptions::Limited(&[Register(0), Register(1)]),
             out_registers: EnumerationInfoOptions::Limited(&[Register(0), Register(1)]),
             ..default()
@@ -103,6 +196,6 @@ mod tests {
         println!("Bucket: {bucket:#?}");
         let insts = bucket.get(&end);
         println!("Insts: {insts:#?}");
-        assert!(insts.contains(&inst!(AddI, 0, 0, 14)));
+        assert!(insts.borrow().contains(&inst!(AddI, 0, 0, 14)));
     }
 }
