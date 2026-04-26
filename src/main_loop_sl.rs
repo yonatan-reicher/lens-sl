@@ -252,7 +252,7 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
             self.tui.progress(0, self.stats.n_instructions);
             let direction = Direction::from_is_forward(
                 self.config.forward_only
-                    || 5 * self.forward_frontier_ce_0.len() <= self.backward_frontier.len(),
+                    || self.forward_frontier_ce_0.len() <= 10 * self.backward_frontier.len(),
             );
             self.tui.expanding(direction);
             let ret = match direction {
