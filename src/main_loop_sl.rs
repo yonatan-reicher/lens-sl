@@ -157,6 +157,7 @@ where
         tui,
         postfix_len: 0,
         prefix_len: 0,
+        splitting_buffer: vec![],
     };
 
     optimizer.optimize()
@@ -202,6 +203,10 @@ struct Optimizer<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> {
     tui: &'a dyn TuiHook<&'a Graph<W>, State<W>>,
     postfix_len: usize,
     prefix_len: usize,
+    /// A buffer for saving states to add to the next frontier that you still haven't checked if
+    /// they need splitting.
+    /// TODO: Is this forward only?
+    splitting_buffer: Vec<(Vec<State<W>>, Programs<W>)>,
 }
 
 impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
@@ -440,6 +445,65 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
         Continue(())
     }
 
+    fn split_prefix_class(&mut self, prefixes: Programs<W>, states: Vec<State<W>>)
+        -> ControlFlow<Result<Program<WBig>, Cancelled>>
+    {
+        // Start with just the input.
+        self.splitting_buffer.clear();
+        self.splitting_buffer.push((states, prefixes));
+        // While we still have things, get the next thing, and see if it needs splitting.
+        // If not, mark it as good and remove it.
+        while let Some((next_states, next_prefixes)) = self.splitting_buffer.pop() {
+            if self.should_cancel.check() {
+                return Break(Err(Cancelled));
+            }
+            match Self::try_each_matching_postfix(
+                &self.backward_frontier,
+                self.counter_examples,
+                &next_states,
+                // TODO: We should make a counter here and make sure these classes
+                // are small enough to be useful.
+                |postfix| {
+                    let next_ce = next_states.len();
+                    if let Some((inp, _)) = self.counter_examples.get(next_ce) {
+                        // We still haven't ran on all of our counter-examples! Run and repeat.
+                        let mut new_state_possibilities = FxHashMap::<_, Programs<W>>::default();
+                        next_prefixes.each(|prefix| {
+                            let out = prefix.iter().fold(inp, |s, i| s.mutate(|s| i.run(s)));
+                            new_state_possibilities.entry(out)
+                                .or_default()
+                                // TODO: This can be better
+                                .extend(&prefix.into_iter().collect());
+                        });
+                        for (new_state, its_prefixes) in new_state_possibilities {
+                            // TODO: So can this
+                            self.splitting_buffer.push((
+                                next_states.clone().mutate(|s| s.push(new_state)) ,
+                                its_prefixes
+                            ));
+                        }
+                        // Break because we don't care about the rest of the postfixes, we already
+                        // split the class.
+                        Break(ProgramOrRetry::Retry)
+                    } else {
+                        // Find a counter example! Verify will stop the iteration when a
+                        // counter-example is found, and the condition above will be true instead of
+                        // false, causing this equivalence class will be split.
+                        next_prefixes.try_each(|prefix| {
+                            let prog = prefix.mutate(|p| p.extend(postfix.iter().rev()));
+                            self.oracle.verify(&prog)
+                        })
+                    }
+                },
+            ) {
+                Continue(()) => todo!("I think this only happens when we need to split but can't find a counter-example, but I'm not sure. Anyway, I don't know how to handle that case."),
+                Break(ProgramOrRetry::Program(p)) => return Break(Ok(p)),
+                Break(ProgramOrRetry::Retry) => {}
+            }
+        }
+        Continue(())
+    }
+
     /// Run on all postfixes that given the states to run from, output the same state as their
     /// matching counter-example's output.
     fn try_each_matching_postfix<T>(
@@ -658,6 +722,14 @@ impl<W: Word> CounterExamplesCell<W> {
     pub fn contains(&self, inp: &State<W>, out: &State<W>) -> bool {
         let (inps, outs) = &*self.0.borrow();
         inps.iter().zip(outs).contains(&(inp, out))
+    }
+    pub fn len(&self) -> usize {
+        debug_assert_eq!(self.0.borrow().0.len(), self.0.borrow().1.len());
+        self.0.borrow().0.len()
+    }
+    pub fn get(&self, i: usize) -> Option<(State<W>, State<W>)> {
+        let (inps, outs) = &*self.0.borrow();
+        Some((*inps.get(i)?, *outs.get(i)?))
     }
 }
 
