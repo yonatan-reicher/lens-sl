@@ -25,6 +25,8 @@ mod collect_registers;
 mod tui;
 /// The `verify` function from Lens.
 mod verify;
+/// A mapping from input states and output states to the instructions which take one to the other.
+mod bank;
 
 // --- Utilities ---
 /// Return all permutations of a slice of iterators.

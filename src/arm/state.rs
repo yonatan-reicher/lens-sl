@@ -1049,6 +1049,7 @@ impl<W: Clone + Display> Display for Masked<W> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use itertools::Itertools;
     use proptest::property_test;
 
     #[property_test]
