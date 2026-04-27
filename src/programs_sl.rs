@@ -12,119 +12,257 @@ pub type Program<I> = Vec<I>;
 /// A set of programs, stored in a leaf. Edge case: if the set is empty, it represents a set
 /// containing only the empty program (not the empty set).
 #[derive(Clone, Debug)]
-pub struct Programs<I>(Inner<I>);
+pub struct Programs<I> {
+    // Invariants:
+    // - `len` is the amount of programs in the set.
+    // - `len` is 0 if and only if `inner` is `Empty`. That means that `Concat` and `Extend` need
+    //   to handle cases with `Empty` children.
+    // - All programs in the set have the same depth.
+    inner: Inner<I>,
+    /// Amount of programs in the set.
+    len: usize,
+    /// The length of all programs in the set. If the set is empty, this is 0.
+    depth: u8,
+}
 
 #[derive(Clone, Debug)]
 enum Inner<I> {
-    /// A set containing only the empty program.
+    /// An empty set.
     Empty,
+    /// A set containing only the empty program.
     EmptyProgram,
+    /// A single program which is just a single instruction.
     Inst(I),
-    Concat(Rc<(Programs<I>, Programs<I>)>),
+    /// A single program.
+    Program(Rc<[I]>),
+    /// The set of programs obtained by concatenating each program with the instruction.
+    Concat(Rc<(Programs<I>, I)>),
+    /// The set of programs obtained by concatenating each program with each instruction (Cartesian
+    /// product like).
+    ConcatMany(Rc<(Programs<I>, Vec<I>)>),
+    /// The set of programs obtained by the union of all sets.
     Extend(Rc<Vec<Programs<I>>>),
+}
+
+impl<I> From<Inner<I>> for Programs<I> {
+    fn from(inner: Inner<I>) -> Self {
+        use Inner::{Concat, ConcatMany, Empty, EmptyProgram, Extend, Inst, Program};
+        let (length, depth) = match &inner {
+            Empty => (0, 0),
+            EmptyProgram => (1, 0),
+            Inst(_) => (1, 1),
+            Program(p) => (1, p.len() as u8),
+            Concat(rc) => {
+                let (progs, _) = &**rc;
+                debug_assert_ne!(
+                    progs.len, 0,
+                    "`Concat` should never have an empty left-hand side"
+                );
+                (progs.len(), progs.depth + 1)
+            }
+            ConcatMany(rc) => {
+                let (lhs, insts) = &**rc;
+                debug_assert_ne!(
+                    lhs.len, 0,
+                    "`ConcatMany` should never have an empty left-hand side"
+                );
+                debug_assert_ne!(
+                    insts.len(),
+                    0,
+                    "`ConcatMany` should never have an empty right-hand side"
+                );
+                (lhs.len() * insts.len(), lhs.depth + 1)
+            }
+            Extend(progs) => {
+                debug_assert!(progs.len() > 0, "`Extend` should never be empty");
+                debug_assert!(
+                    progs.iter().all(|p| p.depth == progs[0].depth),
+                    "`Extend` should never contain programs of different depths"
+                );
+                (progs.iter().map(|p| p.len).sum(), progs[0].depth)
+            }
+        };
+        Self {
+            inner,
+            len: length,
+            depth,
+        }
+    }
+}
+
+#[rustfmt::skip] impl<I> Len for Programs<I> {
+    fn len(&self) -> usize { self.len }
+    fn is_empty(&self) -> bool { self.len == 0 }
 }
 
 impl<I> Programs<I> {
     pub fn empty() -> Self {
-        Self(Inner::Empty)
+        Self::from(Inner::Empty)
     }
 
     pub fn empty_program() -> Self {
-        Self(Inner::EmptyProgram)
+        Self::from(Inner::EmptyProgram)
     }
 
     pub fn inst(i: I) -> Self {
-        Self(Inner::Inst(i))
+        Self::from(Inner::Inst(i))
     }
 
-    pub fn concat(self, rhs: Self) -> Self {
-        Self(Inner::Concat(Rc::new((self, rhs))))
+    pub fn concat(self, inst: I) -> Self {
+        if self.is_empty() {
+            Self::empty()
+        } else {
+            Self::from(Inner::Concat(Rc::new((self, inst))))
+        }
+    }
+
+    pub fn concat_many(self, insts: Vec<I>) -> Self {
+        if self.is_empty() {
+            Self::empty()
+        } else {
+            Self::from(Inner::ConcatMany(Rc::new((self, insts))))
+        }
     }
 
     pub fn extend(mut self, x: Self) -> Self {
-        match &mut self.0 {
-            Inner::Empty => x,
-            Inner::Extend(vec) => {
-                if let Some(vec) = Rc::get_mut(vec) {
-                    vec.push(x);
-                    self
-                } else {
-                    Self(Inner::Extend(Rc::new(vec![self, x])))
-                }
-            }
-            Inner::EmptyProgram | Inner::Inst(_) | Inner::Concat(_) => {
-                Self(Inner::Extend(Rc::new(vec![self, x])))
-            }
+        if self.is_empty() {
+            return x;
+        }
+        if x.is_empty() {
+            return self;
+        }
+        debug_assert_eq!(
+            self.depth, x.depth,
+            "Can only extend sets of programs with the same depth"
+        );
+        if let Inner::Extend(rc) = &mut self.inner
+            && let Some(progs) = Rc::get_mut(rc)
+        {
+            self.len += x.len;
+            progs.push(x);
+            return self;
+        }
+        Self::from(Inner::Extend(Rc::new(vec![self, x])))
+    }
+
+    pub fn extend_many(mut self, xs: impl IntoIterator<Item = Self>) -> Self {
+        if self.is_empty() {
+            Self::from(Inner::Extend(Rc::new(xs.into_iter().collect())))
+        } else if let Inner::Extend(rc) = &mut self.inner
+            && let Some(progs) = Rc::get_mut(rc)
+        {
+            progs.extend(xs.into_iter());
+            self.len += progs.iter().map(|p| p.len).sum::<usize>();
+            self
+        } else {
+            xs.into_iter().fold(self, |acc, x| acc.extend(x))
         }
     }
 
     // Get a single program from the collection, if there is any.
-    pub fn sample(&self) -> Option<Program<I>>
+    pub fn sample<T>(&self, f: impl FnOnce(&mut dyn Iterator<Item = I>) -> T) -> Option<T>
     where
         I: Clone,
     {
-        match &self.0 {
+        use std::iter::{empty, once};
+        match &self.inner {
             Inner::Empty => None,
-            Inner::Inst(i) => Some(vec![i.clone()]),
-            Inner::EmptyProgram => Some(vec![]),
-            Inner::Extend(rc) => {
-                let vec = &**rc;
-                vec.iter().filter_map(Self::sample).next()
-            }
+            Inner::EmptyProgram => Some(f(&mut empty())),
+            Inner::Inst(i) => Some(f(&mut once(i.clone()))),
+            Inner::Program(p) => Some(f(&mut p.iter().cloned())),
             Inner::Concat(rc) => {
-                let (lhs, rhs) = &**rc;
-                let lhs = lhs.sample()?;
-                let mut rhs = rhs.sample()?;
-                Some(lhs.mutate(|l| l.append(&mut rhs)))
+                let (progs, inst) = &**rc;
+                let g = |iter: &mut dyn Iterator<Item = I>| {
+                    let mut iter = iter.chain(once(inst.clone()));
+                    f(&mut iter)
+                };
+                progs.sample(g)
             }
+            Inner::ConcatMany(rc) => {
+                let (progs, insts) = &**rc;
+                let inst = insts.first().unwrap();
+                progs.sample(|iter| {
+                    let mut iter = iter.chain(once(inst.clone()));
+                    f(&mut iter)
+                })
+            }
+            Inner::Extend(vec) => vec.first().unwrap().sample(f),
         }
     }
 
+    /// Calls a callback on each program in the set, but gives the programs in reversed order (the
+    /// last instruction is given first).
+    pub fn try_each_reversed<B>(&self, mut f: impl FnMut(&[I]) -> ControlFlow<B>) -> ControlFlow<B>
+    where
+        I: Clone,
+    {
+        // Edge case!
+        if self.is_empty() {
+            return Continue(());
+        }
+        use ControlFlow::Continue;
+        let mut program = Vec::with_capacity(self.depth as usize);
+        return visit(self, &mut program, &mut f);
+
+        fn visit<I: Clone, B>(
+            this: &Programs<I>,
+            program: &mut Vec<I>,
+            f: &mut impl FnMut(&[I]) -> ControlFlow<B>,
+        ) -> ControlFlow<B> {
+            use Inner::{Concat, ConcatMany, Empty, EmptyProgram, Extend, Inst, Program};
+            match &this.inner {
+                Empty => unreachable!(),
+                EmptyProgram => f(program)?,
+                Inst(i) => {
+                    program.push(i.clone());
+                    f(program)?;
+                    program.pop();
+                }
+                Program(p) => {
+                    program.extend_from_slice(p);
+                    f(program)?;
+                    program.truncate(program.len() - p.len());
+                }
+                Concat(rc) => {
+                    let (progs, inst) = &**rc;
+                    program.push(inst.clone());
+                    visit(progs, program, f)?;
+                    program.pop();
+                }
+                ConcatMany(rc) => {
+                    let (progs, insts) = &**rc;
+                    for inst in insts {
+                        program.push(inst.clone());
+                        visit(progs, program, f)?;
+                        program.pop();
+                    }
+                }
+                Extend(vec) => {
+                    for p in vec.iter().rev() {
+                        visit(p, program, f)?;
+                    }
+                }
+            }
+            Continue(())
+        }
+    }
+
+    /// Calls a callback on each program in the set.
     pub fn try_each<B>(
         &self,
-        f: &mut (impl ?Sized + FnMut(Program<I>) -> ControlFlow<B>),
+        mut f: impl FnMut(std::iter::Rev<std::iter::Cloned<std::slice::Iter<I>>>) -> ControlFlow<B>,
     ) -> ControlFlow<B>
     where
         I: Clone,
     {
-        use ControlFlow::Continue;
-        match &self.0 {
-            Inner::Empty => Continue(()),
-            Inner::EmptyProgram => f(vec![]),
-            Inner::Inst(inst) => f(vec![inst.clone()]),
-            Inner::Extend(rc) => {
-                let vec = &**rc;
-                for x in vec {
-                    x.try_each(f)?;
-                }
-                Continue(())
-            }
-            Inner::Concat(rc) => {
-                let (lhs, rhs) = &**rc;
-                // p.try_each::<B, Box<dyn FnMut(Program<I>) -> ControlFlow<B>>>(Box::new(
-                lhs.try_each(
-                    (&mut |mut lhs: Program<I>| {
-                        let len = lhs.len();
-                        rhs.try_each(
-                            (&mut |mut rhs| {
-                                lhs.append(&mut rhs);
-                                f(lhs.clone())?;
-                                lhs.truncate(len);
-                                Continue(())
-                            })
-                                as &mut dyn FnMut(Program<I>) -> ControlFlow<B>,
-                        )
-                    }) as &mut dyn FnMut(Program<I>) -> ControlFlow<B>,
-                )
-            }
-        }
+        self.try_each_reversed(|prog| f(prog.iter().cloned().rev()))
     }
 
-    pub fn each(&self, mut f: impl FnMut(Program<I>))
+    pub fn each(&self, mut f: impl FnMut(std::iter::Rev<std::iter::Cloned<std::slice::Iter<I>>>))
     where
         I: Clone,
     {
-        let ret = self.try_each(&mut |prog| {
+        let ret = self.try_each(|prog| {
             f(prog);
             ControlFlow::Continue::<()>(())
         });
@@ -132,15 +270,6 @@ impl<I> Programs<I> {
             ControlFlow::Continue(()) => (),
             ControlFlow::Break(()) => unreachable!(),
         }
-    }
-
-    pub fn to_vec(&self) -> Vec<Program<I>>
-    where
-        I: Clone,
-    {
-        let mut vec = Vec::with_capacity(self.len());
-        self.each(|prog| vec.push(prog));
-        vec
     }
 }
 
@@ -150,40 +279,13 @@ impl<I> Default for Programs<I> {
     }
 }
 
-impl<I: Clone> From<Programs<I>> for Vec<Program<I>> {
-    fn from(this: Programs<I>) -> Self {
-        this.to_vec()
-    }
-}
-
-impl<I> Len for Programs<I> {
-    fn len(&self) -> usize {
-        match &self.0 {
-            Inner::Empty => 0,
-            Inner::EmptyProgram => 1,
-            Inner::Inst(..) => 1,
-            Inner::Extend(rc) => rc.iter().map(Self::len).sum(),
-            Inner::Concat(rc) => rc.0.len() * rc.1.len(),
-        }
-    }
-    fn is_empty(&self) -> bool {
-        match &self.0 {
-            Inner::Empty => true,
-            Inner::EmptyProgram => false,
-            Inner::Inst(..) => false,
-            Inner::Extend(rc) => rc.iter().all(Self::is_empty),
-            Inner::Concat(rc) => rc.0.is_empty() || rc.1.is_empty(),
-        }
-    }
-}
-
 impl<I: std::fmt::Display + Clone> std::fmt::Display for Programs<I> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         self.each(|program| {
-            if program.is_empty() {
+            if program.len() == 0 {
                 writeln!(f, "· <empty program>").unwrap();
             }
-            program.iter().enumerate().for_each(|(i, inst)| {
+            program.enumerate().for_each(|(i, inst)| {
                 let prefix = if i == 0 { '·' } else { ' ' };
                 writeln!(f, "{prefix} {inst}").unwrap();
             })
@@ -198,27 +300,20 @@ impl<I: Clone> From<I> for Programs<I> {
     }
 }
 
-impl<I: Clone> FromIterator<I> for Programs<I> {
-    fn from_iter<T: IntoIterator<Item = I>>(iter: T) -> Self {
-        let mut ret = Programs::empty_program();
-        for i in iter {
-            ret = ret.concat(Self::inst(i));
-        }
-        ret
-    }
-}
-
 impl<I: Clone + Debug + Eq + Hash> Extend<Programs<I>> for Programs<I> {
     fn extend<It: IntoIterator<Item = Self>>(&mut self, iter: It) {
+        let mut ret = std::mem::take(self);
         for p in iter {
-            *self = Programs::extend(std::mem::take(self), p);
+            ret = Programs::extend(ret, p);
         }
+        *self = ret;
     }
 }
 
 // -------------- tests ---------------------
 
-use functionality::Mutate;
+#[cfg(test)]
+use functionality::prelude::*;
 #[cfg(test)]
 use proptest::prelude::*;
 
@@ -243,9 +338,10 @@ where
             |inner| {
                 prop_oneof![
                     // Concat
-                    (inner.clone(), inner.clone()).prop_map(|(a, b)| a.concat(b)),
+                    (inner.clone(), any::<I>()).prop_map(|(a, b)| a.concat(b)),
                     // Extend
                     (inner.clone(), inner.clone()).prop_map(|(a, b)| a.mutate(|a| a.extend([b])))
+                    // TODO: The rest
                 ]
             },
         )
