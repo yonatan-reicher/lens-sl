@@ -10,8 +10,9 @@ use crate::collect_registers::Collector;
 use crate::direction::Direction::{self, Backward, Forward};
 use crate::graph;
 use crate::intersect_all::intersect_all;
+use crate::len::Len;
 use crate::oracle::{Oracle, SmtOracle};
-use crate::programs;
+use crate::programs_sl;
 use crate::reduce_bit_width::{ImmediateInfo, Reducer};
 use crate::tui::TuiHook;
 use crate::word::prelude::*;
@@ -46,11 +47,13 @@ use itertools::Itertools;
 //                                          Short-hands
 // =================================================================================================
 
-type Program<W> = programs::Program<Inst<W>>;
+type Program<W> = programs_sl::Program<Inst<W>>;
 
-type Programs<W> = programs::Programs<Inst<W>>;
+type Programs<W> = programs_sl::Programs<Inst<W>>;
 
-type Graph<W> = graph::Graph<State<W>, Programs<W>>;
+/// This is actually not used, it's just needed as an argument to the TUI, which we don't use.
+/// Basically this is deprecated and here just as glue.
+type Graph<W> = graph::Graph<State<W>, crate::programs::Programs<Inst<W>>>;
 
 // =================================================================================================
 //                                         Implementation
@@ -290,7 +293,13 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
 
     fn expand_forward(&mut self) -> ControlFlow<Result<Program<WBig>, Cancelled>> {
         let len = self.forward_frontier.len();
-        for (i, (states, prog)) in self.forward_frontier.iter().enumerate() {
+        println!("Forward sizes");
+        for (i, (states, prog)) in self.forward_frontier.drain().enumerate() {
+            println!(
+                "States: {}  Programs: {}",
+                states.iter().map(|s| s.to_string()).join(" | "),
+                prog.len()
+            );
             self.tui.progress(i, len);
             // Should we stop?
             if self.should_cancel.check() {
@@ -301,7 +310,7 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
             let do_subsumption = false;
             let mut discarded = FxHashSet::<Inst<W>>::default();
             for mask in Self::input_sub_masks(self.top_mask) {
-                for inst in insts_with_precondtion(&self.bank, states, mask) {
+                for inst in insts_with_precondtion(&self.bank, &states, mask) {
                     let mut equivalent_insts = FxHashSet::<Inst<W>>::default();
                     // We can't do this filtering as part of the selecting the instructions
                     // because the discard set changes through the loop.
@@ -331,7 +340,7 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                                 states.iter().zip(&next_states).map(|(s, next_s)| {
                                     self.bank
                                         .get(&s.masked(mask))
-                                        .get(&next_s.masked(inst.potential_write_mask()))
+                                        .get(&next_s.masked(inst.potential_output_mask()))
                                         .borrow()
                                 }),
                             ));
@@ -340,8 +349,14 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                         equivalent_insts.insert(inst);
                     }
                     discarded.extend(&equivalent_insts);
-                    debug_assert!(equivalent_insts.contains(&inst));
-                    Self::split_prefix_class(
+                    debug_assert!(
+                        equivalent_insts.contains(&inst),
+                        "on state {states:?} and mask {mask:?},
+                        with next states {next_states:?},
+                        inst {inst} was not contained in it's equivalent instructions set: {equivalent_insts:?}\n{:?}",
+                        self.bank.get(&states[0].masked(mask)),
+                    );
+                    let was_split = Self::split_prefix_class(
                         &mut self.splitting_buffer,
                         self.counter_examples,
                         self.oracle,
@@ -354,13 +369,21 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                             self.next_forward_frontier_ce_0
                                 .entry(next_states[0])
                                 .or_default()
-                                .extend(&progs);
+                                .extend([progs.clone()]);
                             self.next_forward_frontier
                                 .entry(next_states)
                                 .or_default()
-                                .extend(&progs);
+                                .extend([progs]);
                         },
                     )?;
+                    // if was_split {
+                    //     println!(
+                    //         "Split at prefix length {} states {} n programs {} inst {inst}",
+                    //         self.prefix_len,
+                    //         states.iter().map(|s| s.to_string()).join(" "),
+                    //         prog.len()
+                    //     );
+                    // }
                 }
             }
         }
@@ -398,20 +421,20 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                     self.next_backward_frontier
                         .entry(next_state)
                         .or_default()
-                        .extend(&next_postfixes);
+                        .extend([next_postfixes.clone()]);
+                    // TODO: Do this before.
                     // And if it's a winner, we may be done!
                     next_postfixes
-                        .try_each(|mut postfix| {
-                            postfix.reverse();
+                        .try_each_reversed(|postfix| {
                             'retry: loop {
                                 break match Self::try_each_matching_prefix(
                                     &self.forward_frontier_ce_0,
                                     self.counter_examples,
                                     &next_state,
-                                    &postfix,
+                                    postfix,
                                     |prefix| {
-                                        // Here we already reversed the postfix, so we don't again.
-                                        let prog = prefix.mutate(|p| p.extend(&postfix));
+                                        let prog =
+                                            prefix.chain(postfix.iter().cloned()).collect_vec();
                                         self.oracle.verify(&prog)
                                     },
                                 ) {
@@ -436,6 +459,7 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
         Continue(())
     }
 
+    // On `Continue`, returns whether or not the class was split.
     fn split_prefix_class(
         splitting_buffer: &mut Vec<(Vec<State<W>>, Programs<W>)>,
         counter_examples: &CounterExamplesCell<W>,
@@ -445,12 +469,13 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
         prefixes: Programs<W>,
         states: Vec<State<W>>,
         mut on_each_result: impl FnMut(Vec<State<W>>, Programs<W>),
-    ) -> ControlFlow<Result<Program<WBig>, Cancelled>> {
+    ) -> ControlFlow<Result<Program<WBig>, Cancelled>, bool> {
         // Start with just the input.
         splitting_buffer.clear();
         splitting_buffer.push((states, prefixes));
         // While we still have things, get the next thing, and see if it needs splitting.
         // If not, mark it as good and remove it.
+        let mut was_split = false;
         while let Some((next_states, next_prefixes)) = splitting_buffer.pop() {
             if should_cancel.check() {
                 return Break(Err(Cancelled));
@@ -469,13 +494,14 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                         // We still haven't ran on all of our counter-examples! Run and repeat.
                         let mut new_state_possibilities = FxHashMap::<_, Programs<W>>::default();
                         next_prefixes.each(|prefix| {
-                            let out = prefix.iter().fold(inp, |s, i| s.mutate(|s| i.run(s)));
+                            let out = prefix.clone().fold(inp, |s, i| s.mutate(|s| i.run(s)));
                             new_state_possibilities
                                 .entry(out)
                                 .or_default()
                                 // TODO: This can be better
-                                .extend(&prefix.into_iter().collect());
+                                .extend([Programs::program(prefix.collect_vec())]);
                         });
+                        was_split = true;
                         for (new_state, its_prefixes) in new_state_possibilities {
                             // TODO: So can this
                             splitting_buffer.push((
@@ -491,7 +517,7 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                         // counter-example is found, and the condition above will be true instead of
                         // false, causing this equivalence class will be split.
                         next_prefixes.try_each(|prefix| {
-                            let prog = prefix.mutate(|p| p.extend(postfix.iter().rev()));
+                            let prog = prefix.chain(postfix.iter().cloned()).collect_vec();
                             oracle.verify(&prog)
                         })
                     }
@@ -505,16 +531,17 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                 Break(ProgramOrRetry::Retry) => {}
             }
         }
-        Continue(())
+        Continue(was_split)
     }
 
     /// Run on all postfixes that given the states to run from, output the same state as their
     /// matching counter-example's output.
+    /// The postfixes are given to the function in normal order already, not need to reverse them.
     fn try_each_matching_postfix<T>(
         backward_frontier: &FxHashMap<State<W>, Programs<W>>,
         counter_examples: &CounterExamplesCell<W>,
         inputs: &[State<W>],
-        mut f: impl FnMut(Program<W>) -> ControlFlow<T>,
+        mut f: impl FnMut(&[Inst<W>]) -> ControlFlow<T>,
     ) -> ControlFlow<T> {
         match inputs {
             [] => {
@@ -522,19 +549,16 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                 debug_assert!(counter_examples.inputs().is_empty());
                 backward_frontier
                     .values()
-                    .try_for_each(|postfixes| postfixes.try_each(&mut f))
+                    .try_for_each(move |postfixes| postfixes.try_each_reversed(&mut f))
             }
             [first, rest @ ..] => {
                 let Some(good_on_first_input) = backward_frontier.get(first) else {
                     return Continue(());
                 };
-                good_on_first_input.try_each(|postfix| {
+                good_on_first_input.try_each_reversed(|postfix| {
                     if rest.iter().enumerate().any(|(i, input)| {
                         let ce = i + 1; // Because we skipped the first one.
-                        let output = postfix
-                            .iter()
-                            .rev()
-                            .fold(*input, |s, i| s.mutate(|s| i.run(s)));
+                        let output = postfix.iter().fold(*input, |s, i| s.mutate(|s| i.run(s)));
                         let expected_output = counter_examples.outputs()[ce];
                         output != expected_output
                     }) {
@@ -555,7 +579,9 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
         counter_examples: &CounterExamplesCell<W>,
         state: &State<W>,
         postfix: &[Inst<W>],
-        mut f: impl FnMut(Program<W>) -> ControlFlow<T>,
+        mut f: impl FnMut(
+            std::iter::Rev<std::iter::Cloned<std::slice::Iter<Inst<W>>>>,
+        ) -> ControlFlow<T>,
     ) -> ControlFlow<T> {
         debug_assert_eq!(
             postfix.iter().fold(*state, |s, i| s.mutate(|s| i.run(s))),
@@ -567,7 +593,7 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
         prefixes.try_each(|prefix| {
             let (inputs, outputs) = (counter_examples.inputs(), counter_examples.outputs());
             let (other_inputs, expected_outputs) = (&inputs[1..], &outputs[1..]);
-            let prog = prefix.iter().chain(postfix);
+            let prog = prefix.clone().chain(postfix.iter().cloned());
             let other_outputs = other_inputs
                 .iter()
                 .map(|input| prog.clone().fold(*input, |s, i| s.mutate(|s| i.run(s))));
@@ -774,8 +800,9 @@ where
                 self.tui.found_counter_example(inp, out);
                 assert!(
                     !self.counter_examples.contains(&inp, &out),
-                    "Counter-example from reduced oracle should not have been seen before.
-                    Program: {}",
+                    "Counter-example from reduced oracle should not have been seen before.\nInput {}\nOutput {}\nProgram: {}",
+                    inp,
+                    out,
                     prog.iter().map(|i| format!("{i:?}")).join("\n")
                 );
                 self.counter_examples.push(inp, out);
