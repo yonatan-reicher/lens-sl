@@ -622,6 +622,7 @@ fn insts_with_precondtion<'a, W: Word + HasBitWord>(
             // For this state, return set of commands that can run from it.
             bank.get(&sub_input)
                 .iter()
+                // union
                 .flat_map(|(_, set)| RefIter::new(set.borrow(), |x| *x))
                 .collect::<FxHashSet<_>>()
         })
