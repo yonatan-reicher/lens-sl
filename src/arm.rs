@@ -470,6 +470,20 @@ impl<W: Word + HasBitWord> Inst<W> {
         }
     }
 
+    /// The input can contain unread registers if they are part of the potential write mask.
+    pub fn potential_input_mask(&self) -> Mask {
+        if self.cond_code == CondCode::Al {
+            self.potential_read_mask()
+        } else {
+            self.potential_read_mask() | self.potential_write_mask()
+        }
+    }
+
+    /// The output can contain unwritten registers if they are part of the potential write mask.
+    pub fn potential_output_mask(&self) -> Mask {
+        self.potential_read_mask() | self.potential_write_mask()
+    }
+
     pub fn run_masked(&self, masked: state::Masked<W>) -> Option<state::Masked<W>> {
         let (mut read_mask, mut write_mask) = Default::default();
         let out = semantics::run(self, masked.state(), &mut read_mask, &mut write_mask, &());
