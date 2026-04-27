@@ -293,13 +293,7 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
 
     fn expand_forward(&mut self) -> ControlFlow<Result<Program<WBig>, Cancelled>> {
         let len = self.forward_frontier.len();
-        println!("Forward sizes");
         for (i, (states, prog)) in self.forward_frontier.drain().enumerate() {
-            println!(
-                "States: {}  Programs: {}",
-                states.iter().map(|s| s.to_string()).join(" | "),
-                prog.len()
-            );
             self.tui.progress(i, len);
             // Should we stop?
             if self.should_cancel.check() {
