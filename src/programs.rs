@@ -19,14 +19,12 @@ enum Inner<I> {
     /// A set containing only the empty program.
     EmptyProgram,
     Concat(Rc<(Programs<I>, I)>),
-    ConcatMany(Rc<(Programs<I>, Vec<I>)>),
     #[allow(unused)]
     ConcatsMap(Rc<FxHashMap<I, Programs<I>>>),
     /// A set given by a vector of concatenations.
     ConcatsVec(Rc<Vec<(Programs<I>, I)>>),
     // Add an option for an 'extend', i.e., that one or this one, something like that. Or
     // maybe a linked list or who knows what.
-    Extend(Rc<Vec<Programs<I>>>),
 }
 
 impl<I> Programs<I> {
@@ -40,10 +38,6 @@ impl<I> Programs<I> {
 
     pub fn concat(self, inst: I) -> Self {
         Self(Inner::Concat(Rc::new((self, inst))))
-    }
-
-    pub fn concat_many(self, insts: Vec<I>) -> Self {
-        Self(Inner::ConcatMany(Rc::new((self, insts))))
     }
 
     pub fn extend(&mut self, x: &Programs<I>)
@@ -70,15 +64,6 @@ impl<I> Programs<I> {
                     self.extend_concat(p, i);
                 }
             }
-            _ => {
-                if let Inner::Extend(rc) = &mut self.0
-                    && let Some(vec) = Rc::get_mut(rc)
-                {
-                    vec.push(x.clone());
-                    return;
-                }
-                *self = Self(Inner::Extend(Rc::new(vec![self.clone(), x.clone()])));
-            }
         }
     }
 
@@ -93,19 +78,8 @@ impl<I> Programs<I> {
                 vec.push((rc.0.clone(), rc.1.clone()));
                 self.0 = Inner::ConcatsVec(Rc::new(vec));
             }
-            Inner::ConcatMany(..) => unimplemented!(),
             Inner::ConcatsMap(map) => Rc::make_mut(map).reserve(n),
             Inner::ConcatsVec(vec) => Rc::make_mut(vec).reserve(n),
-            Inner::Extend(rc) => {
-                match Rc::get_mut(rc) {
-                    Some(vec) => vec.reserve(n),
-                    None => {
-                        let mut vec = Vec::with_capacity(n + 1);
-                        vec.push(Self(Inner::Extend(rc.clone())));
-                        self.0 = Inner::Extend(Rc::new(vec));
-                    }
-                }
-            }
         }
     }
 
@@ -113,7 +87,7 @@ impl<I> Programs<I> {
     where
         I: Clone + Debug + Eq + Hash,
     {
-        use Inner::{Concat, ConcatsMap, ConcatsVec, EmptyProgram, Extend};
+        use Inner::{Concat, ConcatsMap, ConcatsVec, EmptyProgram};
         match &mut self.0 {
             EmptyProgram => {
                 unreachable!(
@@ -135,11 +109,6 @@ impl<I> Programs<I> {
                 }
             }
             ConcatsVec(vec) => Rc::make_mut(vec).push((progs.clone(), inst.clone())),
-            Extend(rc) => {
-                let vec = Rc::get_mut(rc).unwrap();
-                vec.push(Self(Concat(Rc::new((progs.clone(), inst.clone())))));
-            }
-            _ => unimplemented!(),
         }
     }
 
@@ -153,16 +122,10 @@ impl<I> Programs<I> {
                 let (start, last) = rc.as_ref();
                 i.last() == Some(last) && start.contains(&i[..i.len() - 1])
             }
-            Inner::ConcatMany(rc) => {
-                let (start, lasts) = rc.as_ref();
-                i.last().is_some_and(|last| lasts.contains(last))
-                    && start.contains(&i[..i.len() - 1])
-            }
             Inner::ConcatsMap(_) => todo!(),
             Inner::ConcatsVec(items) => items
                 .iter()
                 .any(|(start, last)| i.last() == Some(last) && start.contains(&i[..i.len() - 1])),
-            Inner::Extend(rc) => rc.iter().any(|p| p.contains(i)),
         }
     }
 
@@ -179,12 +142,6 @@ impl<I> Programs<I> {
                 prog.push(inst.clone());
                 Some(prog)
             }
-            Inner::ConcatMany(rc) => {
-                let (p, insts) = &**rc;
-                let mut prog = p.sample()?;
-                prog.push(insts.first().unwrap().clone());
-                Some(prog)
-            }
             Inner::ConcatsMap(map) => map.iter().next().and_then(|(i, p)| {
                 let mut prog = p.sample()?;
                 prog.push(i.clone());
@@ -195,7 +152,6 @@ impl<I> Programs<I> {
                 prog.push(i.clone());
                 Some(prog)
             }),
-            Inner::Extend(rc) => rc.first().and_then(|p| p.sample()),
         }
     }
 
@@ -213,19 +169,6 @@ impl<I> Programs<I> {
                     |mut prog| {
                         prog.push(i.clone());
                         f(prog)
-                    },
-                ))
-            }
-            Inner::ConcatMany(rc) => {
-                let (p, insts) = &**rc;
-                p.try_each::<B, Box<dyn FnMut(Program<I>) -> ControlFlow<B>>>(Box::new(
-                    |mut prog| {
-                        for i in insts.iter() {
-                            prog.push(i.clone());
-                            f(prog.clone())?;
-                            prog.pop();
-                        }
-                        Continue(())
                     },
                 ))
             }
@@ -247,14 +190,6 @@ impl<I> Programs<I> {
                             prog.push(y.clone());
                             f(prog)
                         },
-                    ))?;
-                }
-                Continue(())
-            }
-            Inner::Extend(rc) => {
-                for p in rc.iter() {
-                    p.try_each::<B, Box<dyn FnMut(Program<I>) -> ControlFlow<B>>>(Box::new(
-                        &mut f,
                     ))?;
                 }
                 Continue(())
@@ -303,20 +238,16 @@ impl<I> Len for Programs<I> {
         match &self.0 {
             Inner::EmptyProgram => 1,
             Inner::Concat(rc) => rc.0.len(),
-            Inner::ConcatMany(rc) => rc.0.len() * rc.1.len(),
             Inner::ConcatsMap(map) => map.values().map(|p| p.len()).sum(),
             Inner::ConcatsVec(vec) => vec.iter().map(|(p, _)| p.len()).sum(),
-            Inner::Extend(rc) => rc.iter().map(|p| p.len()).sum(),
         }
     }
     fn is_empty(&self) -> bool {
         match &self.0 {
             Inner::EmptyProgram => false,
             Inner::Concat(rc) => rc.0.is_empty(),
-            Inner::ConcatMany(rc) => rc.0.is_empty() || rc.1.is_empty(),
             Inner::ConcatsMap(map) => map.values().all(|p| p.is_empty()),
             Inner::ConcatsVec(vec) => vec.iter().all(|(p, _)| p.is_empty()),
-            Inner::Extend(rc) => rc.iter().all(|p| p.is_empty()),
         }
     }
 }
@@ -388,7 +319,6 @@ where
                             let concats = vec.into_iter().map(|(p, i)| (i, p)).collect();
                             Self(Inner::ConcatsMap(Rc::new(concats)))
                         }),
-                        // TODO: add ConcatMany and Extend
                     ]
                 },
             )
