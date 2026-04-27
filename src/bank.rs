@@ -104,7 +104,7 @@ impl<W: Word + HasBitWord> Bucket<W> {
         .map(|inst| {
             let mut output = *input.state();
             inst.run(&mut output);
-            (output.masked(inst.potential_write_mask()), inst)
+            (output.masked(inst.potential_read_mask() | inst.potential_write_mask()), inst)
         })
         // Group by output.
         .fold(Bucket(FxHashMap::default()), |bucket, (output, inst)| {
