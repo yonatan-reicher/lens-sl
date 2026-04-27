@@ -179,6 +179,7 @@ mod tests {
     use super::*;
     use crate::arm::state::{Mask, State};
     use crate::inst;
+    use proptest::property_test;
 
     #[test]
     fn test_bank() {
@@ -198,5 +199,26 @@ mod tests {
         let insts = bucket.get(&end);
         println!("Insts: {insts:#?}");
         assert!(insts.borrow().contains(&inst!(AddI, 0, 0, 14)));
+    }
+
+    #[ignore]
+    #[property_test]
+    fn test_inst_always_in_effect_bucket(inst: Inst<Word4>, inp: State<Word4>) {
+        let inp = inp.masked(inst.potential_read_mask());
+        let out = (*inp.state()).mutate(|s| inst.run(s)).masked(inst.potential_read_mask() | inst.potential_write_mask());
+        println!("Testing instruction {inst} on state {inp} (output {out})");
+        let b = Bank::<Word4>::new(EnumerationInfo {
+            inp_registers: EnumerationInfoOptions::Unlimited,
+            out_registers: EnumerationInfoOptions::Unlimited,
+            include_nop: true,
+            ..default()
+        });
+        let bucket = b.get(&inp);
+        let insts = bucket.get(&out);
+        assert!(
+            insts.borrow().contains(&inst),
+            "Instruction {inst} should be in the bucket for input {inp} and output {out}, but it isn't. Bucket contents: {:?}",
+            insts.borrow().iter().join(", ")
+        );
     }
 }

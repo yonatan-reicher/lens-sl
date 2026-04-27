@@ -72,7 +72,7 @@ mod tests {
     }
 
     #[property_test]
-    fn contains_all(sets: Vec<HashSet<u8>>) {
+    fn spec(sets: Vec<HashSet<u8>>) {
         println!("------------------------");
         println!("Sets:");
         for s in sets.iter() {
@@ -80,9 +80,16 @@ mod tests {
         }
         let s = intersect_all(sets.iter()).into_iter().collect::<Vec<_>>();
         println!("Intersection: \n{s:?}");
-        for x in s {
+        println!("Testing that every element of the intersection is in every set...");
+        for x in s.iter() {
             for s1 in sets.iter() {
-                prop_assert!(s1.contains(&x));
+                prop_assert!(s1.contains(x));
+            }
+        }
+        println!("Testing that no elements are missing from the intersection...");
+        for s1 in sets.iter() {
+            for x in s1.iter().filter(|x| sets.iter().all(|s2| s2.contains(x))) {
+                prop_assert!(s.contains(x));
             }
         }
     }
