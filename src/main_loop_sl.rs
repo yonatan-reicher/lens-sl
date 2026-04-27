@@ -511,15 +511,17 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                         }
                         // Break because we don't care about the rest of the postfixes, we already
                         // split the class.
-                        Break(ProgramOrRetry::Retry)
+                        Break(None)
                     } else {
                         // Find a counter example! Verify will stop the iteration when a
                         // counter-example is found, and the condition above will be true instead of
                         // false, causing this equivalence class will be split.
-                        next_prefixes.try_each(|prefix| {
-                            let prog = prefix.chain(postfix.iter().cloned()).collect_vec();
-                            oracle.verify(&prog)
-                        })
+                        next_prefixes
+                            .try_each(|prefix| {
+                                let prog = prefix.chain(postfix.iter().cloned()).collect_vec();
+                                oracle.verify(&prog)
+                            })
+                            .map_break(Some)
                     }
                 },
             ) {
@@ -527,8 +529,11 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                     "I think this only happens when we need to split but can't find a counter-example, but I'm not sure. Anyway, I don't know how to handle that case."
                 ),
                 Continue(()) => on_each_result(next_states, next_prefixes),
-                Break(ProgramOrRetry::Program(p)) => return Break(Ok(p)),
-                Break(ProgramOrRetry::Retry) => {}
+                Break(None) => {}
+                Break(Some(ProgramOrRetry::Program(p))) => return Break(Ok(p)),
+                Break(Some(ProgramOrRetry::Retry)) => {
+                    splitting_buffer.push((next_states, next_prefixes));
+                }
             }
         }
         Continue(was_split)
