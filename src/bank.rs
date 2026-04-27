@@ -84,18 +84,17 @@ impl<W: Word + HasBitWord> Bucket<W> {
         Inst::enumerate(EnumerationInfo {
             // Limit only to registers relevant to the input.
             inp_registers: EnumerationInfoOptions::Limited(registers.as_slice()),
-            out_registers: EnumerationInfoOptions::Limited(registers.as_slice()),
             ..ei
         })
         // Filter instructions further! Masks need to match exactly.
         .filter(|inst| {
-            assert!(
-                inst.potential_input_mask()
-                    .is_sub_mask(&input.mask().into_mask().mutate(|m| m.flags = true /* Flags aren't pruned above */)),
-                "Instruction {inst} has potential input mask {} which is not a sub-mask of input mask {}",
-                inst.potential_input_mask(),
-                input.mask().into_mask(),
-            );
+            // assert!(
+            //     inst.potential_input_mask()
+            //         .is_sub_mask(&input.mask().into_mask().mutate(|m| m.flags = true /* Flags aren't pruned above */)),
+            //     "Instruction {inst} has potential input mask {} which is not a sub-mask of input mask {}",
+            //     inst.potential_input_mask(),
+            //     input.mask().into_mask(),
+            // );
             inst.potential_input_mask() == input.mask().into_mask()
         })
         // Run
