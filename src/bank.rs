@@ -66,8 +66,9 @@ impl<'a, W: Word + HasBitWord> Bank<'a, W> {
             .entry(*input)
             .or_insert_with(|| {
                 let bucket = Bucket::new(input, self.ei, &mut self.insts_arena.borrow_mut());
-                let id = self.bucket_arena.borrow().len();
-                self.bucket_arena.borrow_mut().push(bucket);
+                let bucket_arena = &mut self.bucket_arena.borrow_mut();
+                let id = bucket_arena.len();
+                bucket_arena.push(bucket);
                 id
             });
         BucketRef(self, id)
