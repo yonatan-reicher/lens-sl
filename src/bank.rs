@@ -78,33 +78,31 @@ impl<'a, W: Word + HasBitWord> Bank<'a, W> {
 impl<W: Word + HasBitWord> Bucket<W> {
     fn new(input: &Input<W>, ei: EnumerationInfo<W>, insts_arena: &mut Vec<Insts<W>>) -> Self {
         // Initialize the bucket by running all instructions on the input and recording outputs.
+        let registers = Register::all()
+            .filter(|r| input.mask().into_mask()[*r] && ei.inp_registers.into_iter().contains(r))
+            .collect::<Vec<_>>();
         Inst::enumerate(EnumerationInfo {
             // Limit only to registers relevant to the input.
-            inp_registers: Register::all()
-                .filter(|r| {
-                    input.mask().into_mask()[*r] && ei.inp_registers.into_iter().contains(r)
-                })
-                .collect::<Vec<_>>()
-                .as_slice()
-                .pipe(EnumerationInfoOptions::Limited),
+            inp_registers: EnumerationInfoOptions::Limited(registers.as_slice()),
+            out_registers: EnumerationInfoOptions::Limited(registers.as_slice()),
             ..ei
         })
         // Filter instructions further! Masks need to match exactly.
         .filter(|inst| {
             assert!(
-                inst.potential_read_mask()
+                inst.potential_input_mask()
                     .is_sub_mask(&input.mask().into_mask().mutate(|m| m.flags = true /* Flags aren't pruned above */)),
-                "Instruction {inst} has potential read mask {} which is not a sub-mask of input mask {}",
-                inst.potential_read_mask(),
+                "Instruction {inst} has potential input mask {} which is not a sub-mask of input mask {}",
+                inst.potential_input_mask(),
                 input.mask().into_mask(),
             );
-            inst.potential_read_mask() == input.mask().into_mask()
+            inst.potential_input_mask() == input.mask().into_mask()
         })
         // Run
         .map(|inst| {
             let mut output = *input.state();
             inst.run(&mut output);
-            (output.masked(inst.potential_read_mask() | inst.potential_write_mask()), inst)
+            (output.masked(inst.potential_output_mask()), inst)
         })
         // Group by output.
         .fold(Bucket(FxHashMap::default()), |bucket, (output, inst)| {
@@ -205,8 +203,10 @@ mod tests {
     #[ignore]
     #[property_test]
     fn test_inst_always_in_effect_bucket(inst: Inst<Word4>, inp: State<Word4>) {
-        let inp = inp.masked(inst.potential_read_mask());
-        let out = (*inp.state()).mutate(|s| inst.run(s)).masked(inst.potential_read_mask() | inst.potential_write_mask());
+        let inp = inp.masked(inst.potential_input_mask());
+        let out = (*inp.state())
+            .mutate(|s| inst.run(s))
+            .masked(inst.potential_output_mask());
         println!("Testing instruction {inst} on state {inp} (output {out})");
         let b = Bank::<Word4>::new(EnumerationInfo {
             inp_registers: EnumerationInfoOptions::Unlimited,
