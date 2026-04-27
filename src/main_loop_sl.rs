@@ -374,6 +374,7 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                                 .or_default()
                                 .extend([progs]);
                         },
+                        self.tui,
                     )?;
                     // if was_split {
                     //     println!(
@@ -468,6 +469,7 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
         prefixes: Programs<W>,
         states: Vec<State<W>>,
         mut on_each_result: impl FnMut(Vec<State<W>>, Programs<W>),
+        tui: &dyn TuiHook<&Graph<W>, State<W>>,
     ) -> ControlFlow<Result<Program<WBig>, Cancelled>, bool> {
         // Start with just the input.
         splitting_buffer.clear();
@@ -492,7 +494,11 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                     if let Some((inp, _)) = counter_examples.get(next_ce) {
                         // We still haven't ran on all of our counter-examples! Run and repeat.
                         let mut new_state_possibilities = FxHashMap::<_, Programs<W>>::default();
+                        let mut i = 0;
+                        tui.progress_push();
                         next_prefixes.each(|prefix| {
+                            tui.progress(i, next_prefixes.len());
+                            i += 1;
                             let out = prefix.clone().fold(inp, |s, i| s.mutate(|s| i.run(s)));
                             new_state_possibilities
                                 .entry(out)
@@ -500,6 +506,7 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                                 // TODO: This can be better
                                 .extend([Programs::program(prefix.collect_vec())]);
                         });
+                        tui.progress_pop();
                         was_split = true;
                         for (new_state, its_prefixes) in new_state_possibilities {
                             // TODO: So can this
@@ -515,12 +522,18 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                         // Find a counter example! Verify will stop the iteration when a
                         // counter-example is found, and the condition above will be true instead of
                         // false, causing this equivalence class will be split.
-                        next_prefixes
+                        let mut i = 0;
+                        tui.progress_push();
+                        let ret = next_prefixes
                             .try_each(|prefix| {
+                                tui.progress(i, next_prefixes.len());
+                                i += 1;
                                 let prog = prefix.chain(postfix.iter().cloned()).collect_vec();
                                 oracle.verify(&prog)
                             })
-                            .map_break(Some)
+                            .map_break(Some);
+                        tui.progress_pop();
+                        ret
                     }
                 },
             ) {
