@@ -109,7 +109,13 @@ impl<I> Programs<I> {
     }
 
     pub fn program(p: Vec<I>) -> Self {
-        Self::from(Inner::Program(Rc::from(p)))
+        if p.is_empty() {
+            Self::empty_program()
+        } else if p.len() == 1 {
+            Self::inst(p.into_iter().next().unwrap())
+        } else {
+            Self::from(Inner::Program(Rc::from(p)))
+        }
     }
 
     pub fn concat(self, inst: I) -> Self {
@@ -233,7 +239,7 @@ impl<I> Programs<I> {
                     program.pop();
                 }
                 Program(p) => {
-                    program.extend_from_slice(p);
+                    program.extend(p.iter().cloned().rev());
                     f(program)?;
                     program.truncate(program.len() - p.len());
                 }
@@ -252,7 +258,7 @@ impl<I> Programs<I> {
                     }
                 }
                 Extend(vec) => {
-                    for p in vec.iter().rev() {
+                    for p in vec.iter() {
                         visit(p, program, f)?;
                     }
                 }
