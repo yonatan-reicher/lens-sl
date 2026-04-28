@@ -53,7 +53,7 @@ where
 
     // TODO: rename
     /// Returns true when there was a match.
-    pub fn get<T>(&self, mut f: impl FnMut() -> ControlFlow<T>) -> ControlFlow<T, bool> {
+    pub fn get<T>(&self, mut f: impl FnMut(&[I]) -> ControlFlow<T>) -> ControlFlow<T, bool> {
         use ControlFlow::Continue;
         if !self.ended() {
             return Continue(false);
@@ -65,9 +65,9 @@ where
         let Some((i, smallest)) = sets.iter().enumerate().min_by_key(|(_, s)| s.len()) else {
             return Continue(false);
         };
-        smallest.try_each(|p| {
-            if sets.iter().enumerate().all(|(j, ps)| j == i || ps.contains(p.clone())) {
-                f()?;
+        smallest.try_each_reversed(|p| {
+            if sets.iter().enumerate().all(|(j, ps)| j == i || ps.contains(p.iter().cloned())) {
+                f(p)?;
             }
             Continue(())
         }).map_continue(|()| true)
