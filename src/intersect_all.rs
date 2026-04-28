@@ -6,7 +6,7 @@ use std::ops::Deref;
 pub fn intersect_all<'a, R, T, S>(mut sets: impl Iterator<Item = R>) -> HashSet<T, S>
 where
     HashSet<T, S>: Clone + Default,
-    R: Deref<Target = HashSet<T,S>>,
+    R: Deref<Target = HashSet<T, S>>,
     T: Eq + Hash + 'a,
     S: BuildHasher + 'a,
 {
