@@ -291,6 +291,40 @@ impl<I> Programs<I> {
             ControlFlow::Break(()) => unreachable!(),
         }
     }
+
+    pub fn contains<Prog>(&self, program: Prog) -> bool
+    where
+        I: Clone + Eq,
+        Prog: Clone + DoubleEndedIterator + ExactSizeIterator<Item = I>,
+    {
+        // First check the depth, then call another function that does the recursion without
+        // checking the depth.
+        return self.depth as usize == program.len() && visit(self, program);
+
+        fn visit<I, Prog>(this: &Programs<I>, mut program: Prog) -> bool
+        where
+            I: Clone + Eq,
+            Prog: Clone + DoubleEndedIterator + ExactSizeIterator<Item = I>,
+        {
+            use Inner::{Concat, ConcatMany, Empty, EmptyProgram, Extend, Inst, Program};
+            match &this.inner {
+                Empty => false,
+                EmptyProgram => program.len() == 0,
+                Inst(i) => program.next().as_ref() == Some(i),
+                Program(other_program) => program.eq(other_program.iter().cloned()),
+                Concat(rc) => {
+                    let (progs, inst) = &**rc;
+                    program.next_back().as_ref() == Some(inst) && visit(progs, program)
+                }
+                ConcatMany(rc) => {
+                    let (progs, insts) = &**rc;
+                    let last = program.next_back().unwrap();
+                    insts.iter().contains(&last) && visit(progs, program)
+                }
+                Extend(progs) => progs.iter().any(|p| visit(p, program.clone())),
+            }
+        }
+    }
 }
 
 impl<I> Default for Programs<I> {
