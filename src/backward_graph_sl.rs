@@ -61,6 +61,7 @@ where
         let start = &self.g.longest().unwrap();
         let sets =
             self.inputs.iter().zip(start.iter()).map(|(s, map)| map[s].clone())
+            .sorted_by_key(|s| s.len())
             .collect_vec();
         let Some((i, smallest)) = sets.iter().enumerate().min_by_key(|(_, s)| s.len()) else {
             return Continue(false);
