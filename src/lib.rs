@@ -27,6 +27,7 @@ mod tui;
 mod verify;
 /// A mapping from input states and output states to the instructions which take one to the other.
 mod bank;
+mod inst_input_table;
 
 // --- Utilities ---
 /// Return all permutations of a slice of iterators.
