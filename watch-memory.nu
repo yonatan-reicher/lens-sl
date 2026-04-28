@@ -8,7 +8,7 @@ loop {
         # | where name in [lens-sl, cvc5]
         | where name in [lens-sl, benchmark]
         | group-by name
-        | update cells { reject name ppid virtual }
+        | update cells { reject name ppid }
     clear
     $x | table --expand -d 5 --theme none | print
     sleep 0.2sec
