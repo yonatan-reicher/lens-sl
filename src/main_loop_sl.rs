@@ -63,7 +63,7 @@ type Graph<W> = graph::Graph<State<W>, crate::programs::Programs<Inst<W>>>;
 // This is the main function that gets exposed.
 /// `WT` for word size of the target program.
 /// `WS` for word size of the synthesis process.
-pub fn optimize<WT: Word + HasBitWord, WS: Word + HasBitWord + serde::de::DeserializeOwned>(
+pub fn optimize<WT: Word + HasBitWord, WS: Word + HasBitWord + DeserializeOwned>(
     c: Config<WT>,
     tui: &impl for<'g> TuiHook<&'g Graph<WS>, State<WS>>,
 ) -> OptimizeResult<WT>
