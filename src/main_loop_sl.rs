@@ -432,7 +432,7 @@ where
                 self.tui,
                 self.enumeration_info,
                 &self.bm,
-                self.postfix_len,
+                self.postfix_len + 1, // +1 because we are expanding!
             )?;
         }
         self.tui.progress(len, len);
