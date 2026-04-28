@@ -9,6 +9,7 @@ use crate::bank::Bank;
 use crate::collect_registers::Collector;
 use crate::direction::Direction::{self, Backward, Forward};
 use crate::graph;
+use crate::inst_input_table::{InstInputTable, InstInputTableParams};
 use crate::intersect_all::intersect_all;
 use crate::len::Len;
 use crate::oracle::{Oracle, SmtOracle};
@@ -108,12 +109,6 @@ where
 
     let counter_examples = &CounterExamplesCell::default();
 
-    let bm = if !c.forward_only {
-        BackwardMap::new(&registers).unwrap()
-    } else {
-        BackwardMap::default()
-    };
-
     let enumeration_info = EnumerationInfo {
         inp_registers: EnumerationInfoOptions::Limited(&registers),
         out_registers: EnumerationInfoOptions::Limited(&registers),
@@ -123,6 +118,17 @@ where
     };
 
     let n_instructions = Inst::enumerate(enumeration_info).count();
+
+    let bm = if !c.forward_only {
+        BackwardMap::new(&registers).unwrap()
+    } else {
+        BackwardMap::default()
+    };
+    let insts_input_table = InstInputTable::new(InstInputTableParams {
+        verbose: true,
+        enumeration_info,
+    })
+    .unwrap();
 
     // This should (obviously) be the very last thing initialized.
     let started_at = Instant::now();
@@ -147,6 +153,7 @@ where
             tui,
         },
         bm,
+        insts_input_table,
         started_at,
         should_cancel: c.should_cancel.resolve_timeout(started_at),
         stats: Stats {
@@ -193,6 +200,8 @@ struct Optimizer<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> {
     oracle: &'a mut ReducedProgramOracle<'a, WBig, W>,
     /// This is needed to run instructions backwards in time.
     bm: BackwardMap<W>,
+    /// This is for getting all the instructions with a specific input mask!
+    insts_input_table: InstInputTable<W>,
     /// When did the search actually start? We need this to return an elapsed time at the end.
     started_at: Instant,
     /// A condition on when to stop the search and give up. Note that the config already contains a
@@ -212,7 +221,11 @@ struct Optimizer<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> {
     splitting_buffer: Vec<(Vec<State<W>>, Programs<W>)>,
 }
 
-impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
+impl<WBig, W> Optimizer<'_, WBig, W>
+where
+    WBig: Word + HasBitWord,
+    W: Word + HasBitWord<BitWord: DeserializeOwned> + DeserializeOwned,
+{
     pub fn optimize(mut self) -> OptimizeResult<WBig> {
         // Plan: Do some setup, then start the optimization loop.
         // We have to start the optimization with at least one counter-example, so we deal with that
@@ -309,8 +322,13 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
             let do_subsumption = false;
             let mut discarded = FxHashSet::<Inst<W>>::default();
             for mask in Self::input_sub_masks(self.top_mask) {
-                for inst in insts_with_precondtion(self.enumeration_info, &self.bank, &states, mask)
-                {
+                for inst in Self::insts_with_precondtion(
+                    self.enumeration_info,
+                    &self.bank,
+                    &states,
+                    mask,
+                    &self.insts_input_table,
+                ) {
                     let mut equivalent_insts = FxHashSet::<Inst<W>>::default();
                     // We can't do this filtering as part of the selecting the instructions
                     // because the discard set changes through the loop.
@@ -464,7 +482,7 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
     fn split_prefix_class(
         splitting_buffer: &mut Vec<(Vec<State<W>>, Programs<W>)>,
         counter_examples: &CounterExamplesCell<W>,
-        oracle: &mut ReducedProgramOracle<'a, WBig, W>,
+        oracle: &mut ReducedProgramOracle<'_, WBig, W>,
         backward_frontier: &FxHashMap<State<W>, Programs<W>>,
         should_cancel: ShouldCancel,
         prefixes: Programs<W>,
