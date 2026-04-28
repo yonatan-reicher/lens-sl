@@ -304,7 +304,6 @@ where
             }
             // The red code.
             let do_discard = true;
-            let do_subsumption = false;
             let mut discarded = FxHashSet::<Inst<W>>::default();
             for mask in Self::input_sub_masks(self.top_mask) {
                 for inst in Self::insts_with_precondtion(
@@ -329,25 +328,14 @@ where
                     // Extend Hila's discard set. Extend it by all the instructions which do the
                     // exact same thing as this instruction on the current inputs.
                     if do_discard {
-                        if do_subsumption {
-                            equivalent_insts.extend(insts_with_same_effect(
-                                self.top_mask,
-                                &self.bank,
-                                mask,
-                                states.as_slice(),
-                                next_states.as_slice(),
-                                &mut self.stats,
-                            ));
-                        } else {
-                            equivalent_insts.extend(intersect_all(
-                                states.iter().zip(&next_states).map(|(s, next_s)| {
-                                    self.bank
-                                        .get(&s.masked(mask))
-                                        .get(&next_s.masked(inst.potential_output_mask()))
-                                        .borrow()
-                                }),
-                            ));
-                        }
+                        equivalent_insts.extend(intersect_all(
+                            states.iter().zip(&next_states).map(|(s, next_s)| {
+                                self.bank
+                                    .get(&s.masked(mask))
+                                    .get(&next_s.masked(inst.potential_output_mask()))
+                                    .borrow()
+                            }),
+                        ));
                     } else {
                         equivalent_insts.insert(inst);
                     }
