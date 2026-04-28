@@ -3,15 +3,13 @@
 
 use crate::all::All;
 use crate::arm::enumerate::{EnumerationInfo, EnumerationInfoOptions};
-use crate::arm::state::{Mask, State};
+use crate::arm::state::State;
 use crate::arm::{BackwardMap, Inst};
 use crate::backward_graph_sl;
 use crate::bank::Bank;
 use crate::collect_registers::Collector;
 use crate::direction::Direction::{self, Backward, Forward};
 use crate::graph;
-use crate::inst;
-use crate::inst_input_table::{InstInputTable, InstInputTableParams};
 use crate::intersect_all::intersect_all;
 use crate::len::Len;
 use crate::oracle::{Oracle, SmtOracle};
@@ -128,11 +126,6 @@ where
     } else {
         BackwardMap::default()
     };
-    let insts_input_table = InstInputTable::new(InstInputTableParams {
-        verbose: true,
-        enumeration_info,
-    })
-    .unwrap();
 
     // This should (obviously) be the very last thing initialized.
     let started_at = Instant::now();
@@ -154,17 +147,12 @@ where
         },
         backward_graph: default(),
         bm,
-        insts_input_table,
         started_at,
         should_cancel: c.should_cancel.resolve_timeout(started_at),
         stats: Stats {
             n_instructions,
             ..Stats::default()
         },
-        top_mask: registers
-            .iter()
-            .cloned()
-            .fold(Mask::JUST_FLAGS, |m, r| m | Mask::just_register(r)),
         tui,
         postfix_len: 0,
         prefix_len: 0,
@@ -195,8 +183,6 @@ struct Optimizer<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> {
     backward_graph: BackwardGraph<W>,
     /// This is needed to run instructions backwards in time.
     bm: BackwardMap<W>,
-    /// This is for getting all the instructions with a specific input mask!
-    insts_input_table: InstInputTable<W>,
     /// When did the search actually start? We need this to return an elapsed time at the end.
     started_at: Instant,
     /// A condition on when to stop the search and give up. Note that the config already contains a
@@ -204,9 +190,6 @@ struct Optimizer<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> {
     should_cancel: ShouldCancel,
     /// Various things. Might do something with this later.
     stats: Stats,
-    /// The mask containing everything we care about in the search. It is the ⊤ (top) of the
-    /// lattice of masks that are relevant to the search.
-    top_mask: Mask,
     tui: &'a dyn TuiHook<&'a Graph<W>, State<W>>,
     postfix_len: usize,
     prefix_len: usize,
@@ -604,83 +587,6 @@ where
         Continue(was_split)
     }
 
-    fn input_sub_masks(mask: Mask) -> impl Iterator<Item = Mask> {
-        let flags = mask.flags;
-        let bit_mask_no_flags = Mask {
-            flags: false,
-            ..mask
-        }
-        .into_bit_mask();
-        (0..=2).flat_map(move |n_regs| {
-            if flags {
-                [false, true].as_slice()
-            } else {
-                [false].as_slice()
-            }
-            .iter()
-            .flat_map(move |&include_flags| {
-                bit_mask_no_flags
-                    .sub_masks_with_len(n_regs)
-                    .map(|m| m.into_mask())
-                    .map(move |m| {
-                        m | Mask {
-                            flags: include_flags,
-                            ..Mask::EMPTY
-                        }
-                    })
-            })
-        })
-    }
-
-    /// Gets all instructions which have the same input
-    /// Find all instructions (and their effects!) that can run from the current states.
-    /// Instead of doing this by iterating all instructions, do this by intersection of equivalence
-    /// classes that can run from the states.
-    fn insts_with_precondtion<'a>(
-        ei: EnumerationInfo<'a, W>,
-        bank: &'a Bank<W>,
-        inputs: &[State<W>],
-        input_mask: Mask,
-        insts_input_table: &'a InstInputTable<W>,
-    ) -> impl IntoIterator<Item = Inst<W>> + use<'a, W, WBig> {
-        insts_input_table
-            .get(input_mask.into_bit_mask())
-            .iter()
-            .cloned()
-
-        // let inp_registers = input_mask.registers().collect::<Box<[_]>>();
-        // let evil_reference: &[_] = unsafe { &*std::ptr::from_ref(inp_registers.as_ref()) };
-        // let mut iter = Inst::enumerate(EnumerationInfo {
-        //     // Limit only to registers relevant to the input.
-        //     inp_registers: EnumerationInfoOptions::Limited(evil_reference),
-        //     ..ei
-        // })
-        // .filter(move |inst| inst.potential_input_mask() == input_mask);
-        // std::iter::from_fn(move || {
-        //     let ret = iter.next();
-        //     // Make sure this closure keeps the input registers allocation alive, so that the fact that
-        //     // this closure captures it is not optimized away and we get a use-after-free.
-        //     std::hint::black_box(&inp_registers);
-        //     ret
-        // })
-
-        // inputs
-        //     .iter()
-        //     .map(|input| input.masked(input_mask))
-        //     .map(|sub_input| {
-        //         // For this state, return set of commands that can run from it.
-        //         bank.get(&sub_input)
-        //             .iter()
-        //             // union
-        //             .flat_map(|(_, set)| RefIter::new(set.borrow(), |x| *x))
-        //             .collect::<FxHashSet<_>>()
-        //     })
-        //     .collect::<Vec<_>>()
-        //     // Intersect!
-        //     .as_slice()
-        //     .pipe(|a| intersect_all(a.iter())) // TODO: Change this with a syntactic lookup
-    }
-
     fn update_backward_graph(
         ei: EnumerationInfo<W>,
         bm: &BackwardMap<W>,
@@ -766,7 +672,7 @@ where
         frontier
             .drain()
             .sorted_by_key(|(_, progs)| usize::MAX - progs.len())
-            // .sorted_by_key(|(_, progs)| progs.len())
+        // .sorted_by_key(|(_, progs)| progs.len())
     }
 
     fn decide_direction(&self) -> Direction {
@@ -775,77 +681,6 @@ where
                 || (2u32.pow((self.postfix_len + 1) as u32) as usize > self.prefix_len + 1),
         )
     }
-}
-
-/// Gets instructions which have the same effect on the input state
-/// Top mask - the mask of the information relevant to the program search.
-fn insts_with_same_effect<W: Word + HasBitWord>(
-    top_mask: Mask,
-    bank: &Bank<W>,
-    sub_input_mask: Mask,
-    inputs: &[State<W>],
-    outputs: &[State<W>],
-    stats: &mut Stats,
-) -> impl Iterator<Item = Inst<W>> {
-    let stats = &*std::cell::UnsafeCell::from_mut(stats);
-    // Look at super-masks of the input
-    // TODO: We can do this more efficiently
-    sub_input_mask
-        .masks_between(top_mask)
-        .flat_map(move |sub_input_mask| {
-            let sub_inputs = inputs
-                .iter()
-                .map(|i| i.masked(sub_input_mask))
-                .map(|i| {
-                    (
-                        //Also contains the buckets!
-                        i,
-                        bank.get(&i),
-                    )
-                })
-                .collect::<Vec<_>>();
-            // And masks of the output that are in the in the bank
-            // TODO: We should filter them before asking the bank, because asking the bank is slow
-            top_mask
-                .sub_masks()
-                .map(|sub_output_mask| {
-                    (
-                        sub_output_mask,
-                        outputs.iter().map(move |s| s.masked(sub_output_mask)),
-                    )
-                })
-                .filter({
-                    let sub_inputs = sub_inputs.clone();
-                    move |(_sub_output_mask, sub_outputs)| {
-                        sub_inputs
-                            .iter()
-                            .cloned()
-                            .zip(sub_outputs.clone())
-                            .all(|((_, bucket), sub_output)| bucket.contains_key(&sub_output))
-                    }
-                })
-                .flat_map(move |(_sub_output_mask, sub_outputs)| {
-                    // We know these are ran one by one.
-                    let stats = unsafe { &mut *stats.get() };
-                    stats.n_intersections += 1;
-                    intersect_all(
-                        sub_inputs
-                            .iter()
-                            .cloned()
-                            .zip(sub_outputs)
-                            .map(|((_, bucket), sub_output)| bucket.get(&sub_output).borrow())
-                            .inspect(|s| stats.total_intersection_input_sizes += s.len())
-                            .collect::<Vec<_>>()
-                            .into_iter(),
-                    )
-                    .pipe(|s| {
-                        let _ = s
-                            .iter()
-                            .inspect(|_| stats.total_intersection_output_sizes += 1);
-                        s
-                    })
-                })
-        })
 }
 
 // =================================================================================================
