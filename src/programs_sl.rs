@@ -335,49 +335,61 @@ use itertools::Itertools;
 use proptest::prelude::*;
 
 #[cfg(test)]
+#[derive(Clone, Debug, Default)]
+pub struct ProgramsParams {
+    depth: Option<usize>,
+}
+
+#[cfg(test)]
 impl<I> Arbitrary for Programs<I>
 where
     I: Arbitrary + Clone + Debug + Eq + Hash + 'static,
     I::Strategy: 'static,
 {
-    type Parameters = ();
-
-    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-        todo!()
-        // let base = prop_oneof![
-        //     Just(Self::empty()),
-        //     Just(Self::empty_program()),
-        //     any::<I>().prop_map(Self::inst),
-        // ];
-        // base.prop_recursive(
-        //     8,  // maximum depth
-        //     40, // total size
-        //     5,  // amount of elements in a branch
-        //     |inner| {
-        //         prop_oneof![
-        //             // Concat
-        //             (inner.clone(), any::<I>()).prop_map(|(a, b)| a.concat(b)),
-        //             // Extend
-        //             (inner.clone(), inner.clone()).prop_map(|(a, b)| a.mutate(|a| a.extend([b])))
-        //             // TODO: The rest
-        //         ]
-        //     },
-        // )
-        // .boxed()
-    }
+    type Parameters = ProgramsParams;
 
     type Strategy = BoxedStrategy<Self>;
+
+    fn arbitrary_with(ProgramsParams { depth }: ProgramsParams) -> Self::Strategy {
+        use prop::collection::{size_range, vec};
+        if let Some(depth) = depth {
+            match depth {
+                0 => Just(Self::empty_program()).boxed(),
+                1 => any::<I>().prop_map(Self::inst).boxed(),
+                _ => {
+                    prop_oneof![
+                        // Program
+                        vec(any::<I>(), size_range(depth - 1..=depth - 1)).prop_map(Self::program),
+                        // Concat
+                        (any::<Self>(), any::<I>()).prop_map(|(progs, inst)| progs.concat(inst)),
+                        // ConcatMany
+                        (any::<Self>(), vec(any::<I>(), size_range(1..=depth - 1)))
+                            .prop_map(|(progs, insts)| progs.concat_many(insts)),
+                        // Extend
+                        vec(any::<Self>(), size_range(2..=depth - 1)).prop_map(|progs| progs
+                            .into_iter()
+                            .fold(Self::empty(), |acc, p| acc.extend(p)))
+                    ]
+                    .boxed()
+                }
+            }
+        } else {
+            (0..=5usize)
+                .prop_flat_map(|depth| Self::arbitrary_with(ProgramsParams { depth: Some(depth) }))
+                .boxed()
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    // use super::*;
-    // use proptest::property_test;
-    //
-    // #[property_test]
-    // fn len_is_amount_of_programs_in_each(programs: Programs<u8>) {
-    //     let mut count = 0;
-    //     programs.each(|_| count += 1);
-    //     prop_assert_eq!(count, programs.len());
-    // }
+    use super::*;
+    use proptest::property_test;
+
+    #[property_test]
+    fn len_is_amount_of_programs_in_each(programs: Programs<u8>) {
+        let mut count = 0;
+        programs.each(|_| count += 1);
+        prop_assert_eq!(count, programs.len());
+    }
 }
