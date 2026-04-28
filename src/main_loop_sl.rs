@@ -157,6 +157,7 @@ where
         postfix_len: 0,
         prefix_len: 0,
         splitting_buffer: vec![],
+        discard_sets: vec![],
     };
 
     optimizer.optimize()
@@ -197,6 +198,8 @@ struct Optimizer<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> {
     /// they need splitting.
     /// TODO: Is this forward only?
     splitting_buffer: Vec<(Vec<State<W>>, Programs<W>)>,
+    /// Index is frontier index.
+    discard_sets: Vec<FxHashSet<Inst<W>>>,
 }
 
 impl<WBig, W> Optimizer<'_, WBig, W>
@@ -278,45 +281,53 @@ where
     }
 
     fn expand_forward(&mut self) -> ControlFlow<Result<Program<WBig>, Cancelled>> {
-        let len = self.forward_frontier.len();
-        for (i, (states, prog)) in Self::reorder_frontier(&mut self.forward_frontier).enumerate() {
-            self.tui.progress(i, len);
-            // Should we stop?
-            if self.should_cancel.check() {
-                return Break(Err(Cancelled));
-            }
-            // The red code.
-            let do_discard = true;
-            let mut discarded = FxHashSet::<Inst<W>>::default();
-            for inst in Inst::enumerate(self.enumeration_info) {
-                let mask = inst.potential_input_mask();
-                let mut equivalent_insts = FxHashSet::<Inst<W>>::default();
-                // We can't do this filtering as part of the selecting the instructions
-                // because the discard set changes through the loop.
-                if do_discard && discarded.contains(&inst) {
+        let n_inst = self.stats.n_instructions;
+        let n_states = self.forward_frontier.len();
+        //
+        let do_discard = true;
+        if do_discard {
+            // self.discard_sets.clear();
+            self.discard_sets.iter_mut().for_each(|s| s.clear());
+            self.discard_sets.resize(n_states, FxHashSet::default());
+        }
+        // For each instruction, go through the whole frontier and search for a connection!
+        for (i_inst, inst) in Inst::enumerate(self.enumeration_info).enumerate() {
+            self.tui.progress(i_inst, n_inst);
+            let mask = inst.potential_input_mask();
+            //
+            self.tui.progress_push();
+            for (i_states, (states, prefixes)) in self.forward_frontier.iter().enumerate() {
+                self.tui.progress(i_states, n_states);
+                // Should we stop?
+                if self.should_cancel.check() {
+                    return Break(Err(Cancelled));
+                }
+                // Have we gone through an equivalent instruction already? If so, skip!
+                if do_discard && self.discard_sets[i_states].contains(&inst) {
                     self.stats.n_discarded += 1;
-                    self.stats.last_discard_size = equivalent_insts.len();
                     continue;
                 }
+                // If I had structured the code better, this would have been a function called
+                // `extend_and_split` or something.
                 let next_states = states
                     .iter()
                     .map(|s| (*s).mutate(|s| inst.run(s)))
                     .collect::<Vec<_>>();
-                // Extend Hila's discard set. Extend it by all the instructions which do the
-                // exact same thing as this instruction on the current inputs.
-                if do_discard {
-                    equivalent_insts.extend(intersect_all(states.iter().zip(&next_states).map(
-                        |(s, next_s)| {
-                            self.bank
-                                .get(&s.masked(mask))
-                                .get(&next_s.masked(inst.potential_output_mask()))
-                                .borrow()
-                        },
-                    )));
+                let equivalent_insts = if do_discard {
+                    intersect_all(states.iter().zip(&next_states).map(|(s, next_s)| {
+                        self.bank
+                            .get(&s.masked(mask))
+                            .get(&next_s.masked(inst.potential_output_mask()))
+                            .borrow()
+                    }))
                 } else {
-                    equivalent_insts.insert(inst);
+                    FxHashSet::default().mutate(|s| {
+                        s.insert(inst);
+                    })
+                };
+                if do_discard {
+                    self.discard_sets[i_states].extend(&equivalent_insts);
                 }
-                discarded.extend(&equivalent_insts);
                 debug_assert!(
                         equivalent_insts.contains(&inst),
                         "on state {states:?} and mask {mask:?},
@@ -330,7 +341,7 @@ where
                     self.oracle,
                     &mut self.backward_graph,
                     self.should_cancel,
-                    prog.clone()
+                    prefixes.clone()
                         .concat_many(equivalent_insts.iter().cloned().collect()),
                     next_states.clone(),
                     |next_states, progs| {
@@ -344,17 +355,9 @@ where
                     &self.bm,
                     self.postfix_len,
                 )?;
-                // if was_split {
-                //     println!(
-                //         "Split at prefix length {} states {} n programs {} inst {inst}",
-                //         self.prefix_len,
-                //         states.iter().map(|s| s.to_string()).join(" "),
-                //         prog.len()
-                //     );
-                // }
             }
+            self.tui.progress_pop();
         }
-        self.tui.progress(len, len);
         self.forward_frontier.clear();
         std::mem::swap(&mut self.next_forward_frontier, &mut self.forward_frontier);
         Continue(())
