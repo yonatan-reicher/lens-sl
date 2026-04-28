@@ -259,10 +259,7 @@ where
         while self.postfix_len + self.prefix_len + 1 < self.original_reduced.len() {
             let _length = self.postfix_len + self.prefix_len;
             self.tui.progress(0, self.stats.n_instructions);
-            let direction = Direction::from_is_forward(
-                self.config.forward_only
-                    || (2u32.pow((self.postfix_len + 1) as u32) as usize > self.prefix_len + 1),
-            );
+            let direction = self.decide_direction();
             self.tui.expanding(direction);
             let ret = match direction {
                 // This is where the magic actually happens.
@@ -799,6 +796,13 @@ where
             .drain()
             // .sorted_by_key(|(_, progs)| usize::MAX - progs.len())
             .sorted_by_key(|(_, progs)| progs.len())
+    }
+
+    fn decide_direction(&self) -> Direction {
+        Direction::from_is_forward(
+            self.config.forward_only
+                || (2u32.pow((self.postfix_len + 1) as u32) as usize > self.prefix_len + 1),
+        )
     }
 }
 
