@@ -309,7 +309,7 @@ where
         for (i, (states, prog)) in self
             .forward_frontier
             .drain()
-            .sorted_by_key(|(_, progs)| progs.len())
+            .sorted_by_key(|(_, progs)| usize::MAX - progs.len())
             .enumerate()
         {
             self.tui.progress(i, len);
