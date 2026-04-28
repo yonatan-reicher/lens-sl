@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc b1531a327e1f5d58cb479f5421ee8f443879545fda8d2494d132b3c94e203722 # shrinks to TestInstAlwaysInEffectBucketArgs = TestInstAlwaysInEffectBucketArgs { inst: nop -, -, -, inp: ──── r0= 0 r1= 0 r2= 0 r3= 0 r4= 0 r5= 0 r6= 0 r7= 0 r8= 0 r9= 0 r10= 0 r11= 0 r12= 0 r13= 0 r14= 0 r15= 0 }
