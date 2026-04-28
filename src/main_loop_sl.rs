@@ -341,7 +341,8 @@ where
                     self.oracle,
                     &mut self.backward_graph,
                     self.should_cancel,
-                    prefixes.clone()
+                    prefixes
+                        .clone()
                         .concat_many(equivalent_insts.iter().cloned().collect()),
                     next_states.clone(),
                     |next_states, progs| {
@@ -494,6 +495,7 @@ where
         // While we still have things, get the next thing, and see if it needs splitting.
         // If not, mark it as good and remove it.
         let mut was_split = false;
+        let mut new_state_possibilities = FxHashMap::<_, Programs<W>>::default();
         while let Some((next_states, next_prefixes)) = splitting_buffer.pop() {
             if should_cancel.check() {
                 return Break(Err(Cancelled));
@@ -529,29 +531,32 @@ where
                 let next_ce = next_states.len();
                 if let Some((inp, _)) = counter_examples.get(next_ce) {
                     // We still haven't ran on all of our counter-examples! Run and repeat.
-                    let mut new_state_possibilities = FxHashMap::<_, Programs<W>>::default();
                     let mut i = 0;
+                    new_state_possibilities.clear();
                     tui.progress_push();
                     next_prefixes.each(|prefix| {
                         if next_prefixes.len() < 1_000_000 || i % 10_000 == 0 {
                             tui.progress(i, next_prefixes.len());
                         }
                         i += 1;
-                        let out = prefix.clone().fold(inp, |s, i| s.mutate(|s| i.run(s)));
+                        let prefix = prefix.collect_vec();
+                        let out = prefix
+                            .iter()
+                            .cloned()
+                            .fold(inp, |s, i| s.mutate(|s| i.run(s)));
                         new_state_possibilities
                             .entry(out)
                             .or_default()
-                            // TODO: This can be better
-                            .extend([Programs::program(prefix.collect_vec())]);
+                            .extend([Programs::program(prefix)]);
                     });
                     tui.progress_pop();
                     was_split = true;
                     // Add all the new classes to the buffer to check if they need further
                     // splitting!
-                    for (new_state, its_prefixes) in new_state_possibilities {
+                    for (new_state, its_prefixes) in new_state_possibilities.drain() {
                         // TODO: So can this
                         splitting_buffer.push((
-                            next_states.clone().mutate(|s| s.push(new_state)),
+                            next_states.iter().cloned().chain([new_state]).collect(),
                             its_prefixes,
                         ));
                     }
