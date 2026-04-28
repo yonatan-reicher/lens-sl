@@ -18,8 +18,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 /// This is for getting all the instructions with a specific input mask!
 #[derive(Debug, Serialize, Deserialize)]
 pub struct InstInputTable<W: Word, WShift: Word = BitWord<W>> {
-    map: FxHashMap<BitMask, FxHashSet<Inst<W, WShift>>>,
-    empty_set: FxHashSet<Inst<W, WShift>>,
+    map: FxHashMap<BitMask, Vec<Inst<W, WShift>>>,
+    empty_set: Vec<Inst<W, WShift>>,
 }
 
 #[derive(Debug, Default)]
@@ -113,7 +113,7 @@ where
     pub fn new_recalculate(verbose: bool, enumeration_info: EnumerationInfo<W>) -> Self {
         let mut ret = Self {
             map: FxHashMap::default(),
-            empty_set: FxHashSet::default(),
+            empty_set: default(),
         };
         let n_total = Inst::enumerate(enumeration_info).count();
         if verbose {
@@ -144,12 +144,12 @@ where
             }
             // Actual work
             let mask = inst.potential_input_mask().into_bit_mask();
-            ret.map.entry(mask).or_default().insert(inst);
+            ret.map.entry(mask).or_default().push(inst);
         }
         ret
     }
 
-    pub fn get(&self, mask: BitMask) -> &FxHashSet<Inst<W>> {
+    pub fn get(&self, mask: BitMask) -> &Vec<Inst<W>> {
         self.map.get(&mask).unwrap_or(&self.empty_set)
     }
 }
