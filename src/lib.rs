@@ -9,6 +9,7 @@ mod main_loop_sl;
 /// The search graph that we use for forward and backward search.
 mod graph;
 mod backward_graph;
+mod backward_graph_sl;
 /// Definitions of how we represent programs in an efficient way.
 mod programs;
 /// Rewrite of programs module for separation logic!
