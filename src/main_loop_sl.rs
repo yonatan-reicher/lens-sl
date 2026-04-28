@@ -516,7 +516,9 @@ where
                         let mut i = 0;
                         tui.progress_push();
                         next_prefixes.each(|prefix| {
-                            tui.progress(i, next_prefixes.len());
+                            if next_prefixes.len() < 1_000_000 || i % 10_000 == 0 {
+                                tui.progress(i, next_prefixes.len());
+                            }
                             i += 1;
                             let out = prefix.clone().fold(inp, |s, i| s.mutate(|s| i.run(s)));
                             new_state_possibilities
@@ -545,7 +547,9 @@ where
                         tui.progress_push();
                         let ret = next_prefixes
                             .try_each(|prefix| {
-                                tui.progress(i, next_prefixes.len());
+                                if next_prefixes.len() < 1_000_000 || i % 10_000 == 0 {
+                                    tui.progress(i, next_prefixes.len());
+                                }
                                 i += 1;
                                 let prog = prefix.chain(postfix.iter().cloned()).collect_vec();
                                 oracle.verify(&prog)
