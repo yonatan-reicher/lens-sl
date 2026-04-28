@@ -309,7 +309,8 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
             let do_subsumption = false;
             let mut discarded = FxHashSet::<Inst<W>>::default();
             for mask in Self::input_sub_masks(self.top_mask) {
-                for inst in insts_with_precondtion(&self.bank, &states, mask) {
+                for inst in insts_with_precondtion(self.enumeration_info, &self.bank, &states, mask)
+                {
                     let mut equivalent_insts = FxHashSet::<Inst<W>>::default();
                     // We can't do this filtering as part of the selecting the instructions
                     // because the discard set changes through the loop.
@@ -654,25 +655,26 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
 /// Instead of doing this by iterating all instructions, do this by intersection of equivalence
 /// classes that can run from the states.
 fn insts_with_precondtion<'a, W: Word + HasBitWord>(
+    ei: EnumerationInfo<'a, W>,
     bank: &'a Bank<W>,
     inputs: &'a [State<W>],
     input_mask: Mask,
 ) -> impl IntoIterator<Item = Inst<W>> + use<'a, W> {
-    inputs
-        .iter()
-        .map(|input| input.masked(input_mask))
-        .map(|sub_input| {
-            // For this state, return set of commands that can run from it.
-            bank.get(&sub_input)
-                .iter()
-                // union
-                .flat_map(|(_, set)| RefIter::new(set.borrow(), |x| *x))
-                .collect::<FxHashSet<_>>()
-        })
-        .collect::<Vec<_>>()
-        // Intersect!
-        .as_slice()
-        .pipe(|a| intersect_all(a.iter())) // TODO: Change this with a syntactic lookup
+    let inp_registers = input_mask.registers().collect::<Box<[_]>>();
+    let evil_reference: &[_] = unsafe { &*std::ptr::from_ref(inp_registers.as_ref()) };
+    let mut iter = Inst::enumerate(EnumerationInfo {
+        // Limit only to registers relevant to the input.
+        inp_registers: EnumerationInfoOptions::Limited(evil_reference),
+        ..ei
+    })
+    .filter(move |inst| inst.potential_input_mask() == input_mask);
+    std::iter::from_fn(move || {
+        let ret = iter.next();
+        // Make sure this closure keeps the input registers allocation alive, so that the fact that
+        // this closure captures it is not optimized away and we get a use-after-free.
+        std::hint::black_box(&inp_registers);
+        ret
+    })
 }
 
 /// Gets instructions which have the same effect on the input state
