@@ -368,7 +368,6 @@ where
     /// examples or end the search, or do nothing.
     /// I am still not sure what to do if we added a counter-example, need to see how we will handle
     /// it.
-    /// TODO: above.
     fn expand_backward(&mut self) -> ControlFlow<Result<Program<WBig>, Cancelled>> {
         // For each state in the forwards frontier, try to split it without expanding it.
         let len = self.forward_frontier.len();
