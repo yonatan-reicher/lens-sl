@@ -9,6 +9,7 @@ mod main_loop_sl;
 /// The search graph that we use for forward and backward search.
 mod graph;
 mod backward_graph;
+mod backward_graph_sl;
 /// Definitions of how we represent programs in an efficient way.
 mod programs;
 /// Rewrite of programs module for separation logic!
@@ -27,6 +28,7 @@ mod tui;
 mod verify;
 /// A mapping from input states and output states to the instructions which take one to the other.
 mod bank;
+mod inst_input_table;
 
 // --- Utilities ---
 /// Return all permutations of a slice of iterators.

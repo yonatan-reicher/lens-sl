@@ -9,9 +9,11 @@ use crate::bank::Bank;
 use crate::collect_registers::Collector;
 use crate::direction::Direction::{self, Backward, Forward};
 use crate::graph;
+use crate::inst_input_table::{InstInputTable, InstInputTableParams};
 use crate::intersect_all::intersect_all;
+use crate::len::Len;
 use crate::oracle::{Oracle, SmtOracle};
-use crate::programs;
+use crate::programs_sl;
 use crate::reduce_bit_width::{ImmediateInfo, Reducer};
 use crate::tui::TuiHook;
 use crate::word::prelude::*;
@@ -39,17 +41,20 @@ use itertools::Itertools;
  * This is an incremental search algorithm, similar to Lens. The key differences are:
  * 1. A flat data-structure.
  * 2. Pruning instructions that produce the same effect on the current inputs.
+ * 3. Backwards search only considers the first counter-example.
  */
 
 // =================================================================================================
 //                                          Short-hands
 // =================================================================================================
 
-type Program<W> = programs::Program<Inst<W>>;
+type Program<W> = programs_sl::Program<Inst<W>>;
 
-type Programs<W> = programs::Programs<Inst<W>>;
+type Programs<W> = programs_sl::Programs<Inst<W>>;
 
-type Graph<W> = graph::Graph<State<W>, Programs<W>>;
+/// This is actually not used, it's just needed as an argument to the TUI, which we don't use.
+/// Basically this is deprecated and here just as glue.
+type Graph<W> = graph::Graph<State<W>, crate::programs::Programs<Inst<W>>>;
 
 // =================================================================================================
 //                                         Implementation
@@ -58,7 +63,7 @@ type Graph<W> = graph::Graph<State<W>, Programs<W>>;
 // This is the main function that gets exposed.
 /// `WT` for word size of the target program.
 /// `WS` for word size of the synthesis process.
-pub fn optimize<WT: Word + HasBitWord, WS: Word + HasBitWord + serde::de::DeserializeOwned>(
+pub fn optimize<WT: Word + HasBitWord, WS: Word + HasBitWord + DeserializeOwned>(
     c: Config<WT>,
     tui: &impl for<'g> TuiHook<&'g Graph<WS>, State<WS>>,
 ) -> OptimizeResult<WT>
@@ -104,12 +109,6 @@ where
 
     let counter_examples = &CounterExamplesCell::default();
 
-    let bm = if !c.forward_only {
-        BackwardMap::new(&registers).unwrap()
-    } else {
-        BackwardMap::default()
-    };
-
     let enumeration_info = EnumerationInfo {
         inp_registers: EnumerationInfoOptions::Limited(&registers),
         out_registers: EnumerationInfoOptions::Limited(&registers),
@@ -120,6 +119,17 @@ where
 
     let n_instructions = Inst::enumerate(enumeration_info).count();
 
+    let bm = if !c.forward_only {
+        BackwardMap::new(&registers).unwrap()
+    } else {
+        BackwardMap::default()
+    };
+    let insts_input_table = InstInputTable::new(InstInputTableParams {
+        verbose: true,
+        enumeration_info,
+    })
+    .unwrap();
+
     // This should (obviously) be the very last thing initialized.
     let started_at = Instant::now();
 
@@ -127,7 +137,6 @@ where
         config: c,
         original_reduced: reduced_program,
         enumeration_info,
-        forward_seen: default(),
         forward_frontier: default(),
         forward_frontier_ce_0: default(),
         backward_frontier: default(),
@@ -144,6 +153,7 @@ where
             tui,
         },
         bm,
+        insts_input_table,
         started_at,
         should_cancel: c.should_cancel.resolve_timeout(started_at),
         stats: Stats {
@@ -157,6 +167,7 @@ where
         tui,
         postfix_len: 0,
         prefix_len: 0,
+        splitting_buffer: vec![],
     };
 
     optimizer.optimize()
@@ -169,8 +180,6 @@ struct Optimizer<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> {
     original_reduced: Program<W>,
     // TODO: This should be a method.
     enumeration_info: EnumerationInfo<'a, W>,
-    /// The set of state vectors we've already visited, and don't want to visit again.
-    forward_seen: FxHashSet<Vec<State<W>>>,
     /// Set of discovered-but-unvisited state vectors and their corresponding prefixes. Kind of like
     /// the current layer in Breadth-First-Search.
     forward_frontier: FxHashMap<Vec<State<W>>, Programs<W>>,
@@ -191,6 +200,8 @@ struct Optimizer<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> {
     oracle: &'a mut ReducedProgramOracle<'a, WBig, W>,
     /// This is needed to run instructions backwards in time.
     bm: BackwardMap<W>,
+    /// This is for getting all the instructions with a specific input mask!
+    insts_input_table: InstInputTable<W>,
     /// When did the search actually start? We need this to return an elapsed time at the end.
     started_at: Instant,
     /// A condition on when to stop the search and give up. Note that the config already contains a
@@ -204,14 +215,25 @@ struct Optimizer<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> {
     tui: &'a dyn TuiHook<&'a Graph<W>, State<W>>,
     postfix_len: usize,
     prefix_len: usize,
+    /// A buffer for saving states to add to the next frontier that you still haven't checked if
+    /// they need splitting.
+    /// TODO: Is this forward only?
+    splitting_buffer: Vec<(Vec<State<W>>, Programs<W>)>,
 }
 
-impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
+impl<WBig, W> Optimizer<'_, WBig, W>
+where
+    WBig: Word + HasBitWord,
+    W: Word + HasBitWord<BitWord: DeserializeOwned> + DeserializeOwned,
+{
     pub fn optimize(mut self) -> OptimizeResult<WBig> {
-        // ----- The Actual Loop -----------------------------------------------------------------------
-        // We must start with at least one input...
+        // Plan: Do some setup, then start the optimization loop.
+        // We have to start the optimization with at least one counter-example, so we deal with that
+        // first.
         match self.oracle.verify(&[]) {
-            Continue(()) => todo!(""),
+            Continue(()) => unimplemented!(
+                "we do not deal with the case where the empty program is correct on the reduced oracle."
+            ),
             Break(ProgramOrRetry::Program(p)) => {
                 return OptimizeResult {
                     outcome: OptimizeOutcome::Program(p),
@@ -220,88 +242,76 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
             }
             Break(ProgramOrRetry::Retry) => (),
         }
-        if self.counter_examples.inputs().is_empty() {
-            unimplemented!(
-                "we do not deal with the case where the oracle does not give a counter-example for the empty program."
-            );
-        }
+        assert_eq!(self.counter_examples.inputs().len(), 1);
+        // ------ Initialization -------------------------------------------------------------------
         let empty_program = Programs::empty_program();
+        // backwards
         self.backward_frontier
             .insert(self.counter_examples.outputs()[0], empty_program.clone());
         self.next_backward_frontier.clear();
-        'restart: loop {
-            // forward
-            self.forward_seen.clear();
-            self.forward_seen
-                .insert(self.counter_examples.inputs().to_vec());
-            self.forward_frontier.clear();
-            self.forward_frontier.insert(
-                self.counter_examples.inputs().to_vec(),
-                empty_program.clone(),
+        self.postfix_len = 0;
+        // forward
+        self.forward_frontier.clear();
+        self.forward_frontier.insert(
+            self.counter_examples.inputs().to_vec(),
+            empty_program.clone(),
+        );
+        self.forward_frontier_ce_0.clear();
+        self.forward_frontier_ce_0
+            .insert(self.counter_examples.inputs()[0], empty_program.clone());
+        self.next_forward_frontier.clear();
+        self.next_forward_frontier_ce_0.clear();
+        self.prefix_len = 0;
+        // ------ Main Loop ------------------------------------------------------------------------
+        while self.postfix_len + self.prefix_len + 1 < self.original_reduced.len() {
+            let _length = self.postfix_len + self.prefix_len;
+            self.tui.progress(0, self.stats.n_instructions);
+            let direction = Direction::from_is_forward(
+                self.config.forward_only
+                    || (2u32.pow((self.postfix_len + 1) as u32) as usize > self.prefix_len + 1),
             );
-            self.forward_frontier_ce_0.clear();
-            self.forward_frontier_ce_0
-                .insert(self.counter_examples.inputs()[0], empty_program.clone());
-            self.next_forward_frontier.clear();
-            self.next_forward_frontier_ce_0.clear();
-            self.prefix_len = 0;
-            //
-            while self.postfix_len + self.prefix_len < self.original_reduced.len() {
-                let _length = self.postfix_len + self.prefix_len;
-                self.tui.progress(0, self.stats.n_instructions);
-                let direction = Direction::from_is_forward(
-                    self.config.forward_only
-                        || 5 * self.forward_frontier_ce_0.len() <= self.backward_frontier.len(),
-                );
-                self.tui.expanding(direction);
-                self.tui.report_length(Forward, self.prefix_len);
-                self.tui.report_length(Backward, self.postfix_len);
-                let ret = match direction {
-                    Forward => self.expand_forward(),
-                    Backward => self.expand_backward(),
-                };
-                match ret {
-                    Continue(()) => {
-                        match direction {
-                            Forward => self.prefix_len += 1,
-                            Backward => self.postfix_len += 1,
-                        }
-                        continue;
-                    }
-                    Break(Err(Cancelled)) => {
-                        return OptimizeResult {
-                            outcome: OptimizeOutcome::Cancelled,
-                            elapsed: self.started_at.elapsed(),
-                        };
-                    }
-                    Break(Ok(ProgramOrRetry::Program(p))) => {
-                        return OptimizeResult {
-                            outcome: OptimizeOutcome::Program(p),
-                            elapsed: self.started_at.elapsed(),
-                        };
-                    }
-                    Break(Ok(ProgramOrRetry::Retry)) => continue 'restart,
-                }
-            } // end of length loop
-            // let lengths = next_frontier
-            //     .iter()
-            //     .map(|(_, p)| p)
-            //     .chunk_by(|p| p.len())
-            //     .into_iter()
-            //     .map(|(len, progs)| format!("{len}: {}", progs.count()))
-            //     .join("\n");
-            // println!("Progs");
-            // println!("{}", lengths);
-            return OptimizeResult {
-                outcome: OptimizeOutcome::NoProgram,
-                elapsed: self.started_at.elapsed(),
+            self.tui.expanding(direction);
+            let ret = match direction {
+                // This is where the magic actually happens.
+                Forward => self.expand_forward(),
+                Backward => self.expand_backward(),
             };
+            match ret {
+                Continue(()) => {
+                    match direction {
+                        Forward => self.prefix_len += 1,
+                        Backward => self.postfix_len += 1,
+                    }
+                    continue;
+                }
+                Break(Err(Cancelled)) => {
+                    return OptimizeResult {
+                        outcome: OptimizeOutcome::Cancelled,
+                        elapsed: self.started_at.elapsed(),
+                    };
+                }
+                Break(Ok(p)) => {
+                    return OptimizeResult {
+                        outcome: OptimizeOutcome::Program(p),
+                        elapsed: self.started_at.elapsed(),
+                    };
+                }
+            }
+        } // end of length loop
+        OptimizeResult {
+            outcome: OptimizeOutcome::NoProgram,
+            elapsed: self.started_at.elapsed(),
         }
     }
 
-    fn expand_forward(&mut self) -> ControlFlow<Result<ProgramOrRetry<WBig>, Cancelled>> {
+    fn expand_forward(&mut self) -> ControlFlow<Result<Program<WBig>, Cancelled>> {
         let len = self.forward_frontier.len();
-        for (i, (states, prog)) in self.forward_frontier.iter().enumerate() {
+        for (i, (states, prog)) in self
+            .forward_frontier
+            .drain()
+            .sorted_by_key(|(_, progs)| usize::MAX - progs.len())
+            .enumerate()
+        {
             self.tui.progress(i, len);
             // Should we stop?
             if self.should_cancel.check() {
@@ -309,50 +319,33 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
             }
             // The red code.
             let do_discard = true;
+            let do_subsumption = false;
             let mut discarded = FxHashSet::<Inst<W>>::default();
             for mask in Self::input_sub_masks(self.top_mask) {
-                for inst in insts_with_precondtion(&self.bank, states, mask) {
+                for inst in Self::insts_with_precondtion(
+                    self.enumeration_info,
+                    &self.bank,
+                    &states,
+                    mask,
+                    &self.insts_input_table,
+                ) {
+                    let mut equivalent_insts = FxHashSet::<Inst<W>>::default();
                     // We can't do this filtering as part of the selecting the instructions
                     // because the discard set changes through the loop.
-                    if discarded.contains(&inst) {
+                    if do_discard && discarded.contains(&inst) {
                         self.stats.n_discarded += 1;
-                        self.stats.last_discard_size = discarded.len();
+                        self.stats.last_discard_size = equivalent_insts.len();
                         continue;
                     }
                     let next_states = states
                         .iter()
                         .map(|s| (*s).mutate(|s| inst.run(s)))
                         .collect::<Vec<_>>();
-                    // Did we succeed?
-                    {
-                        let prefixes = prog.clone().concat(inst);
-                        Self::try_each_matching_postfix(
-                            &self.backward_frontier,
-                            self.counter_examples,
-                            &next_states,
-                            |postfix| {
-                                prefixes.try_each(|prefix| {
-                                    // Find the full program!
-                                    let prog = prefix.mutate(|p| p.extend(postfix.iter().rev()));
-                                    self.oracle.verify(&prog)
-                                })
-                            },
-                        )
-                        .map_break(Ok)?;
-                    }
-                    if self.forward_seen.contains(&next_states) {
-                        if do_discard {
-                            discarded.insert(inst);
-                        }
-                        continue;
-                    }
-                    self.forward_seen.insert(next_states.clone());
                     // Extend Hila's discard set. Extend it by all the instructions which do the
                     // exact same thing as this instruction on the current inputs.
-                    let do_subsumption = true;
                     if do_discard {
                         if do_subsumption {
-                            discarded.extend(insts_with_same_effect(
+                            equivalent_insts.extend(insts_with_same_effect(
                                 self.top_mask,
                                 &self.bank,
                                 mask,
@@ -361,25 +354,55 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                                 &mut self.stats,
                             ));
                         } else {
-                            discarded.extend(intersect_all(states.iter().zip(&next_states).map(
-                                |(s, next_s)| {
+                            equivalent_insts.extend(intersect_all(
+                                states.iter().zip(&next_states).map(|(s, next_s)| {
                                     self.bank
                                         .get(&s.masked(mask))
-                                        .get(&next_s.masked(inst.potential_write_mask()))
+                                        .get(&next_s.masked(inst.potential_output_mask()))
                                         .borrow()
-                                },
-                            )));
+                                }),
+                            ));
                         }
+                    } else {
+                        equivalent_insts.insert(inst);
                     }
-                    let prog = prog.clone().concat(inst);
-                    self.next_forward_frontier_ce_0
-                        .entry(next_states[0])
-                        .or_default()
-                        .extend(&prog);
-                    self.next_forward_frontier
-                        .entry(next_states)
-                        .or_default()
-                        .extend(&prog);
+                    discarded.extend(&equivalent_insts);
+                    debug_assert!(
+                        equivalent_insts.contains(&inst),
+                        "on state {states:?} and mask {mask:?},
+                        with next states {next_states:?},
+                        inst {inst} was not contained in it's equivalent instructions set: {equivalent_insts:?}\n{:?}",
+                        self.bank.get(&states[0].masked(mask)),
+                    );
+                    let was_split = Self::split_prefix_class(
+                        &mut self.splitting_buffer,
+                        self.counter_examples,
+                        self.oracle,
+                        &self.backward_frontier,
+                        self.should_cancel,
+                        prog.clone()
+                            .concat_many(equivalent_insts.iter().cloned().collect()),
+                        next_states.clone(),
+                        |next_states, progs| {
+                            self.next_forward_frontier_ce_0
+                                .entry(next_states[0])
+                                .or_default()
+                                .extend([progs.clone()]);
+                            self.next_forward_frontier
+                                .entry(next_states)
+                                .or_default()
+                                .extend([progs]);
+                        },
+                        self.tui,
+                    )?;
+                    // if was_split {
+                    //     println!(
+                    //         "Split at prefix length {} states {} n programs {} inst {inst}",
+                    //         self.prefix_len,
+                    //         states.iter().map(|s| s.to_string()).join(" "),
+                    //         prog.len()
+                    //     );
+                    // }
                 }
             }
         }
@@ -400,7 +423,7 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
     /// I am still not sure what to do if we added a counter-example, need to see how we will handle
     /// it.
     /// TODO: above.
-    fn expand_backward(&mut self) -> ControlFlow<Result<ProgramOrRetry<WBig>, Cancelled>> {
+    fn expand_backward(&mut self) -> ControlFlow<Result<Program<WBig>, Cancelled>> {
         // For each instruction,
         for (i_inst, inst) in Inst::enumerate(self.enumeration_info).enumerate() {
             self.tui.progress(i_inst, self.stats.n_instructions);
@@ -417,35 +440,30 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                     self.next_backward_frontier
                         .entry(next_state)
                         .or_default()
-                        .extend(&next_postfixes);
+                        .extend([next_postfixes.clone()]);
+                    // TODO: Do this before.
                     // And if it's a winner, we may be done!
-                    match next_postfixes.try_each(|mut postfix| {
-                        postfix.reverse();
-                        Self::try_each_matching_prefix(
-                            &self.forward_frontier_ce_0,
-                            self.counter_examples,
-                            &next_state,
-                            &postfix,
-                            |prefix| {
-                                // Here we already reversed the postfix, so we don't again.
-                                let prog = prefix.mutate(|p| p.extend(&postfix));
-                                self.oracle.verify(&prog)
-                            },
-                        )
-                    }) {
-                        Continue(()) => (),
-                        Break(ProgramOrRetry::Program(p)) => {
-                            return Break(Ok(ProgramOrRetry::Program(p)));
-                        }
-                        Break(ProgramOrRetry::Retry) => {
-                            // This is a tough one. We need to add the counter-example, reset the
-                            // forward search, but keep the state of this backward search.
-                            // We actually can't do that, for a number of reasons. So we must sort
-                            // of restart this backward search too.
-                            self.next_backward_frontier.clear();
-                            return Break(Ok(ProgramOrRetry::Retry));
-                        }
-                    }
+                    next_postfixes
+                        .try_each_reversed(|postfix| {
+                            'retry: loop {
+                                break match Self::try_each_matching_prefix(
+                                    &self.forward_frontier_ce_0,
+                                    self.counter_examples,
+                                    &next_state,
+                                    postfix,
+                                    |prefix| {
+                                        let prog =
+                                            prefix.chain(postfix.iter().cloned()).collect_vec();
+                                        self.oracle.verify(&prog)
+                                    },
+                                ) {
+                                    Continue(()) => Continue(()),
+                                    Break(ProgramOrRetry::Program(p)) => Break(p),
+                                    Break(ProgramOrRetry::Retry) => continue 'retry,
+                                };
+                            }
+                        })
+                        .map_break(Ok)?;
                 }
             }
         }
@@ -460,13 +478,110 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
         Continue(())
     }
 
+    // On `Continue`, returns whether or not the class was split.
+    fn split_prefix_class(
+        splitting_buffer: &mut Vec<(Vec<State<W>>, Programs<W>)>,
+        counter_examples: &CounterExamplesCell<W>,
+        oracle: &mut ReducedProgramOracle<'_, WBig, W>,
+        backward_frontier: &FxHashMap<State<W>, Programs<W>>,
+        should_cancel: ShouldCancel,
+        prefixes: Programs<W>,
+        states: Vec<State<W>>,
+        mut on_each_result: impl FnMut(Vec<State<W>>, Programs<W>),
+        tui: &dyn TuiHook<&Graph<W>, State<W>>,
+    ) -> ControlFlow<Result<Program<WBig>, Cancelled>, bool> {
+        // Start with just the input.
+        splitting_buffer.clear();
+        splitting_buffer.push((states, prefixes));
+        // While we still have things, get the next thing, and see if it needs splitting.
+        // If not, mark it as good and remove it.
+        let mut was_split = false;
+        while let Some((next_states, next_prefixes)) = splitting_buffer.pop() {
+            if should_cancel.check() {
+                return Break(Err(Cancelled));
+            }
+            let mut any_postfix_matched = false;
+            match Self::try_each_matching_postfix(
+                backward_frontier,
+                counter_examples,
+                &next_states,
+                // TODO: We should make a counter here and make sure these classes
+                // are small enough to be useful.
+                |postfix| {
+                    any_postfix_matched = true;
+                    let next_ce = next_states.len();
+                    if let Some((inp, _)) = counter_examples.get(next_ce) {
+                        // We still haven't ran on all of our counter-examples! Run and repeat.
+                        let mut new_state_possibilities = FxHashMap::<_, Programs<W>>::default();
+                        let mut i = 0;
+                        tui.progress_push();
+                        next_prefixes.each(|prefix| {
+                            if next_prefixes.len() < 1_000_000 || i % 10_000 == 0 {
+                                tui.progress(i, next_prefixes.len());
+                            }
+                            i += 1;
+                            let out = prefix.clone().fold(inp, |s, i| s.mutate(|s| i.run(s)));
+                            new_state_possibilities
+                                .entry(out)
+                                .or_default()
+                                // TODO: This can be better
+                                .extend([Programs::program(prefix.collect_vec())]);
+                        });
+                        tui.progress_pop();
+                        was_split = true;
+                        for (new_state, its_prefixes) in new_state_possibilities {
+                            // TODO: So can this
+                            splitting_buffer.push((
+                                next_states.clone().mutate(|s| s.push(new_state)),
+                                its_prefixes,
+                            ));
+                        }
+                        // Break because we don't care about the rest of the postfixes, we already
+                        // split the class.
+                        Break(None)
+                    } else {
+                        // Find a counter example! Verify will stop the iteration when a
+                        // counter-example is found, and the condition above will be true instead of
+                        // false, causing this equivalence class will be split.
+                        let mut i = 0;
+                        tui.progress_push();
+                        let ret = next_prefixes
+                            .try_each(|prefix| {
+                                if next_prefixes.len() < 1_000_000 || i % 10_000 == 0 {
+                                    tui.progress(i, next_prefixes.len());
+                                }
+                                i += 1;
+                                let prog = prefix.chain(postfix.iter().cloned()).collect_vec();
+                                oracle.verify(&prog)
+                            })
+                            .map_break(Some);
+                        tui.progress_pop();
+                        ret
+                    }
+                },
+            ) {
+                Continue(()) if any_postfix_matched => todo!(
+                    "I think this only happens when we need to split but can't find a counter-example, but I'm not sure. Anyway, I don't know how to handle that case."
+                ),
+                Continue(()) => on_each_result(next_states, next_prefixes),
+                Break(None) => {}
+                Break(Some(ProgramOrRetry::Program(p))) => return Break(Ok(p)),
+                Break(Some(ProgramOrRetry::Retry)) => {
+                    splitting_buffer.push((next_states, next_prefixes));
+                }
+            }
+        }
+        Continue(was_split)
+    }
+
     /// Run on all postfixes that given the states to run from, output the same state as their
     /// matching counter-example's output.
+    /// The postfixes are given to the function in normal order already, not need to reverse them.
     fn try_each_matching_postfix<T>(
         backward_frontier: &FxHashMap<State<W>, Programs<W>>,
         counter_examples: &CounterExamplesCell<W>,
         inputs: &[State<W>],
-        mut f: impl FnMut(Program<W>) -> ControlFlow<T>,
+        mut f: impl FnMut(&[Inst<W>]) -> ControlFlow<T>,
     ) -> ControlFlow<T> {
         match inputs {
             [] => {
@@ -474,19 +589,16 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                 debug_assert!(counter_examples.inputs().is_empty());
                 backward_frontier
                     .values()
-                    .try_for_each(|postfixes| postfixes.try_each(&mut f))
+                    .try_for_each(move |postfixes| postfixes.try_each_reversed(&mut f))
             }
             [first, rest @ ..] => {
                 let Some(good_on_first_input) = backward_frontier.get(first) else {
                     return Continue(());
                 };
-                good_on_first_input.try_each(|postfix| {
+                good_on_first_input.try_each_reversed(|postfix| {
                     if rest.iter().enumerate().any(|(i, input)| {
                         let ce = i + 1; // Because we skipped the first one.
-                        let output = postfix
-                            .iter()
-                            .rev()
-                            .fold(*input, |s, i| s.mutate(|s| i.run(s)));
+                        let output = postfix.iter().fold(*input, |s, i| s.mutate(|s| i.run(s)));
                         let expected_output = counter_examples.outputs()[ce];
                         output != expected_output
                     }) {
@@ -507,7 +619,9 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
         counter_examples: &CounterExamplesCell<W>,
         state: &State<W>,
         postfix: &[Inst<W>],
-        mut f: impl FnMut(Program<W>) -> ControlFlow<T>,
+        mut f: impl FnMut(
+            std::iter::Rev<std::iter::Cloned<std::slice::Iter<Inst<W>>>>,
+        ) -> ControlFlow<T>,
     ) -> ControlFlow<T> {
         debug_assert_eq!(
             postfix.iter().fold(*state, |s, i| s.mutate(|s| i.run(s))),
@@ -519,7 +633,7 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
         prefixes.try_each(|prefix| {
             let (inputs, outputs) = (counter_examples.inputs(), counter_examples.outputs());
             let (other_inputs, expected_outputs) = (&inputs[1..], &outputs[1..]);
-            let prog = prefix.iter().chain(postfix);
+            let prog = prefix.clone().chain(postfix.iter().cloned());
             let other_outputs = other_inputs
                 .iter()
                 .map(|input| prog.clone().fold(*input, |s, i| s.mutate(|s| i.run(s))));
@@ -556,31 +670,55 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
             })
         })
     }
-}
 
-/// Gets all instructions which have the same input
-/// Find all instructions (and their effects!) that can run from the current states.
-/// Instead of doing this by iterating all instructions, do this by intersection of equivalence
-/// classes that can run from the states.
-fn insts_with_precondtion<'a, W: Word + HasBitWord>(
-    bank: &'a Bank<W>,
-    inputs: &'a [State<W>],
-    input_mask: Mask,
-) -> impl IntoIterator<Item = Inst<W>> + use<'a, W> {
-    inputs
-        .iter()
-        .map(|input| input.masked(input_mask))
-        .map(|sub_input| {
-            // For this state, return set of commands that can run from it.
-            bank.get(&sub_input)
-                .iter()
-                .flat_map(|(_, set)| RefIter::new(set.borrow(), |x| *x))
-                .collect::<FxHashSet<_>>()
-        })
-        .collect::<Vec<_>>()
-        // Intersect!
-        .as_slice()
-        .pipe(|a| intersect_all(a.iter())) // TODO: Change this with a syntactic lookup
+    /// Gets all instructions which have the same input
+    /// Find all instructions (and their effects!) that can run from the current states.
+    /// Instead of doing this by iterating all instructions, do this by intersection of equivalence
+    /// classes that can run from the states.
+    fn insts_with_precondtion<'a>(
+        ei: EnumerationInfo<'a, W>,
+        bank: &'a Bank<W>,
+        inputs: &[State<W>],
+        input_mask: Mask,
+        insts_input_table: &'a InstInputTable<W>,
+    ) -> impl IntoIterator<Item = Inst<W>> + use<'a, W, WBig> {
+        insts_input_table
+            .get(input_mask.into_bit_mask())
+            .iter()
+            .cloned()
+
+        // let inp_registers = input_mask.registers().collect::<Box<[_]>>();
+        // let evil_reference: &[_] = unsafe { &*std::ptr::from_ref(inp_registers.as_ref()) };
+        // let mut iter = Inst::enumerate(EnumerationInfo {
+        //     // Limit only to registers relevant to the input.
+        //     inp_registers: EnumerationInfoOptions::Limited(evil_reference),
+        //     ..ei
+        // })
+        // .filter(move |inst| inst.potential_input_mask() == input_mask);
+        // std::iter::from_fn(move || {
+        //     let ret = iter.next();
+        //     // Make sure this closure keeps the input registers allocation alive, so that the fact that
+        //     // this closure captures it is not optimized away and we get a use-after-free.
+        //     std::hint::black_box(&inp_registers);
+        //     ret
+        // })
+
+        // inputs
+        //     .iter()
+        //     .map(|input| input.masked(input_mask))
+        //     .map(|sub_input| {
+        //         // For this state, return set of commands that can run from it.
+        //         bank.get(&sub_input)
+        //             .iter()
+        //             // union
+        //             .flat_map(|(_, set)| RefIter::new(set.borrow(), |x| *x))
+        //             .collect::<FxHashSet<_>>()
+        //     })
+        //     .collect::<Vec<_>>()
+        //     // Intersect!
+        //     .as_slice()
+        //     .pipe(|a| intersect_all(a.iter())) // TODO: Change this with a syntactic lookup
+    }
 }
 
 /// Gets instructions which have the same effect on the input state
@@ -679,6 +817,14 @@ impl<W: Word> CounterExamplesCell<W> {
         let (inps, outs) = &*self.0.borrow();
         inps.iter().zip(outs).contains(&(inp, out))
     }
+    pub fn len(&self) -> usize {
+        debug_assert_eq!(self.0.borrow().0.len(), self.0.borrow().1.len());
+        self.0.borrow().0.len()
+    }
+    pub fn get(&self, i: usize) -> Option<(State<W>, State<W>)> {
+        let (inps, outs) = &*self.0.borrow();
+        Some((*inps.get(i)?, *outs.get(i)?))
+    }
 }
 
 // =================================================================================================
@@ -717,8 +863,9 @@ where
                 self.tui.found_counter_example(inp, out);
                 assert!(
                     !self.counter_examples.contains(&inp, &out),
-                    "Counter-example from reduced oracle should not have been seen before.
-                    Program: {}",
+                    "Counter-example from reduced oracle should not have been seen before.\nInput {}\nOutput {}\nProgram: {}",
+                    inp,
+                    out,
                     prog.iter().map(|i| format!("{i:?}")).join("\n")
                 );
                 self.counter_examples.push(inp, out);

@@ -578,8 +578,8 @@ impl Mask {
         self.into()
     }
 
-    pub fn registers(&self) -> impl Iterator<Item = Register> {
-        Register::ALL.into_iter().filter(|r| self[*r])
+    pub fn registers(self) -> impl Iterator<Item = Register> + use<> {
+        Register::ALL.into_iter().filter(move |r| self[*r])
     }
 
     /// The sub-mask are the masks that contain only a single thing

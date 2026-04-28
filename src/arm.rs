@@ -229,18 +229,18 @@ macro_rules! define_instructions {
 define_instructions! {
     | OpCode  | Arg 1       | Arg 2    | Arg 3    | String | Commutative | Affects Flags |
     -----------------------------------------------------------------------------------------
-    | Nop     | Unused      | Unused   | Unused   | "nop"  |    true     |     false     |
-    | Add     | Reg(Out)    | Reg(Inp) | Reg(Inp) | "add"  |    true     |     false     |
+    | Nop     | Unused      | Unused   | Unused   | "nop"  |    false    |     false     |
+    | Add     | Reg(Out)    | Reg(Inp) | Reg(Inp) | "add"  |    false    |     false     |
     | AddI    | Reg(Out)    | Reg(Inp) | Imm      | "add"  |    false    |     false     |
     | Sub     | Reg(Out)    | Reg(Inp) | Reg(Inp) | "sub"  |    false    |     false     |
     | SubI    | Reg(Out)    | Reg(Inp) | Imm      | "sub"  |    false    |     false     |
     | Rsb     | Reg(Out)    | Reg(Inp) | Reg(Inp) | "rsb"  |    false    |     false     |
     | RsbI    | Reg(Out)    | Reg(Inp) | Imm      | "rsb"  |    false    |     false     |
-    | And     | Reg(Out)    | Reg(Inp) | Reg(Inp) | "and"  |    true     |     false     |
+    | And     | Reg(Out)    | Reg(Inp) | Reg(Inp) | "and"  |    false    |     false     |
     | AndI    | Reg(Out)    | Reg(Inp) | Imm      | "and"  |    false    |     false     |
     | Bic     | Reg(Out)    | Reg(Inp) | Reg(Inp) | "bic"  |    false    |     false     |
     | BicI    | Reg(Out)    | Reg(Inp) | Imm      | "bic"  |    false    |     false     |
-    | Eor     | Reg(Out)    | Reg(Inp) | Reg(Inp) | "eor"  |    true     |     false     |
+    | Eor     | Reg(Out)    | Reg(Inp) | Reg(Inp) | "eor"  |    false    |     false     |
     | Mov     | Reg(Out)    | Reg(Inp) | Unused   | "mov"  |    false    |     false     |
     | MovI    | Reg(Out)    | Imm      | Unused   | "mov"  |    false    |     false     |
     | Mvn     | Reg(Out)    | Reg(Inp) | Unused   | "mvn"  |    false    |     false     |
@@ -249,14 +249,14 @@ define_instructions! {
     | Uxtah   | Reg(Out)    | Reg(Inp) | Reg(Inp) | "uxtah"|    false    |     false     |
     | Movt    | Reg(InpOut) | Imm      | Unused   | "movt" |    false    |     false     |
     | Movw    | Reg(InpOut) | Imm      | Unused   | "movw" |    false    |     false     |
-    | Mul     | Reg(Out)    | Reg(Inp) | Reg(Inp) | "mul"  |    true     |     false     |
+    | Mul     | Reg(Out)    | Reg(Inp) | Reg(Inp) | "mul"  |    false    |     false     |
     | Sdiv    | Reg(Out)    | Reg(Inp) | Reg(Inp) | "sdiv" |    false    |     false     |
     | Udiv    | Reg(Out)    | Reg(Inp) | Reg(Inp) | "udiv" |    false    |     false     |
-    | Orr     | Reg(Out)    | Reg(Inp) | Reg(Inp) | "orr"  |    true     |     false     |
+    | Orr     | Reg(Out)    | Reg(Inp) | Reg(Inp) | "orr"  |    false    |     false     |
     | OrrI    | Reg(Out)    | Reg(Inp) | Imm      | "orr"  |    false    |     false     |
     | Cmp     | Reg(Inp)    | Reg(Inp) | Unused   | "cmp"  |    false    |     true      |
     | CmpI    | Reg(Inp)    | Imm      | Unused   | "cmp"  |    false    |     true      |
-    | Tst     | Reg(Inp)    | Reg(Inp) | Unused   | "tst"  |    true     |     true      |
+    | Tst     | Reg(Inp)    | Reg(Inp) | Unused   | "tst"  |    false    |     true      |
     | TstI    | Reg(Inp)    | Imm      | Unused   | "tst"  |    false    |     true      |
 }
 
@@ -468,6 +468,20 @@ impl<W: Word + HasBitWord> Inst<W> {
                 })
             }),
         }
+    }
+
+    /// The input can contain unread registers if they are part of the potential write mask.
+    pub fn potential_input_mask(&self) -> Mask {
+        if self.cond_code == CondCode::Al {
+            self.potential_read_mask()
+        } else {
+            self.potential_read_mask() | self.potential_write_mask()
+        }
+    }
+
+    /// The output can contain unwritten registers if they are part of the potential write mask.
+    pub fn potential_output_mask(&self) -> Mask {
+        self.potential_read_mask() | self.potential_write_mask()
     }
 
     pub fn run_masked(&self, masked: state::Masked<W>) -> Option<state::Masked<W>> {

@@ -16,6 +16,8 @@ pub trait TuiHook<Graph, State> {
     fn expanding(&self, direction: Direction);
     fn report_length(&self, direction: Direction, length: usize);
     fn progress(&self, a: usize, b: usize);
+    fn progress_push(&self);
+    fn progress_pop(&self);
     // Graph
     fn report_graph(&self, which_graph: Direction, graph: Graph);
     /// Called when expanding the graph by one instruction forward.
@@ -34,6 +36,8 @@ impl<G, S> TuiHook<G, S> for NoTui {
     fn expanding(&self, _: Direction) {}
     fn report_length(&self, _: Direction, _: usize) {}
     fn progress(&self, _: usize, _: usize) {}
+    fn progress_push(&self) {}
+    fn progress_pop(&self) {}
     // Graph
     fn report_graph(&self, _: Direction, _: G) {}
     /// Called when expanding the graph by one instruction forward.
@@ -54,6 +58,8 @@ enum Msg<State> {
     Expanding(Direction, Instant),
     ReportLength(Direction, usize),
     Progress(usize, usize),
+    ProgressPush,
+    ProgressPop,
     // Graph
     GraphState(Direction, GraphState),
     /// Called when expanding the graph by one instruction forward.
@@ -117,6 +123,12 @@ where
     fn progress(&self, a: usize, b: usize) {
         self.send(Msg::Progress(a, b))
     }
+    fn progress_push(&self) {
+        self.send(Msg::ProgressPush)
+    }
+    fn progress_pop(&self) {
+        self.send(Msg::ProgressPop)
+    }
     // Graph
     fn report_graph(&self, d: Direction, g: Graph) {
         self.send(Msg::GraphState(d, g.into()));
@@ -150,7 +162,7 @@ fn io_thread_main<State: Debug + Display>(channel: Receiver<Msg<State>>) -> impl
 struct IoThreadState<State> {
     pub iteration: usize,
     pub phase: Option<(Phase, Instant)>,
-    pub progress: (usize, usize),
+    pub progress: Vec<(usize, usize)>,
     pub phases: Vec<(Phase, usize, Duration)>,
     pub forward_graph: GraphState,
     pub backward_graph: GraphState,
@@ -196,7 +208,17 @@ impl<State> Msg<State> {
             Msg::Expanding(dir, t) => state.push_phase(Phase::Expand(dir), t),
             Msg::ReportLength(Direction::Forward, l) => state.forward_len = l,
             Msg::ReportLength(Direction::Backward, l) => state.backward_len = l,
-            Msg::Progress(a, b) => state.progress = (a, b),
+            Msg::Progress(a, b) => {
+                if state.progress.is_empty() {
+                    state.progress.push((a, b));
+                } else {
+                    *state.progress.last_mut().unwrap() = (a, b);
+                }
+            }
+            Msg::ProgressPush => state.progress.push((0, 1)),
+            Msg::ProgressPop => {
+                state.progress.pop();
+            }
             Msg::GraphState(d, graph_state) => state[d] = graph_state,
             Msg::FoundCounterExample(input, output) => {
                 state.counter_examples.push((input, output));
@@ -228,7 +250,7 @@ impl<State> Default for IoThreadState<State> {
         Self {
             iteration: Default::default(),
             phase: Default::default(),
-            progress: (0, 1),
+            progress: Default::default(),
             phases: Default::default(),
             forward_graph: Default::default(),
             backward_graph: Default::default(),
@@ -267,7 +289,11 @@ impl<S: Display> Display for IoThreadState<S> {
         // Iteration 4. Phase Expand Forward.
         write!(f, "Iteration {}.", self.iteration)?;
         if let Some((p, _)) = self.phase {
-            write!(f, " Phase {p} [{}/{}].", self.progress.0, self.progress.1)?;
+            write!(f, " Phase {p}.")?;
+        }
+        for (a, b) in self.progress.iter() {
+            let w = b.to_string().len();
+            write!(f, " [{a:·>w$}/{b}].")?;
         }
         writeln!(f)?;
         // Lengths 3, 2.

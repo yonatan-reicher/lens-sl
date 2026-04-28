@@ -1,7 +1,10 @@
-use crate::programs::Programs;
+use crate::len::Len;
+use crate::programs_sl::Programs;
+use std::ops::ControlFlow;
 use rustc_hash::FxHashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
+use itertools::Itertools;
 
 /// BackwardsMap[postfix-length][test-index][input] = set of programs, that postfix-length
 /// instructions before the end, on the given input, return output of the given test.
@@ -49,23 +52,25 @@ where
     }
 
     // TODO: rename
-    pub fn get(&self) -> Option<Vec<Vec<I>>> {
+    /// Returns true when there was a match.
+    pub fn get<T>(&self, mut f: impl FnMut() -> ControlFlow<T>) -> ControlFlow<T, bool> {
+        use ControlFlow::Continue;
         if !self.ended() {
-            return None;
+            return Continue(false);
         }
         let start = &self.g.longest().unwrap();
-        let mut sets = self.inputs.iter().zip(start.iter()).map(|(s, map)| &map[s]);
-        let Some(first) = sets.next() else {
-            return Some(vec![]);
+        let sets =
+            self.inputs.iter().zip(start.iter()).map(|(s, map)| map[s].clone())
+            .collect_vec();
+        let Some((i, smallest)) = sets.iter().enumerate().min_by_key(|(_, s)| s.len()) else {
+            return Continue(false);
         };
-        let rest = sets.collect::<Vec<_>>();
-        let mut ret = vec![];
-        first.each(|p| {
-            if rest.iter().all(|ps| ps.contains(&p)) {
-                ret.push(p.clone());
+        smallest.try_each(|p| {
+            if sets.iter().enumerate().all(|(j, ps)| j == i || ps.contains(p.clone())) {
+                f()?;
             }
-        });
-        Some(ret)
+            Continue(())
+        }).map_continue(|()| true)
     }
 
     pub fn try_descend(&mut self, state: S) -> Result<(), ()> {
