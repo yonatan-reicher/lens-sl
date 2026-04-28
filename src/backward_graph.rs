@@ -21,6 +21,7 @@ pub struct BackwardGraphPath<'a, S, I> {
 // =================================================================================================
 
 impl<S, I> BackwardGraph<S, I> {
+    /// Returns a path starting at the root of the graph.
     pub fn root<'a>(&'a mut self) -> BackwardGraphPath<'a, S, I> {
         BackwardGraphPath {
             g: self,
@@ -28,6 +29,7 @@ impl<S, I> BackwardGraph<S, I> {
         }
     }
 
+    /// A reference to the last row of the graph.
     fn longest(&self) -> Option<&InputsByCounterExample<S, I>> {
         self.0.last()
     }
