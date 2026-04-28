@@ -359,16 +359,6 @@ where
                         inst {inst} was not contained in it's equivalent instructions set: {equivalent_insts:?}\n{:?}",
                         self.bank.get(&states[0].masked(mask)),
                     );
-                    let program = [
-                        inst!(MovI, 1, 0; shift Lsr(3.into())),
-                        inst!(AddI, 0, 0, 5),
-                        inst!(Rsb, 0, 1, 0; shift Asr(3.into())),
-                    ];
-                    if equivalent_insts.contains(&program[1])
-                        && prog.contains([program[0]].into_iter())
-                    {
-                        println!("found!");
-                    }
                     let was_split = Self::split_prefix_class(
                         &mut self.splitting_buffer,
                         self.counter_examples,
