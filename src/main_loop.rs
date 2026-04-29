@@ -4,8 +4,10 @@
 use crate::all::All;
 use crate::arm::enumerate::{EnumerationInfo, EnumerationInfoOptions};
 use crate::arm::{BackwardMap, Inst, Register, State};
+use crate::bank::Bank;
 use crate::collect_registers::Collector;
 use crate::direction::Direction;
+use crate::intersect_all::intersect_all;
 use crate::len::Len;
 use crate::oracle::{Oracle, SmtOracle};
 use crate::programs;
@@ -20,7 +22,7 @@ use crate::{backward_graph, graph};
 use std::ops::ControlFlow::{self, Break, Continue};
 use std::time::{Duration, Instant};
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde::de::DeserializeOwned;
 
 use functionality::prelude::*;
@@ -141,6 +143,10 @@ where
         total_instructions: Inst::enumerate(*enumeration_info).count(),
         enumeration_info: *enumeration_info,
     };
+    let mut discard_sets = FxHashMap::default();
+    let mut forward_path = vec![];
+    let mut backward_path = vec![];
+    let mut bank = Bank::new(*enumeration_info);
     // Generate a first input
     match globals.oracle_reduced.check_program(&[]) {
         // TODO: What if the reduced program is equivalent but not the unreduced?
@@ -165,6 +171,9 @@ where
     loop {
         // ------------------------------ Search Phase --------------------------------------------
         tui.searching();
+        discard_sets.clear();
+        forward_path.clear();
+        backward_path.clear();
         for (i, inst) in Inst::enumerate(*enumeration_info).enumerate()
         /* Inst::enumerate - go through everything, .enumerate() - give indices */
         {
@@ -176,6 +185,10 @@ where
                 &mut backward_graph.root(),
                 inst,
                 1,
+                &mut discard_sets,
+                &mut forward_path,
+                &mut backward_path,
+                &mut bank,
             );
             match res {
                 ConnectAndRefineResult::Found(prog) => {
@@ -298,12 +311,39 @@ fn connect_and_refine<WT: Word + HasBitWord, WS: Word + HasBitWord>(
     inst: Inst<WS>,
     // This is the index of the input/output pair we are currently trying to connect.
     k: usize,
+    discard_sets: &mut FxHashMap<Vec<State<WS>>, FxHashSet<Inst<WS>>>,
+    forward_path: &mut Vec<State<WS>>,
+    backward_path: &mut Vec<State<WS>>,
+    bank: &mut Bank<WS>,
 ) -> ConnectAndRefineResult<WT> {
     if should_cancel.check() {
         return ConnectAndRefineResult::Cancel;
     }
     let tui = globals.tui;
     if k > globals.inputs.len() {
+        { // Instruction equivalence checking and discarding.
+            if let Some(discard_set) = discard_sets.get(forward_path) {
+                if discard_set.contains(&inst) {
+                    // We have already tried an equivalent instruction on this path, and it didn't work, so skip it.
+                    return ConnectAndRefineResult::Continue;
+                }
+            } else {
+                discard_sets.insert(forward_path.clone(), FxHashSet::default());
+            }
+            let mask = inst.potential_input_mask();
+            let equivalent_insts = {
+                intersect_all(forward_path.iter().zip(backward_path.iter()).map(|(s, next_s)| {
+                    bank.get(&s.masked(mask))
+                        .get(&next_s.masked(inst.potential_output_mask()))
+                        .borrow()
+                }))
+            };
+            debug_assert!(
+                equivalent_insts.contains(&inst),
+                "Equivalent instructions should contain the instruction itself."
+            );
+            discard_sets.get_mut(forward_path).unwrap().extend(equivalent_insts);
+        }
         let mut counter_example_added = false;
         match (&forward_graph, backward_graph.get()) {
             (Graph::Leaf(prefixes), Some(postfixes)) => {
@@ -364,6 +404,10 @@ fn connect_and_refine<WT: Word + HasBitWord, WS: Word + HasBitWord>(
                             backward_graph,
                             inst,
                             k,
+                            discard_sets,
+                            forward_path,
+                            backward_path,
+                            bank,
                         );
                     }
                     Continue(()) => (),
@@ -418,6 +462,8 @@ fn connect_and_refine<WT: Word + HasBitWord, WS: Word + HasBitWord>(
         forward_output.clone_to(&mut next);
         inst.run(&mut next);
         if let Ok(()) = backward_graph.try_descend(next) {
+            forward_path.push(*forward_output);
+            backward_path.push(next);
             let res = connect_and_refine(
                 globals,
                 should_cancel,
@@ -425,6 +471,10 @@ fn connect_and_refine<WT: Word + HasBitWord, WS: Word + HasBitWord>(
                 backward_graph,
                 inst,
                 k + 1,
+                discard_sets,
+                forward_path,
+                backward_path,
+                bank,
             );
             match res {
                 ConnectAndRefineResult::Found(p) => return ConnectAndRefineResult::Found(p),
@@ -432,6 +482,8 @@ fn connect_and_refine<WT: Word + HasBitWord, WS: Word + HasBitWord>(
                 ConnectAndRefineResult::Cancel => return ConnectAndRefineResult::Cancel,
             }
             backward_graph.ascend();
+            backward_path.pop();
+            forward_path.pop();
         }
     }
     ConnectAndRefineResult::Continue
