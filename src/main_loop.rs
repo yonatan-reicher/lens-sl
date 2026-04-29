@@ -323,7 +323,7 @@ fn connect_and_refine<WT: Word + HasBitWord, WS: Word + HasBitWord>(
     }
     let tui = globals.tui;
     if k > globals.inputs.len() {
-        if globals.do_discard {
+        let equivalent_insts = if globals.do_discard {
             // Instruction equivalence checking and discarding.
             if let Some(discard_set) = discard_sets.get(forward_path) {
                 if discard_set.contains(&inst) {
@@ -351,8 +351,13 @@ fn connect_and_refine<WT: Word + HasBitWord, WS: Word + HasBitWord>(
             discard_sets
                 .get_mut(forward_path)
                 .unwrap()
-                .extend(equivalent_insts);
-        }
+                .extend(equivalent_insts.iter().cloned());
+            equivalent_insts
+        } else {
+            FxHashSet::default().mutate(|s| {
+                s.insert(inst);
+            })
+        };
         let mut counter_example_added = false;
         match (&forward_graph, backward_graph.get()) {
             (Graph::Leaf(prefixes), Some(postfixes)) => {
@@ -362,42 +367,44 @@ fn connect_and_refine<WT: Word + HasBitWord, WS: Word + HasBitWord>(
                     // First, make a buffer to hold the program.
                     let program_length = globals.forward_length + 1 + globals.backward_length;
                     let mut program = Vec::with_capacity(program_length);
-                    prefixes.try_each(|prefix| {
-                        debug_assert_eq!(prefix.len(), globals.forward_length);
-                        postfixes.iter().try_for_each(|postfix| {
-                            debug_assert_eq!(postfix.len(), globals.backward_length);
-                            // Build the current candidate (reduced) program.
-                            program.clear();
-                            program.extend(prefix.iter());
-                            program.push(inst);
-                            program.extend(postfix.iter());
-                            let (inputs, outputs) = (&mut globals.inputs, &mut globals.outputs);
-                            match verify(
-                                &program,
-                                &globals.extender,
-                                &mut globals.oracle_reduced,
-                                &mut globals.oracle,
-                                |equivalent_prog| Break(ProgramOrRetry::Program(equivalent_prog.to_vec())),
-                            ) {
-                                verify::Result::CounterExample(inp, out) => {
-                                    tui.found_counter_example( inp, out,);
-                                    let mut actual = inp;
-                                    program.iter().for_each(|i| i.run(&mut actual));
-                                    debug_assert!(
-                                        !has_counter_example_been_seen(inputs, outputs, &inp, &out),
-                                        "Counter-example from reduced oracle should not have been seen before."
-                                    );
-                                    debug_assert!(actual != out, "Found mismatched interpreter behaviours!");
-                                    inputs.push(inp);
-                                    outputs.push(out);
-                                    // TODO: What is the equivalent of this in greenthumb's impl?
-                                    // backward_graph.g.0.push(vec![[(inp, empty_program)].into_iter().collect()]);
-                                    counter_example_added = true;
-                                    Break(ProgramOrRetry::Retry)
+                    equivalent_insts.into_iter().try_for_each(|inst| {
+                        prefixes.try_each(|prefix| {
+                            debug_assert_eq!(prefix.len(), globals.forward_length);
+                            postfixes.iter().try_for_each(|postfix| {
+                                debug_assert_eq!(postfix.len(), globals.backward_length);
+                                // Build the current candidate (reduced) program.
+                                program.clear();
+                                program.extend(prefix.iter());
+                                program.push(inst);
+                                program.extend(postfix.iter());
+                                let (inputs, outputs) = (&mut globals.inputs, &mut globals.outputs);
+                                match verify(
+                                    &program,
+                                    &globals.extender,
+                                    &mut globals.oracle_reduced,
+                                    &mut globals.oracle,
+                                    |equivalent_prog| Break(ProgramOrRetry::Program(equivalent_prog.to_vec())),
+                                ) {
+                                    verify::Result::CounterExample(inp, out) => {
+                                        tui.found_counter_example( inp, out,);
+                                        let mut actual = inp;
+                                        program.iter().for_each(|i| i.run(&mut actual));
+                                        debug_assert!(
+                                            !has_counter_example_been_seen(inputs, outputs, &inp, &out),
+                                            "Counter-example from reduced oracle should not have been seen before."
+                                        );
+                                        debug_assert!(actual != out, "Found mismatched interpreter behaviours!");
+                                        inputs.push(inp);
+                                        outputs.push(out);
+                                        // TODO: What is the equivalent of this in greenthumb's impl?
+                                        // backward_graph.g.0.push(vec![[(inp, empty_program)].into_iter().collect()]);
+                                        counter_example_added = true;
+                                        Break(ProgramOrRetry::Retry)
+                                    }
+                                    verify::Result::Break(x) => Break(x),
+                                    verify::Result::Continue => Continue(()),
                                 }
-                                verify::Result::Break(x) => Break(x),
-                                verify::Result::Continue => Continue(()),
-                            }
+                            })
                         })
                     })
                 };
