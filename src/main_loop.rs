@@ -142,6 +142,7 @@ where
         backward_map,
         total_instructions: Inst::enumerate(*enumeration_info).count(),
         enumeration_info: *enumeration_info,
+        do_discard: true,
     };
     let mut discard_sets = FxHashMap::default();
     let mut forward_path = vec![];
@@ -289,6 +290,7 @@ struct Globals<
     /// The total instructions we are enumerating
     total_instructions: usize,
     enumeration_info: EnumerationInfo<'tui, WS>,
+    do_discard: bool,
 }
 
 enum ProgramOrRetry<W: Word + HasBitWord> {
@@ -321,7 +323,8 @@ fn connect_and_refine<WT: Word + HasBitWord, WS: Word + HasBitWord>(
     }
     let tui = globals.tui;
     if k > globals.inputs.len() {
-        { // Instruction equivalence checking and discarding.
+        if globals.do_discard {
+            // Instruction equivalence checking and discarding.
             if let Some(discard_set) = discard_sets.get(forward_path) {
                 if discard_set.contains(&inst) {
                     // We have already tried an equivalent instruction on this path, and it didn't work, so skip it.
@@ -331,18 +334,24 @@ fn connect_and_refine<WT: Word + HasBitWord, WS: Word + HasBitWord>(
                 discard_sets.insert(forward_path.clone(), FxHashSet::default());
             }
             let mask = inst.potential_input_mask();
-            let equivalent_insts = {
-                intersect_all(forward_path.iter().zip(backward_path.iter()).map(|(s, next_s)| {
-                    bank.get(&s.masked(mask))
-                        .get(&next_s.masked(inst.potential_output_mask()))
-                        .borrow()
-                }))
-            };
+            let equivalent_insts =
+                {
+                    intersect_all(forward_path.iter().zip(backward_path.iter()).map(
+                        |(s, next_s)| {
+                            bank.get(&s.masked(mask))
+                                .get(&next_s.masked(inst.potential_output_mask()))
+                                .borrow()
+                        },
+                    ))
+                };
             debug_assert!(
                 equivalent_insts.contains(&inst),
                 "Equivalent instructions should contain the instruction itself."
             );
-            discard_sets.get_mut(forward_path).unwrap().extend(equivalent_insts);
+            discard_sets
+                .get_mut(forward_path)
+                .unwrap()
+                .extend(equivalent_insts);
         }
         let mut counter_example_added = false;
         match (&forward_graph, backward_graph.get()) {
@@ -462,8 +471,10 @@ fn connect_and_refine<WT: Word + HasBitWord, WS: Word + HasBitWord>(
         forward_output.clone_to(&mut next);
         inst.run(&mut next);
         if let Ok(()) = backward_graph.try_descend(next) {
-            forward_path.push(*forward_output);
-            backward_path.push(next);
+            if globals.do_discard {
+                forward_path.push(*forward_output);
+                backward_path.push(next);
+            }
             let res = connect_and_refine(
                 globals,
                 should_cancel,
@@ -482,8 +493,10 @@ fn connect_and_refine<WT: Word + HasBitWord, WS: Word + HasBitWord>(
                 ConnectAndRefineResult::Cancel => return ConnectAndRefineResult::Cancel,
             }
             backward_graph.ascend();
-            backward_path.pop();
-            forward_path.pop();
+            if globals.do_discard {
+                backward_path.pop();
+                forward_path.pop();
+            }
         }
     }
     ConnectAndRefineResult::Continue
