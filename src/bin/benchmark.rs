@@ -106,8 +106,19 @@ fn run_all_parallel(benchmarks: &[Benchmark]) {
 
 fn run(b: &Benchmark) -> BenchmarkResult {
     // Run!
+    let mut already_timed_out = false;
     (0..O.average_over.unwrap_or(1))
         .map(|_| {
+            if already_timed_out {
+                return BenchmarkResult {
+                    success: false,
+                    timeout: true,
+                    elapsed: Duration::ZERO,
+                    std: Duration::ZERO,
+                    found: vec![],
+                    panic_message: None,
+                };
+            }
             let mut found = vec![];
             let callback = |optimized: Vec<Inst<W>>| -> ControlFlow<()> {
                 found.push(optimized);
@@ -119,6 +130,7 @@ fn run(b: &Benchmark) -> BenchmarkResult {
                 Continue((elapsed, timeout)) => (elapsed, timeout),
                 Break(()) => unreachable!("benchmark callback never breaks"),
             };
+            already_timed_out |= timeout;
             let success = !timeout
                 && !found.is_empty()
                 && found
