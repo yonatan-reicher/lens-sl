@@ -7,14 +7,27 @@ use lens_sl::{
 
 fn main() {
     let args: &mut Vec<String> = &mut std::env::args().collect();
-    let sl = parse_flag(args, "--sl");
+    let algorithm = if parse_flag(args, "--monocle1") {
+        // Algorithm::MonocleV1
+        todo!()
+    } else if parse_flag(args, "--monocle2") {
+        Algorithm::MonocleV2
+    } else if parse_flag(args, "--monocle3") {
+        Algorithm::MonocleV3
+    } else {
+        Algorithm::Lens
+    };
+    if parse_flag(args, "--sl") {
+        eprintln!("Warning: --sl is deprecated, use --monocle3 instead");
+        std::process::exit(1);
+    }
     let forward_only = parse_flag(args, "--forward-only");
     let no_tui = parse_flag(args, "--no-tui");
     let h = parse_flag(args, "--help") || parse_flag(args, "-h");
 
     if args.len() > 2 || h {
         eprintln!(
-            "Usage: {} [--sl] [--forward-only] [--no-tui] [PROGRAM_PATH]",
+            "Usage: {} [--monocle1 | --monocle2 | --monocle3] [--forward-only] [--no-tui] [PROGRAM_PATH]",
             args[0]
         );
         std::process::exit(1);
@@ -67,11 +80,7 @@ fn main() {
     let _live_out = live_out;
 
     let config = Config {
-        algorithm: if sl {
-            Algorithm::MonocleV3
-        } else {
-            Algorithm::Lens
-        },
+        algorithm,
         program: &program,
         additional_registers: &[],
         additional_immediates: &[],

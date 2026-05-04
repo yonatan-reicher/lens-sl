@@ -25,7 +25,7 @@ unsafe extern "C" {
 #[derive(Default)]
 struct Options {
     parallel: bool,
-    sl: bool,
+    algorithm: Algorithm,
     timeout: Option<Duration>,
     filter: Filter,
     csv: Option<Mutex<File>>,
@@ -327,18 +327,13 @@ impl Benchmark {
         &self,
         mut f: impl FnMut(Vec<Inst<W>>) -> ControlFlow<T>,
     ) -> ControlFlow<T, (Duration, bool, (usize, usize))> {
-        let algorithm = if O.sl {
-            Algorithm::MonocleV3
-        } else {
-            Algorithm::Lens
-        };
         let should_cancel = match O.timeout {
             None => ShouldCancel::Never,
             Some(d) => ShouldCancel::Timeout(d),
         };
         let result = optimize::<W, Word4>(
             Config {
-                algorithm,
+                algorithm: O.algorithm,
                 program: &self.input,
                 additional_registers: &[],
                 additional_immediates: &[],
@@ -482,7 +477,14 @@ fn parse_options() -> Options {
                 std::process::exit(0);
             }
             "--parallel" | "-p" => ret.parallel = true,
-            "--sl" => ret.sl = true,
+            // "--monocle1" => ret.algorithm = Algorithm::MonocleV1,
+            "--monocle1" => todo!(),
+            "--monocle2" => ret.algorithm = Algorithm::MonocleV2,
+            "--monocle3" => ret.algorithm = Algorithm::MonocleV3,
+            "--sl" => {
+                eprintln!("Warning: --sl is deprecated, use --monocle3 instead");
+                std::process::exit(1);
+            }
             "--filter" => {
                 ret.filter = match args.next().as_deref() {
                     Some("ours") => Filter::Ours,

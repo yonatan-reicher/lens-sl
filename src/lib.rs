@@ -3,6 +3,7 @@
 mod main_loop;
 /// Rewrite of main loop with separation logic.
 mod main_loop_sl;
+mod main_loop_sl_v2;
 
 // --- Main Files ---
 // I tried to make them as independent as possible.
@@ -55,6 +56,7 @@ pub enum Algorithm {
     #[default]
     Lens,
     MonocleV3,
+    MonocleV2,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -135,5 +137,6 @@ where
     match c.algorithm {
         Algorithm::Lens => main_loop::optimize(c, tui),
         Algorithm::MonocleV3 => main_loop_sl::optimize(c, tui),
+        Algorithm::MonocleV2 => main_loop_sl_v2::optimize(c, tui),
     }
 }
