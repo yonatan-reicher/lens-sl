@@ -98,6 +98,11 @@ where
         }
     }
 
+    /// Like [Self::try_descend], but does not do any checks.
+    pub fn force_descend(&mut self, state: S) {
+        self.inputs.push(state);
+    }
+
     pub fn ascend(&mut self) {
         self.inputs.pop();
     }
