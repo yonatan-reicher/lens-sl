@@ -75,6 +75,7 @@ where
         return OptimizeResult {
             outcome: OptimizeOutcome::NoProgram,
             elapsed: Duration::ZERO,
+            last_iteration_completion_percent: (0, 0),
         };
     }
 
@@ -168,6 +169,7 @@ where
         postfix_len: 0,
         prefix_len: 0,
         splitting_buffer: vec![],
+        last_iteration_completion_percent: (0, 0),
     };
 
     optimizer.optimize()
@@ -219,6 +221,7 @@ struct Optimizer<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> {
     /// they need splitting.
     /// TODO: Is this forward only?
     splitting_buffer: Vec<(Vec<State<W>>, Programs<W>)>,
+    last_iteration_completion_percent: (usize, usize),
 }
 
 impl<WBig, W> Optimizer<'_, WBig, W>
@@ -238,6 +241,7 @@ where
                 return OptimizeResult {
                     outcome: OptimizeOutcome::Program(p),
                     elapsed: self.started_at.elapsed(),
+                    last_iteration_completion_percent: (0, 0),
                 };
             }
             Break(ProgramOrRetry::Retry) => (),
@@ -288,12 +292,14 @@ where
                     return OptimizeResult {
                         outcome: OptimizeOutcome::Cancelled,
                         elapsed: self.started_at.elapsed(),
+                        last_iteration_completion_percent: self.last_iteration_completion_percent,
                     };
                 }
                 Break(Ok(p)) => {
                     return OptimizeResult {
                         outcome: OptimizeOutcome::Program(p),
                         elapsed: self.started_at.elapsed(),
+                        last_iteration_completion_percent: self.last_iteration_completion_percent,
                     };
                 }
             }
@@ -301,6 +307,7 @@ where
         OptimizeResult {
             outcome: OptimizeOutcome::NoProgram,
             elapsed: self.started_at.elapsed(),
+            last_iteration_completion_percent: self.last_iteration_completion_percent,
         }
     }
 
@@ -309,16 +316,18 @@ where
         for (i, (states, prog)) in self
             .forward_frontier
             .drain()
+            // TODO: Remove this sort
             .sorted_by_key(|(_, progs)| usize::MAX - progs.len())
             .enumerate()
         {
             self.tui.progress(i, len);
+            self.last_iteration_completion_percent = (i, len);
             // Should we stop?
             if self.should_cancel.check() {
                 return Break(Err(Cancelled));
             }
             // The red code.
-            let do_discard = true;
+            let do_discard = false;
             let do_subsumption = false;
             let mut discarded = FxHashSet::<Inst<W>>::default();
             for mask in Self::input_sub_masks(self.top_mask) {
@@ -427,6 +436,7 @@ where
         // For each instruction,
         for (i_inst, inst) in Inst::enumerate(self.enumeration_info).enumerate() {
             self.tui.progress(i_inst, self.stats.n_instructions);
+            self.last_iteration_completion_percent = (i_inst, self.stats.n_instructions);
             // TODO: Move should_cancel checks more inside to make sure we don't do slow down the
             // testing process
             if self.should_cancel.check() {
