@@ -70,6 +70,7 @@ where
         return OptimizeResult {
             outcome: OptimizeOutcome::NoProgram,
             elapsed: Duration::ZERO,
+            last_iteration_completion_percent: (0, 0),
         };
     }
 
@@ -157,6 +158,7 @@ where
         tui,
         postfix_len: 0,
         prefix_len: 0,
+        last_iteration_completion_percent: (0, 0),
     };
 
     optimizer.optimize()
@@ -204,6 +206,7 @@ struct Optimizer<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> {
     tui: &'a dyn TuiHook<&'a Graph<W>, State<W>>,
     postfix_len: usize,
     prefix_len: usize,
+    last_iteration_completion_percent: (usize, usize),
 }
 
 impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
@@ -216,6 +219,7 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                 return OptimizeResult {
                     outcome: OptimizeOutcome::Program(p),
                     elapsed: self.started_at.elapsed(),
+                    last_iteration_completion_percent: (0, 0),
                 };
             }
             Break(ProgramOrRetry::Retry) => (),
@@ -272,12 +276,16 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                         return OptimizeResult {
                             outcome: OptimizeOutcome::Cancelled,
                             elapsed: self.started_at.elapsed(),
+                            last_iteration_completion_percent: self
+                                .last_iteration_completion_percent,
                         };
                     }
                     Break(Ok(ProgramOrRetry::Program(p))) => {
                         return OptimizeResult {
                             outcome: OptimizeOutcome::Program(p),
                             elapsed: self.started_at.elapsed(),
+                            last_iteration_completion_percent: self
+                                .last_iteration_completion_percent,
                         };
                     }
                     Break(Ok(ProgramOrRetry::Retry)) => continue 'restart,
@@ -295,6 +303,7 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
             return OptimizeResult {
                 outcome: OptimizeOutcome::NoProgram,
                 elapsed: self.started_at.elapsed(),
+                last_iteration_completion_percent: self.last_iteration_completion_percent,
             };
         }
     }
@@ -303,6 +312,7 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
         let len = self.forward_frontier.len();
         for (i, (states, prog)) in self.forward_frontier.iter().enumerate() {
             self.tui.progress(i, len);
+            self.last_iteration_completion_percent = (i, len);
             // Should we stop?
             if self.should_cancel.check() {
                 return Break(Err(Cancelled));
@@ -404,6 +414,7 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
         // For each instruction,
         for (i_inst, inst) in Inst::enumerate(self.enumeration_info).enumerate() {
             self.tui.progress(i_inst, self.stats.n_instructions);
+            self.last_iteration_completion_percent = (i_inst, self.stats.n_instructions);
             // TODO: Move should_cancel checks more inside to make sure we don't do slow down the
             // testing process
             if self.should_cancel.check() {
