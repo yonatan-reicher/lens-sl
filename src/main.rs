@@ -68,7 +68,7 @@ fn main() {
 
     let config = Config {
         algorithm: if sl {
-            Algorithm::LensSl
+            Algorithm::MonocleV3
         } else {
             Algorithm::Lens
         },

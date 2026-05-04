@@ -328,7 +328,7 @@ impl Benchmark {
         mut f: impl FnMut(Vec<Inst<W>>) -> ControlFlow<T>,
     ) -> ControlFlow<T, (Duration, bool, (usize, usize))> {
         let algorithm = if O.sl {
-            Algorithm::LensSl
+            Algorithm::MonocleV3
         } else {
             Algorithm::Lens
         };

@@ -54,7 +54,7 @@ pub struct Cancelled;
 pub enum Algorithm {
     #[default]
     Lens,
-    LensSl,
+    MonocleV3,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -134,6 +134,6 @@ where
 {
     match c.algorithm {
         Algorithm::Lens => main_loop::optimize(c, tui),
-        Algorithm::LensSl => main_loop_sl::optimize(c, tui),
+        Algorithm::MonocleV3 => main_loop_sl::optimize(c, tui),
     }
 }
