@@ -311,7 +311,9 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
             // The red code.
             let do_discard = true;
             let mut discarded = FxHashSet::<Inst<W>>::default();
+            self.tui.progress_push();
             for (i_inst, inst) in Inst::enumerate(self.enumeration_info).enumerate() {
+                self.tui.progress(i_inst, self.stats.n_instructions);
                 let mask = inst.potential_input_mask();
                 {
                     // We can't do this filtering as part of the selecting the instructions
@@ -343,7 +345,10 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                                     self.oracle.verify(&prog)
                                 })
                             },
-                        )?;
+                        ).map_break(|b| {
+                            self.tui.progress_pop();
+                            b
+                        })?;
                     }
                     if self.forward_seen.contains(&next_states) {
                         if do_discard {
@@ -383,6 +388,7 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                         .extend([prog]);
                 }
             }
+            self.tui.progress_pop();
         }
         self.tui.progress(len, len);
         self.forward_frontier.clear();
