@@ -687,7 +687,7 @@ where
     ) -> impl Iterator<Item = (Vec<State<W>>, Programs<W>)> + '_ {
         frontier
             .drain()
-            .sorted_by_key(|(_, progs)| usize::MAX - progs.len())
+        //  .sorted_by_key(|(_, progs)| usize::MAX - progs.len())
         // .sorted_by_key(|(_, progs)| progs.len())
     }
 
