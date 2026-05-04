@@ -201,7 +201,7 @@ fn print_result(b: &Benchmark, result: &BenchmarkResult) {
         humantime::Duration::from(result.elapsed),
         result.last_inst_percent.0,
         result.last_inst_percent.1,
-        result.last_frontier_percent.0
+        result.last_frontier_percent.0,
         result.last_frontier_percent.1
     );
     if let Some(csv) = &O.csv {
