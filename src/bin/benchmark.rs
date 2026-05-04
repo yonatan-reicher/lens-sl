@@ -89,6 +89,7 @@ fn run_all_parallel(benchmarks: &[Benchmark]) {
                         std: Duration::ZERO,
                         found: vec![],
                         panic_message: Some(panic_payload_to_string(payload)),
+                        last_iteration_completion_percent: (0, 0),
                     },
                 };
                 let _ = tx.send((index, result));
@@ -117,6 +118,7 @@ fn run(b: &Benchmark) -> BenchmarkResult {
                     std: Duration::ZERO,
                     found: vec![],
                     panic_message: None,
+                    last_iteration_completion_percent: (0, 0),
                 };
             }
             let mut found = vec![];
@@ -126,8 +128,8 @@ fn run(b: &Benchmark) -> BenchmarkResult {
             };
 
             let ret = b.optimize::<()>(callback);
-            let (elapsed, timeout) = match ret {
-                Continue((elapsed, timeout)) => (elapsed, timeout),
+            let (elapsed, timeout, last_iteration_completion_percent) = match ret {
+                Continue((elapsed, timeout, pct)) => (elapsed, timeout, pct),
                 Break(()) => unreachable!("benchmark callback never breaks"),
             };
             already_timed_out |= timeout;
@@ -143,6 +145,7 @@ fn run(b: &Benchmark) -> BenchmarkResult {
                 std: Duration::ZERO,
                 found,
                 panic_message: None,
+                last_iteration_completion_percent,
             }
         })
         .collect::<Vec<_>>()
@@ -160,6 +163,8 @@ fn run(b: &Benchmark) -> BenchmarkResult {
             let found = v[0].found.clone();
             if !v.iter().all(|b| b.found == found) { todo!() }
             let std = std(v.iter().map(|b| &b.elapsed));
+            let last_iteration_completion_percent = v[0].last_iteration_completion_percent;
+            if !v.iter().all(|b| b.last_iteration_completion_percent == last_iteration_completion_percent) { todo!() }
             BenchmarkResult {
                 success,
                 timeout,
@@ -167,6 +172,7 @@ fn run(b: &Benchmark) -> BenchmarkResult {
                 found,
                 std,
                 panic_message: None,
+                last_iteration_completion_percent,
             }
         })
 }
@@ -186,13 +192,15 @@ fn print_result(b: &Benchmark, result: &BenchmarkResult) {
         "❌"
     };
     println!(
-        "{} - {mark} {}",
+        "{} - {mark} {} [{}/{}]",
         b.name,
-        humantime::Duration::from(result.elapsed)
+        humantime::Duration::from(result.elapsed),
+        result.last_iteration_completion_percent.0,
+        result.last_iteration_completion_percent.1
     );
     if let Some(csv) = &O.csv {
         let csv = &mut csv.lock().unwrap();
-        let (name, success, time, std) = (
+        let (name, success, time, std, last_iter_pct) = (
             b.name.as_str(),
             result.success,
             if result.timeout {
@@ -201,8 +209,13 @@ fn print_result(b: &Benchmark, result: &BenchmarkResult) {
                 result.elapsed.as_secs_f64().to_string()
             },
             result.std.as_secs_f64(),
+            format!(
+                "{}/{}",
+                result.last_iteration_completion_percent.0,
+                result.last_iteration_completion_percent.1
+            ),
         );
-        let _ = writeln!(csv, "{name},{success},{time},{std}");
+        let _ = writeln!(csv, "{name},{success},{time},{std},{last_iter_pct}");
     }
     if !result.success {
         if result.found.is_empty() {
@@ -304,6 +317,7 @@ struct BenchmarkResult {
     std: Duration,
     found: Vec<Vec<Inst<W>>>,
     panic_message: Option<String>,
+    last_iteration_completion_percent: (usize, usize),
 }
 
 type W = Word32;
@@ -312,7 +326,7 @@ impl Benchmark {
     pub fn optimize<T>(
         &self,
         mut f: impl FnMut(Vec<Inst<W>>) -> ControlFlow<T>,
-    ) -> ControlFlow<T, (Duration, bool)> {
+    ) -> ControlFlow<T, (Duration, bool, (usize, usize))> {
         let algorithm = if O.sl {
             Algorithm::LensSl
         } else {
@@ -342,7 +356,7 @@ impl Benchmark {
                 false
             }
         };
-        Continue((elapsed, timeout))
+        Continue((elapsed, timeout, result.last_iteration_completion_percent))
     }
 }
 
@@ -497,7 +511,8 @@ fn parse_options() -> Options {
                     }
                     Some(path) => match File::create(path) {
                         Ok(mut f) => {
-                            let _ = writeln!(f, "name,success,time(seconds/timeout),std");
+                            let _ =
+                                writeln!(f, "name,success,time(seconds/timeout),std,last-iter-%");
                             f
                         }
                         Err(e) => {
@@ -599,6 +614,7 @@ impl BenchmarkResult {
             std: Duration::ZERO,
             found: vec![],
             panic_message: Some(message),
+            last_iteration_completion_percent: (0, 0),
         }
     }
 }

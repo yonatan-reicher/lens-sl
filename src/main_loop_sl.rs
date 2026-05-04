@@ -77,6 +77,7 @@ where
         return OptimizeResult {
             outcome: OptimizeOutcome::NoProgram,
             elapsed: Duration::ZERO,
+            last_iteration_completion_percent: (0, 0),
         };
     }
 
@@ -158,6 +159,7 @@ where
         prefix_len: 0,
         splitting_buffer: vec![],
         discard_sets: vec![],
+        last_iteration_completion_percent: (0, 0),
     };
 
     optimizer.optimize()
@@ -200,6 +202,7 @@ struct Optimizer<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> {
     splitting_buffer: Vec<(Vec<State<W>>, Programs<W>)>,
     /// Index is frontier index.
     discard_sets: Vec<FxHashSet<Inst<W>>>,
+    last_iteration_completion_percent: (usize, usize),
 }
 
 impl<WBig, W> Optimizer<'_, WBig, W>
@@ -219,6 +222,7 @@ where
                 return OptimizeResult {
                     outcome: OptimizeOutcome::Program(p),
                     elapsed: self.started_at.elapsed(),
+                    last_iteration_completion_percent: (0, 0),
                 };
             }
             Break(ProgramOrRetry::Retry) => (),
@@ -264,12 +268,14 @@ where
                     return OptimizeResult {
                         outcome: OptimizeOutcome::Cancelled,
                         elapsed: self.started_at.elapsed(),
+                        last_iteration_completion_percent: self.last_iteration_completion_percent,
                     };
                 }
                 Break(Ok(p)) => {
                     return OptimizeResult {
                         outcome: OptimizeOutcome::Program(p),
                         elapsed: self.started_at.elapsed(),
+                        last_iteration_completion_percent: self.last_iteration_completion_percent,
                     };
                 }
             }
@@ -277,6 +283,7 @@ where
         OptimizeResult {
             outcome: OptimizeOutcome::NoProgram,
             elapsed: self.started_at.elapsed(),
+            last_iteration_completion_percent: (1, 1),
         }
     }
 
@@ -292,6 +299,7 @@ where
         }
         // For each instruction, go through the whole frontier and search for a connection!
         for (i_inst, inst) in Inst::enumerate(self.enumeration_info).enumerate() {
+            self.last_iteration_completion_percent = (i_inst, n_inst);
             self.tui.progress(i_inst, n_inst);
             let mask = inst.potential_input_mask();
             //
@@ -374,6 +382,7 @@ where
         let len = self.forward_frontier.len();
         self.tui.progress(0, len);
         for (i, (states, progs)) in Self::reorder_frontier(&mut self.forward_frontier).enumerate() {
+            self.last_iteration_completion_percent = (i, len);
             self.tui.progress(i, len);
             // Should we stop?
             if self.should_cancel.check() {

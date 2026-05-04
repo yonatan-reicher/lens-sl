@@ -1,3 +1,4 @@
+use lens_sl::OptimizeResult;
 #[allow(unused_imports)]
 use lens_sl::{
     Algorithm, Config, LiveValue, NoTui, OptimizeOutcome, Register, ShouldCancel, Tui, Word4,
@@ -78,7 +79,11 @@ fn main() {
         forward_only,
     };
 
-    let p = if !no_tui {
+    let OptimizeResult {
+        outcome,
+        elapsed,
+        last_iteration_completion_percent,
+    } = if !no_tui {
         let tui = Tui::default();
         let p = optimize::<Word32, Word4>(config, &tui);
         tui.close();
@@ -86,7 +91,7 @@ fn main() {
     } else {
         optimize::<Word32, Word4>(config, &NoTui)
     };
-    match p.outcome {
+    match outcome {
         OptimizeOutcome::Cancelled => {
             println!("Cancelled!");
         }
@@ -100,7 +105,11 @@ fn main() {
             }
         }
     }
-    println!("Time: {}", humantime::Duration::from(p.elapsed));
+    println!("Time: {}", humantime::Duration::from(elapsed));
+    println!(
+        "Last iteration completion: {}/{}",
+        last_iteration_completion_percent.0, last_iteration_completion_percent.1
+    );
 }
 
 fn parse_flag(args: &mut Vec<String>, flag: &str) -> bool {
