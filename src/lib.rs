@@ -111,7 +111,8 @@ pub enum OptimizeOutcome<W, WShift = crate::word::BitWord<W>> {
 pub struct OptimizeResult<W, WShift = crate::word::BitWord<W>> {
     pub outcome: OptimizeOutcome<W, WShift>,
     pub elapsed: std::time::Duration,
-    pub last_iteration_completion_percent: (usize, usize),
+    pub last_inst_percent: (usize, usize),
+    pub last_frontier_percent: (usize, usize),
 }
 
 // Let's expose just the necessary items.

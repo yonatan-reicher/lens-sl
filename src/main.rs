@@ -90,7 +90,8 @@ fn main() {
     let OptimizeResult {
         outcome,
         elapsed,
-        last_iteration_completion_percent,
+        last_inst_percent,
+        last_frontier_percent,
     } = if !no_tui {
         let tui = Tui::default();
         let p = optimize::<Word32, Word4>(config, &tui);
@@ -115,8 +116,8 @@ fn main() {
     }
     println!("Time: {}", humantime::Duration::from(elapsed));
     println!(
-        "Last iteration completion: {}/{}",
-        last_iteration_completion_percent.0, last_iteration_completion_percent.1
+        "Last iteration completion: inst {}/{} frontier {}/{}",
+        last_inst_percent.0, last_inst_percent.1, last_frontier_percent.0, last_frontier_percent.1,
     );
 }
 

@@ -55,7 +55,8 @@ where
         return OptimizeResult {
             outcome: OptimizeOutcome::NoProgram,
             elapsed: Duration::ZERO,
-            last_iteration_completion_percent: (0, 0),
+            last_inst_percent: (0, 0),
+            last_frontier_percent: (0, 0),
         };
     }
 
@@ -156,7 +157,8 @@ where
             return OptimizeResult {
                 outcome: OptimizeOutcome::Program(vec![]),
                 elapsed: started_at.elapsed(),
-                last_iteration_completion_percent: (0, 0),
+                last_inst_percent: (0, 0),
+                last_frontier_percent: (0, 0),
             };
         } // Turns out it's actually the empty program 🤷
         Err((inp, out)) => {
@@ -199,7 +201,8 @@ where
                     return OptimizeResult {
                         outcome: OptimizeOutcome::Program(prog),
                         elapsed: started_at.elapsed(),
-                        last_iteration_completion_percent: (i + 1, globals.total_instructions),
+                        last_inst_percent: (i, globals.total_instructions),
+                        last_frontier_percent: (0, 0),
                     };
                 }
                 ConnectAndRefineResult::Continue => {}
@@ -207,7 +210,8 @@ where
                     return OptimizeResult {
                         outcome: OptimizeOutcome::Cancelled,
                         elapsed: started_at.elapsed(),
-                        last_iteration_completion_percent: (i, globals.total_instructions),
+                        last_inst_percent: (i, globals.total_instructions),
+                        last_frontier_percent: (0, 0),
                     };
                 }
             }
@@ -220,7 +224,8 @@ where
             return OptimizeResult {
                 outcome: OptimizeOutcome::NoProgram,
                 elapsed: started_at.elapsed(),
-                last_iteration_completion_percent: (globals.total_instructions, globals.total_instructions),
+                last_inst_percent: (globals.total_instructions, globals.total_instructions),
+                last_frontier_percent: (0, 0),
             };
         }
         let should_expand_forward =
@@ -257,7 +262,8 @@ where
                 return OptimizeResult {
                     outcome: OptimizeOutcome::Cancelled,
                     elapsed: started_at.elapsed(),
-                    last_iteration_completion_percent: (globals.total_instructions, globals.total_instructions),
+                    last_inst_percent: (globals.total_instructions, globals.total_instructions),
+                    last_frontier_percent: (0, 0),
                 };
             }
             Continue(()) => (),
