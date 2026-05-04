@@ -310,6 +310,7 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
             }
             // The red code.
             let do_discard = true;
+            let do_subsumption = true;
             let mut discarded = FxHashSet::<Inst<W>>::default();
             self.tui.progress_push();
             for (i_inst, inst) in Inst::enumerate(self.enumeration_info).enumerate() {
@@ -359,7 +360,6 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                     self.forward_seen.insert(next_states.clone());
                     // Extend Hila's discard set. Extend it by all the instructions which do the
                     // exact same thing as this instruction on the current inputs.
-                    let do_subsumption = true;
                     if do_discard {
                         if do_subsumption {
                             discarded.extend(insts_with_same_effect(
