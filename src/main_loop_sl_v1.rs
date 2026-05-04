@@ -309,8 +309,8 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                 return Break(Err(Cancelled));
             }
             // The red code.
-            let do_discard = true;
-            let do_subsumption = true;
+            let do_discard = false;
+            let do_subsumption = false;
             let mut discarded = FxHashSet::<Inst<W>>::default();
             self.tui.progress_push();
             for (i_inst, inst) in Inst::enumerate(self.enumeration_info).enumerate() {
