@@ -372,32 +372,6 @@ fn clear_screen() {
 use crate::graph::Graph;
 impl<'g, S, P: Len> From<&'g Graph<S, P>> for GraphState {
     fn from(g: &'g Graph<S, P>) -> Self {
-        let mut ret = GraphState {
-            layers: vec![],
-            n_progs: 0,
-            n_leaves: 0,
-            min_depth: usize::MAX,
-        };
-        recurse(g, &mut ret, 0);
-        return ret;
-
-        fn recurse<S, P: Len>(g: &Graph<S, P>, ret: &mut GraphState, depth: usize) {
-            if ret.layers.len() <= depth {
-                ret.layers.push(LayerInfo { n_nodes: 0 });
-            }
-            ret.layers[depth].n_nodes += 1;
-            match g {
-                Graph::Leaf(p) => {
-                    ret.n_progs += p.len();
-                    ret.n_leaves += 1;
-                    ret.min_depth = ret.min_depth.min(depth);
-                }
-                Graph::Nest(hash_map) => {
-                    for sub_graph in hash_map.values() {
-                        recurse(sub_graph, ret, depth + 1)
-                    }
-                }
-            }
-        }
+        Default::default()
     }
 }
