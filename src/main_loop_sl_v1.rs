@@ -389,70 +389,35 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
         Continue(())
     }
 
-    /// Expands the backward frontier by one more instruction. When reaches an state that looks fit
-    /// for it, it builds a program and sends to the verifier, which means this can add counter
-    /// examples or end the search, or do nothing.
-    /// I am still not sure what to do if we added a counter-example, need to see how we will handle
-    /// it.
-    /// TODO: above.
     fn expand_backward(&mut self) -> ControlFlow<Result<ProgramOrRetry<WBig>, Cancelled>> {
-        // For each instruction,
-        for (i_inst, inst) in Inst::enumerate(self.enumeration_info).enumerate() {
-            self.tui.progress(i_inst, self.stats.n_instructions);
-            self.last_iteration_completion_percent = (i_inst, self.stats.n_instructions);
-            // TODO: Move should_cancel checks more inside to make sure we don't do slow down the
-            // testing process
+        // For each state in the forwards frontier, try to split it without expanding it.
+        let len = self.forward_frontier.len();
+        self.tui.progress(0, len);
+        for (i, (states, prefixes)) in self.forward_frontier.iter().enumerate() {
+            self.last_iteration_completion_percent = (i, len);
+            self.tui.progress(i, len);
+            // Should we stop?
             if self.should_cancel.check() {
                 return Break(Err(Cancelled));
             }
-            // And for each state,
-            for (state, postfixes) in self.backward_frontier.iter() {
-                // Calculate the next state, and add it!
-                let next_postfixes = postfixes.clone().concat(inst);
-                for next_state in inst.run_backward(*state, &self.bm) {
-                    self.next_backward_frontier
-                        .entry(next_state)
-                        .or_default()
-                        .extend(&next_postfixes);
-                    // And if it's a winner, we may be done!
-                    match next_postfixes.try_each(|mut postfix| {
-                        postfix.reverse();
-                        Self::try_each_matching_prefix(
-                            &self.forward_frontier_ce_0,
-                            self.counter_examples,
-                            &next_state,
-                            &postfix,
-                            |prefix| {
-                                // Here we already reversed the postfix, so we don't again.
-                                let prog = prefix.mutate(|p| p.extend(&postfix));
-                                self.oracle.verify(&prog)
-                            },
-                        )
-                    }) {
-                        Continue(()) => (),
-                        Break(ProgramOrRetry::Program(p)) => {
-                            return Break(Ok(ProgramOrRetry::Program(p)));
-                        }
-                        Break(ProgramOrRetry::Retry) => {
-                            // This is a tough one. We need to add the counter-example, reset the
-                            // forward search, but keep the state of this backward search.
-                            // We actually can't do that, for a number of reasons. So we must sort
-                            // of restart this backward search too.
-                            self.next_backward_frontier.clear();
-                            return Break(Ok(ProgramOrRetry::Retry));
-                        }
-                    }
-                }
-            }
+            Self::try_each_matching_postfix(
+                &mut self.backward_graph,
+                self.postfix_len + 1, // +1 beacuse we are expanding!
+                &self.should_cancel,
+                self.enumeration_info,
+                &self.bm,
+                self.counter_examples,
+                states,
+                |postfix| {
+                    prefixes.try_each(|prefix| {
+                        // Find the full program!
+                        let prog = prefix.chain(postfix.iter().cloned()).collect_vec();
+                        self.oracle.verify(&prog)
+                    })
+                },
+            )?;
         }
-        self.tui
-            .progress(self.stats.n_instructions, self.stats.n_instructions);
-        // Done! Switch the buffers.
-        self.backward_frontier.clear();
-        std::mem::swap(
-            &mut self.next_backward_frontier,
-            &mut self.backward_frontier,
-        );
+        self.tui.progress(len, len);
         Continue(())
     }
 
@@ -477,7 +442,7 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
                 &counter_examples.outputs(),
                 postfix_len,
                 ce,
-                &should_cancel,
+                should_cancel,
             )
             .map_break(Err)?;
         }
@@ -572,37 +537,6 @@ impl<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> Optimizer<'a, WBig, W> {
             }
         }
         Continue(())
-    }
-
-    /// Given a postfix, and a state that when ran the postfix on it gives the output of the first
-    /// counter-example, run a function on each prefix that that when combined with the postfix
-    /// gives the correct output on all counter-examples.
-    /// The postfix should be in normal order, not reversed.
-    fn try_each_matching_prefix<T>(
-        forward_frontier: &FxHashMap<State<W>, Programs<W>>,
-        counter_examples: &CounterExamplesCell<W>,
-        state: &State<W>,
-        postfix: &[Inst<W>],
-        mut f: impl FnMut(Program<W>) -> ControlFlow<T>,
-    ) -> ControlFlow<T> {
-        debug_assert_eq!(
-            postfix.iter().fold(*state, |s, i| s.mutate(|s| i.run(s))),
-            counter_examples.outputs()[0]
-        );
-        let Some(prefixes) = forward_frontier.get(state) else {
-            return Continue(());
-        };
-        prefixes.try_each(|prefix| {
-            let (inputs, outputs) = (counter_examples.inputs(), counter_examples.outputs());
-            let (other_inputs, expected_outputs) = (&inputs[1..], &outputs[1..]);
-            let prog = prefix.iter().chain(postfix);
-            let other_outputs = other_inputs
-                .iter()
-                .map(|input| prog.clone().fold(*input, |s, i| s.mutate(|s| i.run(s))));
-            let good = other_outputs.zip(expected_outputs).all(|(a, b)| a == *b);
-            std::mem::drop((inputs, outputs)); // Must drop these before calling the function.
-            if good { f(prefix) } else { Continue(()) }
-        })
     }
 
     fn input_sub_masks(mask: Mask) -> impl Iterator<Item = Mask> {
