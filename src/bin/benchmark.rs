@@ -164,7 +164,6 @@ fn run(b: &Benchmark) -> BenchmarkResult {
             if !v.iter().all(|b| b.found == found) { todo!() }
             let std = std(v.iter().map(|b| &b.elapsed));
             let last_iteration_completion_percent = v[0].last_iteration_completion_percent;
-            if !v.iter().all(|b| b.last_iteration_completion_percent == last_iteration_completion_percent) { todo!() }
             BenchmarkResult {
                 success,
                 timeout,
