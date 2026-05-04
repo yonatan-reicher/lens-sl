@@ -8,8 +8,7 @@ use lens_sl::{
 fn main() {
     let args: &mut Vec<String> = &mut std::env::args().collect();
     let algorithm = if parse_flag(args, "--monocle1") {
-        // Algorithm::MonocleV1
-        todo!()
+        Algorithm::MonocleV1
     } else if parse_flag(args, "--monocle2") {
         Algorithm::MonocleV2
     } else if parse_flag(args, "--monocle3") {

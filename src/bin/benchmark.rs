@@ -477,8 +477,7 @@ fn parse_options() -> Options {
                 std::process::exit(0);
             }
             "--parallel" | "-p" => ret.parallel = true,
-            // "--monocle1" => ret.algorithm = Algorithm::MonocleV1,
-            "--monocle1" => todo!(),
+            "--monocle1" => ret.algorithm = Algorithm::MonocleV1,
             "--monocle2" => ret.algorithm = Algorithm::MonocleV2,
             "--monocle3" => ret.algorithm = Algorithm::MonocleV3,
             "--sl" => {
