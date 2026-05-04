@@ -287,7 +287,7 @@ where
     fn expand_forward(&mut self) -> ControlFlow<Result<Program<WBig>, Cancelled>> {
         let n_inst = self.stats.n_instructions;
         let n_states = self.forward_frontier.len();
-        let do_discard = true;
+        let do_discard = false;
         let len = n_states;
         for (i, (states, prefixes)) in Self::reorder_frontier(&mut self.forward_frontier).enumerate() {
             self.last_iteration_completion_percent = (i, len);

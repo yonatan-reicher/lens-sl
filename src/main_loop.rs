@@ -143,7 +143,7 @@ where
         backward_map,
         total_instructions: Inst::enumerate(*enumeration_info).count(),
         enumeration_info: *enumeration_info,
-        do_discard: true,
+        do_discard: false,
     };
     let mut discard_sets = FxHashMap::default();
     let mut forward_path = vec![];

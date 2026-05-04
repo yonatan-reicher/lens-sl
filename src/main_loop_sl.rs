@@ -291,7 +291,7 @@ where
         let n_inst = self.stats.n_instructions;
         let n_states = self.forward_frontier.len();
         //
-        let do_discard = true;
+        let do_discard = false;
         if do_discard {
             // self.discard_sets.clear();
             self.discard_sets.iter_mut().for_each(|s| s.clear());
