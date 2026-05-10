@@ -351,6 +351,7 @@ impl Benchmark {
                 additional_immediates: &[],
                 should_cancel,
                 forward_only: O.forward_only,
+                log_path: Some(Path::new(&format!("logs/{}.log", self.name))),
             },
             &lens_sl::NoTui,
         );

@@ -85,6 +85,7 @@ fn main() {
         additional_immediates: &[],
         should_cancel: ShouldCancel::Never,
         forward_only,
+        log_path: Some(std::path::Path::new("log.log")),
     };
 
     let OptimizeResult {

@@ -69,6 +69,19 @@ pub struct Config<'a, WBig, WShiftBig = crate::word::BitWord<WBig>> {
     pub additional_immediates: &'a [WBig],
     pub should_cancel: ShouldCancel,
     pub forward_only: bool,
+    pub log_path: Option<&'a std::path::Path>,
+}
+
+impl<'a, WBig, WShiftBig> Config<'a, WBig, WShiftBig> {
+    pub fn open_log(&self) -> Box<dyn std::io::Write> {
+        let x = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(self.log_path.unwrap())
+            .unwrap_or_else(|_| panic!("Failed to open log file at {:?}", self.log_path));
+        Box::new(x)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
