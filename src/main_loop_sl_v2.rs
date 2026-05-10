@@ -161,6 +161,7 @@ where
         splitting_buffer: vec![],
         last_inst_percent: (0, 0),
         last_frontier_percent: (0, 0),
+        log: c.open_log(),
     };
 
     optimizer.optimize()
@@ -203,6 +204,7 @@ struct Optimizer<'a, WBig: Word + HasBitWord, W: Word + HasBitWord> {
     splitting_buffer: Vec<(Vec<State<W>>, Programs<W>)>,
     last_inst_percent: (usize, usize),
     last_frontier_percent: (usize, usize),
+    log: Box<dyn std::io::Write>,
 }
 
 impl<WBig, W> Optimizer<'_, WBig, W>
@@ -296,7 +298,9 @@ where
         let n_states = self.forward_frontier.len();
         let do_discard = false;
         let len = n_states;
-        for (i, (states, prefixes)) in Self::reorder_frontier(&mut self.forward_frontier).enumerate() {
+        for (i, (states, prefixes)) in
+            Self::reorder_frontier(&mut self.forward_frontier).enumerate()
+        {
             self.last_frontier_percent = (i, len);
             self.tui.progress(i, len);
             //
@@ -363,6 +367,9 @@ where
                     self.enumeration_info,
                     &self.bm,
                     self.postfix_len,
+                    &mut self.log,
+                    (i_inst, n_inst),
+                    (i, n_states),
                 )?;
             }
             self.tui.progress_pop();
@@ -411,6 +418,9 @@ where
                 self.enumeration_info,
                 &self.bm,
                 self.postfix_len + 1, // +1 because we are expanding!
+                &mut self.log,
+                (0, 0),
+                (i, len),
             )?;
         }
         self.tui.progress(len, len);
@@ -499,6 +509,9 @@ where
         ei: EnumerationInfo<W>,
         bm: &BackwardMap<W>,
         postfix_len: usize,
+        log: &mut dyn std::io::Write,
+        inst_percent: (usize, usize),
+        state_percent: (usize, usize),
     ) -> ControlFlow<Result<Program<WBig>, Cancelled>, bool> {
         // Start with just the input.
         splitting_buffer.clear();
@@ -585,6 +598,12 @@ where
                         }
                         i += 1;
                         let prog = prefix.chain(postfix.iter().cloned()).collect_vec();
+                        writeln!(
+                            log,
+                            "inst [{}/{}] state [{}/{}]",
+                            inst_percent.0, inst_percent.1, state_percent.0, state_percent.1
+                        )
+                        .unwrap();
                         oracle.verify(&prog)
                     });
                     tui.progress_pop();
@@ -687,8 +706,7 @@ where
     fn reorder_frontier(
         frontier: &mut FxHashMap<Vec<State<W>>, Programs<W>>,
     ) -> impl Iterator<Item = (Vec<State<W>>, Programs<W>)> + '_ {
-        frontier
-            .drain()
+        frontier.drain()
         //  .sorted_by_key(|(_, progs)| usize::MAX - progs.len())
         // .sorted_by_key(|(_, progs)| progs.len())
     }
